@@ -96,7 +96,6 @@ publish_done(struct pubnub *p, enum pubnub_res result, struct json_object *msg, 
 
 	if (result != PNR_OK) {
 		fprintf(stderr, "pubnub publish error: %d [%s]\n", result, msg ? json_object_get_string(msg) : "N/A");
-		if (msg) json_object_put(msg);
 		/* Instead of a retry strategy, we just terminate
 		 * with an error. You might choose to do differently. */
 		exit(EXIT_FAILURE);
@@ -126,14 +125,12 @@ history_received(struct pubnub *p, enum pubnub_res result, struct json_object *m
 
 	if (result != PNR_OK) {
 		fprintf(stderr, "pubnub history error: %d [%s]\n", result, msg ? json_object_get_string(msg) : "N/A");
-		if (msg) json_object_put(msg);
 		/* Instead of a retry strategy, we just terminate
 		 * with an error. You might choose to do differently. */
 		exit(EXIT_FAILURE);
 	}
 
 	printf("pubnub history ok: %s\n", json_object_get_string(msg));
-	json_object_put(msg);
 
 
 	/* Next step in the sequence is entering the subscribe "loop". */
@@ -182,7 +179,6 @@ subscribe_received(struct pubnub *p, enum pubnub_res result, char **channels, st
 
 	if (result != PNR_OK) {
 		fprintf(stderr, "pubnub subscribe error: %d [%s]\n", result, msg ? json_object_get_string(msg) : "N/A");
-		if (msg) json_object_put(msg);
 
 		/* We will set up a timer that will make a retry in one second.
 		 * You should never retry _immediately_ as that will likely
@@ -204,7 +200,6 @@ subscribe_received(struct pubnub *p, enum pubnub_res result, char **channels, st
 			printf("pubnub subscribe [%s]: %s\n", channels[i], json_object_get_string(msg1));
 		}
 	}
-	json_object_put(msg);
 
 	/* Loop. */
 	subscribe(p);
