@@ -1,0 +1,4 @@
+*.o
+.deps
+libpubnub.so*
+libpubnub.pc
