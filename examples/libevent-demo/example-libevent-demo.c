@@ -198,8 +198,10 @@ subscribe_received(struct pubnub *p, enum pubnub_res result, char **channels, st
 		for (int i = 0; i < json_object_array_length(msg); i++) {
 			json_object *msg1 = json_object_array_get_idx(msg, i);
 			printf("pubnub subscribe [%s]: %s\n", channels[i], json_object_get_string(msg1));
+			free(channels[i]);
 		}
 	}
+	free(channels);
 
 	/* Loop. */
 	subscribe(p);
