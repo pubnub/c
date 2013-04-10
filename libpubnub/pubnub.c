@@ -17,7 +17,7 @@
 /* Due to all the callbacks for async safety, things may appear a bit tangled.
  * This diagram might help:
  *
- * pubnub_{publish,subscribe,history}
+ * pubnub_{publish,subscribe,history,here_now}
  *                 ||
  *                 vv
  *        pubnub_http_request => [pubnub_callbacks]
@@ -41,7 +41,7 @@
  *           pubnub.finished_cb (possibly, the request got completed)
  *
  * pubnub.finished_cb is the user-provided parameter
- * to pubnub_{publish,history} or a custom channel-parsing wrapper
+ * to pubnub_{publish,history,here_now} or a custom channel-parsing wrapper
  * around user-provided parameter to pubnub_subscribe()
  *
  * double lines (=, ||) are synchronous calls,
@@ -582,4 +582,23 @@ pubnub_history(struct pubnub *p, const char *channel, int limit,
 	char strlimit[64]; snprintf(strlimit, sizeof(strlimit), "%d", limit);
 	const char *urlelems[] = { "history", p->subscribe_key, channel, "0", strlimit, NULL };
 	pubnub_http_request(p, urlelems, timeout, pubnub_history_http_cb, cb_http_data);
+}
+
+
+PUBNUB_API
+void
+pubnub_here_now(struct pubnub *p, const char *channel,
+		long timeout, pubnub_here_now_cb cb, void *cb_data)
+{
+	if (!cb) cb = p->cb->here_now;
+
+	if (p->state == PNS_BUSY) {
+		if (cb)
+			cb(p, PNR_OCCUPIED, NULL, p->cb_data, cb_data);
+		return;
+	}
+	p->state = PNS_BUSY;
+
+	const char *urlelems[] = { "v2", "presence", "sub-key", p->subscribe_key, "channel", channel, NULL };
+	pubnub_http_request(p, urlelems, timeout, (pubnub_http_cb) cb, cb_data);
 }

@@ -2,7 +2,7 @@ CUSTOM_CFLAGS=-Wall -ggdb3 -O3
 SYS_CFLAGS=-std=gnu99 `pkg-config --cflags libpubnub`
 LIBS=`pkg-config --libs libpubnub`
 
-PROGS=subscribe publish history
+PROGS=subscribe publish history here_now
 OBJS=$(foreach p,$(PROGS),$(p).o)
 
 all: $(PROGS)
