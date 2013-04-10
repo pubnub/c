@@ -53,6 +53,7 @@ typedef void (*pubnub_publish_cb)(struct pubnub *p, enum pubnub_res result, stru
 typedef void (*pubnub_subscribe_cb)(struct pubnub *p, enum pubnub_res result, char **channels, struct json_object *response, void *ctx_data, void *call_data);
 typedef void (*pubnub_history_cb)(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data);
 typedef void (*pubnub_here_now_cb)(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data);
+typedef void (*pubnub_time_cb)(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data);
 
 /* struct pubnub_callbacks describes the way PubNub calls coordinate
  * with the rest of the application; they tell what happens on pubnub
@@ -104,6 +105,7 @@ struct pubnub_callbacks {
 	pubnub_subscribe_cb subscribe;
 	pubnub_history_cb history;
 	pubnub_here_now_cb here_now;
+	pubnub_time_cb time;
 
 	/* This extra pointer is reserved for forward binary
 	 * compatibility in case more callbacks need to be added;
@@ -134,6 +136,7 @@ void pubnub_history(struct pubnub *p, const char *channel, int limit,
 		long timeout, pubnub_history_cb cb, void *cb_data);
 void pubnub_here_now(struct pubnub *p, const char *channel,
 		long timeout, pubnub_here_now_cb cb, void *cb_data);
+void pubnub_time(struct pubnub *p, long timeout, pubnub_time_cb cb, void *cb_data);
 
 #ifdef __cplusplus
 }

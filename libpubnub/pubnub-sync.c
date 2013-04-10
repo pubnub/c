@@ -267,4 +267,5 @@ const struct pubnub_callbacks pubnub_sync_callbacks = {
 	.subscribe = pubnub_sync_subscribe_cb,
 	.history = pubnub_sync_generic_cb,
 	.here_now = pubnub_sync_generic_cb,
+	.time = pubnub_sync_generic_cb,
 };

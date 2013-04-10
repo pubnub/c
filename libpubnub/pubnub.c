@@ -17,7 +17,7 @@
 /* Due to all the callbacks for async safety, things may appear a bit tangled.
  * This diagram might help:
  *
- * pubnub_{publish,subscribe,history,here_now}
+ * pubnub_{publish,subscribe,history,here_now,time}
  *                 ||
  *                 vv
  *        pubnub_http_request => [pubnub_callbacks]
@@ -41,7 +41,7 @@
  *           pubnub.finished_cb (possibly, the request got completed)
  *
  * pubnub.finished_cb is the user-provided parameter
- * to pubnub_{publish,history,here_now} or a custom channel-parsing wrapper
+ * to pubnub_{publish,history,here_now,time} or a custom channel-parsing wrapper
  * around user-provided parameter to pubnub_subscribe()
  *
  * double lines (=, ||) are synchronous calls,
@@ -601,4 +601,61 @@ pubnub_here_now(struct pubnub *p, const char *channel,
 
 	const char *urlelems[] = { "v2", "presence", "sub-key", p->subscribe_key, "channel", channel, NULL };
 	pubnub_http_request(p, urlelems, timeout, (pubnub_http_cb) cb, cb_data);
+}
+
+
+struct pubnub_time_http_cb {
+	pubnub_time_cb cb;
+	void *call_data;
+};
+
+static void
+pubnub_time_http_cb(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data)
+{
+	struct pubnub_time_http_cb *cb_http_data = call_data;
+	call_data = cb_http_data->call_data;
+	pubnub_history_cb cb = cb_http_data->cb;
+	free(cb_http_data);
+
+	if (result != PNR_OK) {
+error:
+		cb(p, result, response, ctx_data, call_data);
+		return;
+	}
+
+	/* Response must be an array. */
+	if (!json_object_is_type(response, json_type_array)) {
+		result = PNR_FORMAT_ERROR;
+		goto error;
+	}
+
+	/* Extract the first element. */
+	json_object *ts = json_object_array_get_idx(response, 0);
+	json_object_get(ts);
+
+	/* Finally call the user callback. */
+	cb(p, result, ts, ctx_data, call_data);
+
+	json_object_put(ts);
+}
+
+PUBNUB_API
+void
+pubnub_time(struct pubnub *p, long timeout, pubnub_time_cb cb, void *cb_data)
+{
+	if (!cb) cb = p->cb->time;
+
+	if (p->state == PNS_BUSY) {
+		if (cb)
+			cb(p, PNR_OCCUPIED, NULL, p->cb_data, cb_data);
+		return;
+	}
+	p->state = PNS_BUSY;
+
+	struct pubnub_time_http_cb *cb_http_data = malloc(sizeof(*cb_http_data));
+	cb_http_data->cb = cb;
+	cb_http_data->call_data = cb_data;
+
+	const char *urlelems[] = { "time", "0", NULL };
+	pubnub_http_request(p, urlelems, timeout, pubnub_time_http_cb, cb_http_data);
 }
