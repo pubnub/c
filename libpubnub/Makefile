@@ -1,3 +1,7 @@
+PREFIX=/usr/local
+INCDIR=$(PREFIX)/include
+LIBDIR=$(PREFIX)/lib
+
 # Compile using `make XCFLAGS=-DDEBUG` to enable debugging code.
 CUSTOM_CFLAGS=-Wall -ggdb3 -O3
 SOFLAGS=-fPIC -fvisibility=internal
