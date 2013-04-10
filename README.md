@@ -85,7 +85,9 @@ Examples
 
 A set of examples to show-case basic and recommended usage of the library
 can be found in the examples/ directory. Beginners should first examine
-the simplest ``sync-demo'' example.
+the simplest ``sync-demo'' example which presents a coherent PubNub based
+application, or walk through the ``sync-basics'' examples that briefly
+demonstrate all the PubNub API calls.
 
 The examples can be built and run after the library itself is installed.
 A simple ``make'' command should suffice to build the binary. Refer to the
