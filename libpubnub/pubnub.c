@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include <json.h>
 #include <printbuf.h>
@@ -227,11 +228,34 @@ pubnub_http_timercb(CURLM *multi, long timeout_ms, void *userp)
 	return 0;
 }
 
+static char *
+pubnub_gen_uuid(void)
+{
+	/* Template for version 4 (random) UUID. */
+	char uuidbuf[] = "xxxxxxxx-xxxx-4xxx-9xxx-xxxxxxxxxxxx";
+
+	unsigned int seed;
+	/* About the best world-unique random seed we can manage without
+	 * absurd measures... */
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	seed = ts.tv_nsec;
+
+	char hex[] = "0123456789abcdef";
+	for (int i = 0; i < strlen(uuidbuf); i++) {
+		if (uuidbuf[i] != 'x')
+			continue;
+		uuidbuf[i] = hex[rand_r(&seed) % 16];
+	}
+
+	return strdup(uuidbuf);
+}
+
 PUBNUB_API
 struct pubnub *
 pubnub_init(const char *publish_key, const char *subscribe_key,
 		const char *secret_key, const char *cipher_key,
-		const char *origin,
+		const char *origin, const char *uuid,
 		const struct pubnub_callbacks *cb, void *cb_data)
 {
 	struct pubnub *p = calloc(1, sizeof(*p));
@@ -241,6 +265,11 @@ pubnub_init(const char *publish_key, const char *subscribe_key,
 	p->subscribe_key = strdup(subscribe_key);
 	if (!origin) origin = "pubsub.pubnub.com";
 	p->origin = strdup(origin);
+	if (uuid) {
+		p->uuid = strdup(uuid);
+	} else {
+		p->uuid = pubnub_gen_uuid();
+	}
 	p->secret_key = secret_key ? strdup(secret_key) : NULL;
 	p->cipher_key = cipher_key ? strdup(cipher_key) : NULL;
 	strcpy(p->time_token, "0");
@@ -283,7 +312,14 @@ pubnub_done(struct pubnub *p)
 	free(p->secret_key);
 	free(p->cipher_key);
 	free(p->origin);
+	free(p->uuid);
 	free(p);
+}
+
+const char *
+pubnub_current_uuid(struct pubnub *p)
+{
+	return p->uuid;
 }
 
 
@@ -297,7 +333,7 @@ pubnub_http_inputcb(char *ptr, size_t size, size_t nmemb, void *userdata)
 }
 
 static void
-pubnub_http_request(struct pubnub *p, const char *urlelems[],
+pubnub_http_request(struct pubnub *p, const char *urlelems[], const char **qparelems,
 		long timeout, pubnub_http_cb cb, void *cb_data)
 {
 	p->curl = curl_easy_init();
@@ -306,10 +342,28 @@ pubnub_http_request(struct pubnub *p, const char *urlelems[],
 	printbuf_memappend_fast(url, "http://", 7);
 	printbuf_memappend_fast(url, p->origin, strlen(p->origin));
 	for (const char **urlelemp = urlelems; *urlelemp; urlelemp++) {
+		/* Join urlemes by slashes, e.g.
+		 *   { "v2", "time", NULL }
+		 * means /v2/time */
 		printbuf_memappend_fast(url, "/", 1);
 		char *urlenc = curl_easy_escape(p->curl, *urlelemp, strlen(*urlelemp));
 		printbuf_memappend_fast(url, urlenc, strlen(urlenc));
 		curl_free(urlenc);
+	}
+	if (qparelems) {
+		printbuf_memappend_fast(url, "?", 1);
+		/* qparelemp elements are in pairs, e.g.
+		 *   { "x", NULL, "UUID", "abc", "tt, "1", NULL }
+		 * means ?x&UUID=abc&tt=1 */
+		for (const char **qparelemp = qparelems; *qparelemp; qparelemp += 2) {
+			if (qparelemp > qparelems)
+				printbuf_memappend_fast(url, "?", 1);
+			printbuf_memappend_fast(url, qparelemp[0], strlen(qparelemp[0]));
+			if (qparelemp[1]) {
+				printbuf_memappend_fast(url, "=", 1);
+				printbuf_memappend_fast(url, qparelemp[1], strlen(qparelemp[1]));
+			}
+		}
 	}
 	printbuf_memappend_fast(url, "" /* \0 */, 1);
 
@@ -374,7 +428,7 @@ pubnub_publish(struct pubnub *p, const char *channel, struct json_object *messag
 	}
 
 	const char *urlelems[] = { "publish", p->publish_key, p->subscribe_key, signature, channel, "0", message_str, NULL };
-	pubnub_http_request(p, urlelems, timeout, (pubnub_http_cb) cb, cb_data);
+	pubnub_http_request(p, urlelems, NULL, timeout, (pubnub_http_cb) cb, cb_data);
 	free(signature);
 	if (put_message)
 		json_object_put(message);
@@ -496,7 +550,8 @@ pubnub_subscribe(struct pubnub *p, const char *channel,
 	cb_http_data->call_data = cb_data;
 
 	const char *urlelems[] = { "subscribe", p->subscribe_key, channel, "0", p->time_token, NULL };
-	pubnub_http_request(p, urlelems, timeout, pubnub_subscribe_http_cb, cb_http_data);
+	const char *qparamelems[] = { "UUID", p->uuid, NULL };
+	pubnub_http_request(p, urlelems, qparamelems, timeout, pubnub_subscribe_http_cb, cb_http_data);
 }
 
 PUBNUB_API
@@ -581,7 +636,7 @@ pubnub_history(struct pubnub *p, const char *channel, int limit,
 
 	char strlimit[64]; snprintf(strlimit, sizeof(strlimit), "%d", limit);
 	const char *urlelems[] = { "history", p->subscribe_key, channel, "0", strlimit, NULL };
-	pubnub_http_request(p, urlelems, timeout, pubnub_history_http_cb, cb_http_data);
+	pubnub_http_request(p, urlelems, NULL, timeout, pubnub_history_http_cb, cb_http_data);
 }
 
 
@@ -600,7 +655,7 @@ pubnub_here_now(struct pubnub *p, const char *channel,
 	p->state = PNS_BUSY;
 
 	const char *urlelems[] = { "v2", "presence", "sub-key", p->subscribe_key, "channel", channel, NULL };
-	pubnub_http_request(p, urlelems, timeout, (pubnub_http_cb) cb, cb_data);
+	pubnub_http_request(p, urlelems, NULL, timeout, (pubnub_http_cb) cb, cb_data);
 }
 
 
@@ -657,5 +712,5 @@ pubnub_time(struct pubnub *p, long timeout, pubnub_time_cb cb, void *cb_data)
 	cb_http_data->call_data = cb_data;
 
 	const char *urlelems[] = { "time", "0", NULL };
-	pubnub_http_request(p, urlelems, timeout, pubnub_time_http_cb, cb_http_data);
+	pubnub_http_request(p, urlelems, NULL, timeout, pubnub_time_http_cb, cb_http_data);
 }
