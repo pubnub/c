@@ -113,7 +113,7 @@ pubnub_connection_cleanup(struct pubnub *p, bool stop_wait)
 {
 	if (stop_wait)
 		p->cb->stop_wait(p, p->cb_data);
-	p->state = PNS_IDLE;
+	p->method = NULL;
 
 	curl_multi_remove_handle(p->curlm, p->curl);
 	curl_easy_cleanup(p->curl);
@@ -248,7 +248,6 @@ pubnub_init(const char *publish_key, const char *subscribe_key,
 	p->cb = cb;
 	p->cb_data = cb_data;
 
-	p->state = PNS_IDLE;
 	p->body = printbuf_new();
 
 	p->curlm = curl_multi_init();
@@ -351,12 +350,12 @@ pubnub_publish(struct pubnub *p, const char *channel, struct json_object *messag
 {
 	if (!cb) cb = p->cb->publish;
 
-	if (p->state == PNS_BUSY) {
+	if (p->method) {
 		if (cb)
 			cb(p, PNR_OCCUPIED, NULL, p->cb_data, cb_data);
 		return;
 	}
-	p->state = PNS_BUSY;
+	p->method = "publish";
 
 	bool put_message = false;
 	if (p->cipher_key) {
@@ -483,12 +482,12 @@ pubnub_subscribe(struct pubnub *p, const char *channel,
 {
 	if (!cb) cb = p->cb->subscribe;
 
-	if (p->state == PNS_BUSY) {
+	if (p->method) {
 		if (cb)
 			cb(p, PNR_OCCUPIED, NULL, NULL, p->cb_data, cb_data);
 		return;
 	}
-	p->state = PNS_BUSY;
+	p->method = "subscribe";
 
 	struct pubnub_subscribe_http_cb *cb_http_data = malloc(sizeof(*cb_http_data));
 	cb_http_data->channelset = strdup(channel);
@@ -568,12 +567,12 @@ pubnub_history(struct pubnub *p, const char *channel, int limit,
 {
 	if (!cb) cb = p->cb->history;
 
-	if (p->state == PNS_BUSY) {
+	if (p->method) {
 		if (cb)
 			cb(p, PNR_OCCUPIED, NULL, p->cb_data, cb_data);
 		return;
 	}
-	p->state = PNS_BUSY;
+	p->method = "history";
 
 	struct pubnub_history_http_cb *cb_http_data = malloc(sizeof(*cb_http_data));
 	cb_http_data->cb = cb;
@@ -592,12 +591,12 @@ pubnub_here_now(struct pubnub *p, const char *channel,
 {
 	if (!cb) cb = p->cb->here_now;
 
-	if (p->state == PNS_BUSY) {
+	if (p->method) {
 		if (cb)
 			cb(p, PNR_OCCUPIED, NULL, p->cb_data, cb_data);
 		return;
 	}
-	p->state = PNS_BUSY;
+	p->method = "here_now";
 
 	const char *urlelems[] = { "v2", "presence", "sub-key", p->subscribe_key, "channel", channel, NULL };
 	pubnub_http_request(p, urlelems, timeout, (pubnub_http_cb) cb, cb_data);
@@ -645,12 +644,12 @@ pubnub_time(struct pubnub *p, long timeout, pubnub_time_cb cb, void *cb_data)
 {
 	if (!cb) cb = p->cb->time;
 
-	if (p->state == PNS_BUSY) {
+	if (p->method) {
 		if (cb)
 			cb(p, PNR_OCCUPIED, NULL, p->cb_data, cb_data);
 		return;
 	}
-	p->state = PNS_BUSY;
+	p->method = "time";
 
 	struct pubnub_time_http_cb *cb_http_data = malloc(sizeof(*cb_http_data));
 	cb_http_data->cb = cb;

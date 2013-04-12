@@ -19,10 +19,9 @@ struct pubnub {
 	const struct pubnub_callbacks *cb;
 	void *cb_data;
 
-	enum pubnub_state {
-		PNS_IDLE, /* No method in progress. */
-		PNS_BUSY, /* A method in progress. */
-	} state;
+	/* Name of method currently in progress; NULL if there is no
+	 * method in progress currently. */
+	const char *method;
 	/* Callback information for the method currently
 	 * in progress. Call this when we have received
 	 * complete HTTP reply and the method should be
