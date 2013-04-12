@@ -30,6 +30,9 @@ struct pubnub {
 	pubnub_http_cb finished_cb;
 	void *finished_cb_data;
 
+	/* Error retry policy. */
+	bool error_print;
+
 	CURL *curl;
 	CURLM *curlm;
 	struct curl_slist *curl_headers;

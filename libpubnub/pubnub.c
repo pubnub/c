@@ -64,6 +64,30 @@
  */
 
 
+static enum pubnub_res
+pubnub_error_report(struct pubnub *p, enum pubnub_res result, json_object *msg, const char *method)
+{
+	if (p->error_print) {
+		static const char *pubnub_res_str[] = {
+			[PNR_OK] = "Success",
+			[PNR_OCCUPIED] = "Another method already in progress",
+			[PNR_TIMEOUT] = "Time out before the request has completed",
+			[PNR_IO_ERROR] = "Communication error",
+			[PNR_HTTP_ERROR] = "HTTP error",
+			[PNR_FORMAT_ERROR] = "Unexpected input in received JSON",
+		};
+		if (msg) {
+			fprintf(stderr, "pubnub %s error: %s [%s]\n",
+				method, pubnub_res_str[result], json_object_get_string(msg));
+		} else {
+			fprintf(stderr, "pubnub %s error: %s\n",
+				method, pubnub_res_str[result]);
+		}
+	}
+	return result;
+}
+
+
 static void pubnub_connection_cleanup(struct pubnub *p, bool stop_wait);
 
 static void
@@ -73,12 +97,17 @@ pubnub_connection_finished(struct pubnub *p, CURLcode res, bool stop_wait)
 
 	/* Check against I/O errors */
 	if (res != CURLE_OK) {
+		const char *method = p->method;
 		pubnub_connection_cleanup(p, stop_wait);
 		if (res == CURLE_OPERATION_TIMEDOUT) {
-			p->finished_cb(p, PNR_TIMEOUT, NULL, p->cb_data, p->finished_cb_data);
+			p->finished_cb(p,
+				pubnub_error_report(p, PNR_TIMEOUT, NULL, method),
+				NULL, p->cb_data, p->finished_cb_data);
 		} else {
 			json_object *msgstr = json_object_new_string(curl_easy_strerror(res));
-			p->finished_cb(p, PNR_IO_ERROR, msgstr, p->cb_data, p->finished_cb_data);
+			p->finished_cb(p,
+				pubnub_error_report(p, PNR_IO_ERROR, msgstr, method),
+				msgstr, p->cb_data, p->finished_cb_data);
 			json_object_put(msgstr);
 		}
 		return;
@@ -91,7 +120,9 @@ pubnub_connection_finished(struct pubnub *p, CURLcode res, bool stop_wait)
 	pubnub_connection_cleanup(p, stop_wait);
 	if (code / 100 != 2) {
 		json_object *httpcode = json_object_new_int(code);
-		p->finished_cb(p, PNR_HTTP_ERROR, httpcode, p->cb_data, p->finished_cb_data);
+		p->finished_cb(p,
+			pubnub_error_report(p, PNR_HTTP_ERROR, httpcode, p->method),
+			httpcode, p->cb_data, p->finished_cb_data);
 		json_object_put(httpcode);
 		return;
 	}
@@ -99,7 +130,9 @@ pubnub_connection_finished(struct pubnub *p, CURLcode res, bool stop_wait)
 	/* Parse body */
 	json_object *response = json_tokener_parse(p->body->buf);
 	if (!response) {
-		p->finished_cb(p, PNR_FORMAT_ERROR, NULL, p->cb_data, p->finished_cb_data);
+		p->finished_cb(p,
+			pubnub_error_report(p, PNR_FORMAT_ERROR, NULL, p->method),
+			NULL, p->cb_data, p->finished_cb_data);
 		return;
 	}
 
@@ -134,7 +167,9 @@ pubnub_connection_check(struct pubnub *p, int fd, int bitmask, bool stop_wait)
 	if (rc != CURLM_OK) {
 		pubnub_connection_cleanup(p, stop_wait);
 		json_object *msgstr = json_object_new_string(curl_multi_strerror(rc));
-		p->finished_cb(p, PNR_IO_ERROR, msgstr, p->cb_data, p->finished_cb_data);
+		p->finished_cb(p,
+			pubnub_error_report(p, PNR_IO_ERROR, msgstr, p->method),
+			msgstr, p->cb_data, p->finished_cb_data);
 		json_object_put(msgstr);
 		return true;
 	}
@@ -250,6 +285,8 @@ pubnub_init(const char *publish_key, const char *subscribe_key,
 
 	p->body = printbuf_new();
 
+	p->error_print = true;
+
 	p->curlm = curl_multi_init();
 	curl_multi_setopt(p->curlm, CURLMOPT_SOCKETFUNCTION, pubnub_http_sockcb);
 	curl_multi_setopt(p->curlm, CURLMOPT_SOCKETDATA, p);
@@ -352,7 +389,8 @@ pubnub_publish(struct pubnub *p, const char *channel, struct json_object *messag
 
 	if (p->method) {
 		if (cb)
-			cb(p, PNR_OCCUPIED, NULL, p->cb_data, cb_data);
+			cb(p, pubnub_error_report(p, PNR_OCCUPIED, NULL, "publish"),
+				NULL, p->cb_data, cb_data);
 		return;
 	}
 	p->method = "publish";
@@ -397,7 +435,8 @@ pubnub_subscribe_http_cb(struct pubnub *p, enum pubnub_res result, struct json_o
 
 	if (result != PNR_OK) {
 error:
-		cb(p, result, NULL, response, ctx_data, call_data);
+		cb(p, pubnub_error_report(p, result, response, "subscribe"),
+			NULL, response, ctx_data, call_data);
 		free(channelset);
 		return;
 	}
@@ -484,7 +523,8 @@ pubnub_subscribe(struct pubnub *p, const char *channel,
 
 	if (p->method) {
 		if (cb)
-			cb(p, PNR_OCCUPIED, NULL, NULL, p->cb_data, cb_data);
+			cb(p, pubnub_error_report(p, PNR_OCCUPIED, NULL, "subscribe"),
+				NULL, NULL, p->cb_data, cb_data);
 		return;
 	}
 	p->method = "subscribe";
@@ -531,7 +571,8 @@ pubnub_history_http_cb(struct pubnub *p, enum pubnub_res result, struct json_obj
 
 	if (result != PNR_OK) {
 error:
-		cb(p, result, response, ctx_data, call_data);
+		cb(p, pubnub_error_report(p, result, response, "history"),
+			response, ctx_data, call_data);
 		return;
 	}
 
@@ -569,7 +610,8 @@ pubnub_history(struct pubnub *p, const char *channel, int limit,
 
 	if (p->method) {
 		if (cb)
-			cb(p, PNR_OCCUPIED, NULL, p->cb_data, cb_data);
+			cb(p, pubnub_error_report(p, PNR_OCCUPIED, NULL, "history"),
+				NULL, p->cb_data, cb_data);
 		return;
 	}
 	p->method = "history";
@@ -593,7 +635,8 @@ pubnub_here_now(struct pubnub *p, const char *channel,
 
 	if (p->method) {
 		if (cb)
-			cb(p, PNR_OCCUPIED, NULL, p->cb_data, cb_data);
+			cb(p, pubnub_error_report(p, PNR_OCCUPIED, NULL, "here_now"),
+				NULL, p->cb_data, cb_data);
 		return;
 	}
 	p->method = "here_now";
@@ -618,7 +661,8 @@ pubnub_time_http_cb(struct pubnub *p, enum pubnub_res result, struct json_object
 
 	if (result != PNR_OK) {
 error:
-		cb(p, result, response, ctx_data, call_data);
+		cb(p, pubnub_error_report(p, result, response, "time"),
+			response, ctx_data, call_data);
 		return;
 	}
 
@@ -646,7 +690,8 @@ pubnub_time(struct pubnub *p, long timeout, pubnub_time_cb cb, void *cb_data)
 
 	if (p->method) {
 		if (cb)
-			cb(p, PNR_OCCUPIED, NULL, p->cb_data, cb_data);
+			cb(p, pubnub_error_report(p, PNR_OCCUPIED, NULL, "time"),
+				NULL, p->cb_data, cb_data);
 		return;
 	}
 	p->method = "time";
@@ -657,4 +702,12 @@ pubnub_time(struct pubnub *p, long timeout, pubnub_time_cb cb, void *cb_data)
 
 	const char *urlelems[] = { "time", "0", NULL };
 	pubnub_http_request(p, urlelems, timeout, pubnub_time_http_cb, cb_http_data);
+}
+
+
+PUBNUB_API
+void
+pubnub_error_policy(struct pubnub *p, bool print)
+{
+	p->error_print = print;
 }

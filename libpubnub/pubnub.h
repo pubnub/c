@@ -1,8 +1,10 @@
 #ifndef PUBNUB__PubNub_h
 #define PUBNUB__PubNub_h
 
-#include <json.h>
+#include <stdbool.h>
 #include <time.h>
+
+#include <json.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -137,6 +139,13 @@ void pubnub_history(struct pubnub *p, const char *channel, int limit,
 void pubnub_here_now(struct pubnub *p, const char *channel,
 		long timeout, pubnub_here_now_cb cb, void *cb_data);
 void pubnub_time(struct pubnub *p, long timeout, pubnub_time_cb cb, void *cb_data);
+
+/* Set PubNub error retry policy regarding error handling.
+ *
+ * A message about the error is printed on stderr if @print is true
+ * (the default); this applies even to errors after which we do not
+ * retry for whatever reason. */
+void pubnub_error_policy(struct pubnub *p, bool print);
 
 #ifdef __cplusplus
 }
