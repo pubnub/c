@@ -343,11 +343,8 @@ pubnub_http_inputcb(char *ptr, size_t size, size_t nmemb, void *userdata)
 }
 
 static void
-pubnub_http_request(struct pubnub *p, const char *urlelems[],
-		long timeout, pubnub_http_cb cb, void *cb_data)
+pubnub_http_setup(struct pubnub *p, const char *urlelems[], long timeout)
 {
-	p->curl = curl_easy_init();
-
 	printbuf_reset(p->url);
 	printbuf_memappend_fast(p->url, "http://", 7);
 	printbuf_memappend_fast(p->url, p->origin, strlen(p->origin));
@@ -360,6 +357,12 @@ pubnub_http_request(struct pubnub *p, const char *urlelems[],
 	printbuf_memappend_fast(p->url, "" /* \0 */, 1);
 
 	p->timeout = timeout;
+}
+
+static void
+pubnub_http_request(struct pubnub *p, pubnub_http_cb cb, void *cb_data)
+{
+	p->curl = curl_easy_init();
 
 	curl_easy_setopt(p->curl, CURLOPT_URL, p->url->buf);
 	curl_easy_setopt(p->curl, CURLOPT_HTTPHEADER, p->curl_headers);
@@ -371,7 +374,7 @@ pubnub_http_request(struct pubnub *p, const char *urlelems[],
 	curl_easy_setopt(p->curl, CURLOPT_NOPROGRESS, 1L);
 	/* TODO: Make this user-configurable */
 	curl_easy_setopt(p->curl, CURLOPT_NOSIGNAL, 1L);
-	curl_easy_setopt(p->curl, CURLOPT_TIMEOUT, timeout);
+	curl_easy_setopt(p->curl, CURLOPT_TIMEOUT, p->timeout);
 
 	printbuf_reset(p->body);
 	p->finished_cb = cb;
@@ -421,10 +424,12 @@ pubnub_publish(struct pubnub *p, const char *channel, struct json_object *messag
 	}
 
 	const char *urlelems[] = { "publish", p->publish_key, p->subscribe_key, signature, channel, "0", message_str, NULL };
-	pubnub_http_request(p, urlelems, timeout, (pubnub_http_cb) cb, cb_data);
+	pubnub_http_setup(p, urlelems, timeout);
 	free(signature);
 	if (put_message)
 		json_object_put(message);
+
+	pubnub_http_request(p, (pubnub_http_cb) cb, cb_data);
 }
 
 
@@ -549,7 +554,8 @@ pubnub_subscribe(struct pubnub *p, const char *channel,
 	cb_http_data->call_data = cb_data;
 
 	const char *urlelems[] = { "subscribe", p->subscribe_key, channel, "0", p->time_token, NULL };
-	pubnub_http_request(p, urlelems, timeout, pubnub_subscribe_http_cb, cb_http_data);
+	pubnub_http_setup(p, urlelems, timeout);
+	pubnub_http_request(p, pubnub_subscribe_http_cb, cb_http_data);
 }
 
 PUBNUB_API
@@ -639,7 +645,8 @@ pubnub_history(struct pubnub *p, const char *channel, int limit,
 
 	char strlimit[64]; snprintf(strlimit, sizeof(strlimit), "%d", limit);
 	const char *urlelems[] = { "history", p->subscribe_key, channel, "0", strlimit, NULL };
-	pubnub_http_request(p, urlelems, timeout, pubnub_history_http_cb, cb_http_data);
+	pubnub_http_setup(p, urlelems, timeout);
+	pubnub_http_request(p, pubnub_history_http_cb, cb_http_data);
 }
 
 
@@ -659,7 +666,8 @@ pubnub_here_now(struct pubnub *p, const char *channel,
 	p->method = "here_now";
 
 	const char *urlelems[] = { "v2", "presence", "sub-key", p->subscribe_key, "channel", channel, NULL };
-	pubnub_http_request(p, urlelems, timeout, (pubnub_http_cb) cb, cb_data);
+	pubnub_http_setup(p, urlelems, timeout);
+	pubnub_http_request(p, (pubnub_http_cb) cb, cb_data);
 }
 
 
@@ -720,7 +728,8 @@ pubnub_time(struct pubnub *p, long timeout, pubnub_time_cb cb, void *cb_data)
 	cb_http_data->call_data = cb_data;
 
 	const char *urlelems[] = { "time", "0", NULL };
-	pubnub_http_request(p, urlelems, timeout, pubnub_time_http_cb, cb_http_data);
+	pubnub_http_setup(p, urlelems, timeout);
+	pubnub_http_request(p, pubnub_time_http_cb, cb_http_data);
 }
 
 
