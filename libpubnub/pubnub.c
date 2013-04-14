@@ -359,6 +359,8 @@ pubnub_http_request(struct pubnub *p, const char *urlelems[],
 	}
 	printbuf_memappend_fast(p->url, "" /* \0 */, 1);
 
+	p->timeout = timeout;
+
 	curl_easy_setopt(p->curl, CURLOPT_URL, p->url->buf);
 	curl_easy_setopt(p->curl, CURLOPT_HTTPHEADER, p->curl_headers);
 	curl_easy_setopt(p->curl, CURLOPT_WRITEFUNCTION, pubnub_http_inputcb);

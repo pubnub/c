@@ -39,6 +39,7 @@ struct pubnub {
 	char curl_error[CURL_ERROR_SIZE];
 	struct printbuf *url;
 	struct printbuf *body;
+	long timeout;
 };
 
 #ifdef DEBUG
