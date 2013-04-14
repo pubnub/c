@@ -283,6 +283,7 @@ pubnub_init(const char *publish_key, const char *subscribe_key,
 	p->cb = cb;
 	p->cb_data = cb_data;
 
+	p->url = printbuf_new();
 	p->body = printbuf_new();
 
 	p->error_print = true;
@@ -314,6 +315,7 @@ pubnub_done(struct pubnub *p)
 	curl_slist_free_all(p->curl_headers);
 
 	printbuf_free(p->body);
+	printbuf_free(p->url);
 	free(p->publish_key);
 	free(p->subscribe_key);
 	free(p->secret_key);
@@ -338,18 +340,18 @@ pubnub_http_request(struct pubnub *p, const char *urlelems[],
 {
 	p->curl = curl_easy_init();
 
-	struct printbuf *url = printbuf_new();
-	printbuf_memappend_fast(url, "http://", 7);
-	printbuf_memappend_fast(url, p->origin, strlen(p->origin));
+	printbuf_reset(p->url);
+	printbuf_memappend_fast(p->url, "http://", 7);
+	printbuf_memappend_fast(p->url, p->origin, strlen(p->origin));
 	for (const char **urlelemp = urlelems; *urlelemp; urlelemp++) {
-		printbuf_memappend_fast(url, "/", 1);
+		printbuf_memappend_fast(p->url, "/", 1);
 		char *urlenc = curl_easy_escape(p->curl, *urlelemp, strlen(*urlelemp));
-		printbuf_memappend_fast(url, urlenc, strlen(urlenc));
+		printbuf_memappend_fast(p->url, urlenc, strlen(urlenc));
 		curl_free(urlenc);
 	}
-	printbuf_memappend_fast(url, "" /* \0 */, 1);
+	printbuf_memappend_fast(p->url, "" /* \0 */, 1);
 
-	curl_easy_setopt(p->curl, CURLOPT_URL, url->buf);
+	curl_easy_setopt(p->curl, CURLOPT_URL, p->url->buf);
 	curl_easy_setopt(p->curl, CURLOPT_HTTPHEADER, p->curl_headers);
 	curl_easy_setopt(p->curl, CURLOPT_WRITEFUNCTION, pubnub_http_inputcb);
 	curl_easy_setopt(p->curl, CURLOPT_WRITEDATA, p);
@@ -375,8 +377,6 @@ pubnub_http_request(struct pubnub *p, const char *urlelems[],
 		p->cb->wait(p, p->cb_data);
 		DBGMSG("wait: post\n");
 	}
-
-	printbuf_free(url);
 }
 
 

@@ -37,6 +37,7 @@ struct pubnub {
 	CURLM *curlm;
 	struct curl_slist *curl_headers;
 	char curl_error[CURL_ERROR_SIZE];
+	struct printbuf *url;
 	struct printbuf *body;
 };
 
