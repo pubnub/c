@@ -29,6 +29,10 @@ struct pubnub {
 	 * required! */
 	pubnub_http_cb finished_cb;
 	void *finished_cb_data;
+	/* True if finished_cb points to our internal handler;
+	 * in that case, we can still call pubnub_handle_error()
+	 * later and therefore shall not call stop_wait just yet. */
+	bool finished_cb_internal;
 
 	/* Error retry policy. */
 	bool error_print;

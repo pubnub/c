@@ -95,9 +95,11 @@ pubnub_handle_error(struct pubnub *p, enum pubnub_res result, json_object *msg, 
 {
 	pubnub_error_report(p, result, msg, method);
 	if (cb) {
+		p->cb->stop_wait(p, p->cb_data); // unconditional!
 		p->finished_cb(p, result, msg, p->cb_data, p->finished_cb_data);
 		return false;
 	} else {
+		p->cb->stop_wait(p, p->cb_data); // unconditional!
 		return true;
 	}
 }
@@ -146,6 +148,8 @@ pubnub_connection_finished(struct pubnub *p, CURLcode res, bool stop_wait)
 	}
 
 	/* The regular callback */
+	if (!p->finished_cb_internal)
+		p->cb->stop_wait(p, p->cb_data);
 	p->finished_cb(p, PNR_OK, response, p->cb_data, p->finished_cb_data);
 	json_object_put(response);
 }
@@ -153,8 +157,6 @@ pubnub_connection_finished(struct pubnub *p, CURLcode res, bool stop_wait)
 static void
 pubnub_connection_cleanup(struct pubnub *p, bool stop_wait)
 {
-	if (stop_wait)
-		p->cb->stop_wait(p, p->cb_data);
 	p->method = NULL;
 
 	curl_multi_remove_handle(p->curlm, p->curl);
@@ -360,7 +362,7 @@ pubnub_http_setup(struct pubnub *p, const char *urlelems[], long timeout)
 }
 
 static void
-pubnub_http_request(struct pubnub *p, pubnub_http_cb cb, void *cb_data)
+pubnub_http_request(struct pubnub *p, pubnub_http_cb cb, void *cb_data, bool cb_internal)
 {
 	p->curl = curl_easy_init();
 
@@ -379,6 +381,7 @@ pubnub_http_request(struct pubnub *p, pubnub_http_cb cb, void *cb_data)
 	printbuf_reset(p->body);
 	p->finished_cb = cb;
 	p->finished_cb_data = cb_data;
+	p->finished_cb_internal = cb_internal;
 
 	DBGMSG("add handle: pre\n");
 	curl_multi_add_handle(p->curlm, p->curl);
@@ -429,7 +432,7 @@ pubnub_publish(struct pubnub *p, const char *channel, struct json_object *messag
 	if (put_message)
 		json_object_put(message);
 
-	pubnub_http_request(p, (pubnub_http_cb) cb, cb_data);
+	pubnub_http_request(p, (pubnub_http_cb) cb, cb_data, false);
 }
 
 
@@ -530,6 +533,7 @@ error:
 	free(channelset);
 
 	/* Finally call the user callback. */
+	p->cb->stop_wait(p, p->cb_data);
 	cb(p, result, channels, msg, ctx_data, call_data);
 }
 
@@ -555,7 +559,7 @@ pubnub_subscribe(struct pubnub *p, const char *channel,
 
 	const char *urlelems[] = { "subscribe", p->subscribe_key, channel, "0", p->time_token, NULL };
 	pubnub_http_setup(p, urlelems, timeout);
-	pubnub_http_request(p, pubnub_subscribe_http_cb, cb_http_data);
+	pubnub_http_request(p, pubnub_subscribe_http_cb, cb_http_data, true);
 }
 
 PUBNUB_API
@@ -618,6 +622,7 @@ error:
 	}
 
 	/* Finally call the user callback. */
+	p->cb->stop_wait(p, p->cb_data);
 	cb(p, result, response, ctx_data, call_data);
 
 	if (put_response)
@@ -646,7 +651,7 @@ pubnub_history(struct pubnub *p, const char *channel, int limit,
 	char strlimit[64]; snprintf(strlimit, sizeof(strlimit), "%d", limit);
 	const char *urlelems[] = { "history", p->subscribe_key, channel, "0", strlimit, NULL };
 	pubnub_http_setup(p, urlelems, timeout);
-	pubnub_http_request(p, pubnub_history_http_cb, cb_http_data);
+	pubnub_http_request(p, pubnub_history_http_cb, cb_http_data, true);
 }
 
 
@@ -667,7 +672,7 @@ pubnub_here_now(struct pubnub *p, const char *channel,
 
 	const char *urlelems[] = { "v2", "presence", "sub-key", p->subscribe_key, "channel", channel, NULL };
 	pubnub_http_setup(p, urlelems, timeout);
-	pubnub_http_request(p, (pubnub_http_cb) cb, cb_data);
+	pubnub_http_request(p, (pubnub_http_cb) cb, cb_data, false);
 }
 
 
@@ -704,6 +709,7 @@ pubnub_time_http_cb(struct pubnub *p, enum pubnub_res result, struct json_object
 	json_object_get(ts);
 
 	/* Finally call the user callback. */
+	p->cb->stop_wait(p, p->cb_data);
 	cb(p, result, ts, ctx_data, call_data);
 
 	json_object_put(ts);
@@ -729,7 +735,7 @@ pubnub_time(struct pubnub *p, long timeout, pubnub_time_cb cb, void *cb_data)
 
 	const char *urlelems[] = { "time", "0", NULL };
 	pubnub_http_setup(p, urlelems, timeout);
-	pubnub_http_request(p, pubnub_time_http_cb, cb_http_data);
+	pubnub_http_request(p, pubnub_time_http_cb, cb_http_data, true);
 }
 
 
