@@ -333,8 +333,6 @@ pubnub_gen_uuid(void)
 PUBNUB_API
 struct pubnub *
 pubnub_init(const char *publish_key, const char *subscribe_key,
-		const char *secret_key, const char *cipher_key,
-		const char *origin, const char *uuid,
 		const struct pubnub_callbacks *cb, void *cb_data)
 {
 	struct pubnub *p = calloc(1, sizeof(*p));
@@ -342,15 +340,8 @@ pubnub_init(const char *publish_key, const char *subscribe_key,
 
 	p->publish_key = strdup(publish_key);
 	p->subscribe_key = strdup(subscribe_key);
-	if (!origin) origin = "pubsub.pubnub.com";
-	p->origin = strdup(origin);
-	if (uuid) {
-		p->uuid = strdup(uuid);
-	} else {
-		p->uuid = pubnub_gen_uuid();
-	}
-	p->secret_key = secret_key ? strdup(secret_key) : NULL;
-	p->cipher_key = cipher_key ? strdup(cipher_key) : NULL;
+	p->origin = strdup("pubsub.pubnub.com");
+	p->uuid = pubnub_gen_uuid();
 	strcpy(p->time_token, "0");
 
 	p->cb = cb;
@@ -399,10 +390,51 @@ pubnub_done(struct pubnub *p)
 	free(p);
 }
 
+PUBNUB_API
+void
+pubnub_set_secret_key(struct pubnub *p, const char *secret_key)
+{
+	free(p->secret_key);
+	p->secret_key = secret_key ? strdup(secret_key) : NULL;
+}
+
+PUBNUB_API
+void
+pubnub_set_cipher_key(struct pubnub *p, const char *cipher_key)
+{
+	free(p->cipher_key);
+	p->cipher_key = cipher_key ? strdup(cipher_key) : NULL;
+}
+
+PUBNUB_API
+void
+pubnub_set_origin(struct pubnub *p, const char *origin)
+{
+	free(p->origin);
+	p->origin = strdup(origin);
+}
+
+PUBNUB_API
 const char *
 pubnub_current_uuid(struct pubnub *p)
 {
 	return p->uuid;
+}
+
+PUBNUB_API
+void
+pubnub_set_uuid(struct pubnub *p, const char *uuid)
+{
+	free(p->uuid);
+	p->uuid = strdup(uuid);
+}
+
+PUBNUB_API
+void
+pubnub_error_policy(struct pubnub *p, unsigned int retry_mask, bool print)
+{
+	p->error_retry_mask = retry_mask;
+	p->error_print = print;
 }
 
 
@@ -830,13 +862,4 @@ pubnub_time(struct pubnub *p, long timeout, pubnub_time_cb cb, void *cb_data)
 	const char *urlelems[] = { "time", "0", NULL };
 	pubnub_http_setup(p, urlelems, NULL, timeout);
 	pubnub_http_request(p, pubnub_time_http_cb, cb_http_data, true, true);
-}
-
-
-PUBNUB_API
-void
-pubnub_error_policy(struct pubnub *p, unsigned int retry_mask, bool print)
-{
-	p->error_retry_mask = retry_mask;
-	p->error_print = print;
 }

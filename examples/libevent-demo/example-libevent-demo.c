@@ -184,7 +184,7 @@ main(void)
 
 	/* Set up the PubNub library, with a single shared context,
 	 * using the libevent backend for event handling. */
-	struct pubnub *p = pubnub_init("demo", "demo", NULL, NULL, NULL, NULL, &pubnub_libevent_callbacks, pubnub_libevent_init());
+	struct pubnub *p = pubnub_init("demo", "demo", &pubnub_libevent_callbacks, pubnub_libevent_init());
 
 	/* Set the clock update timer. */
 	evtimer_set(&clock_update_timer, clock_update, NULL);

@@ -178,7 +178,7 @@ main(int argc, char *argv[])
 	/* Initialize PubNub. */
 
 	struct pubnub_sync *sync = pubnub_sync_init();
-	struct pubnub *p = pubnub_init("demo", "demo", NULL, NULL, NULL, NULL, &pubnub_sync_callbacks, sync);
+	struct pubnub *p = pubnub_init("demo", "demo", &pubnub_sync_callbacks, sync);
 
 
 	/* Advertise. */

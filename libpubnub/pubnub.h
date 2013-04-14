@@ -119,29 +119,17 @@ struct pubnub_callbacks {
 
 /* TODO documentation for the functions below. */
 
-/* origin is optional */
 /* curl_global_init() caveat */
 struct pubnub *pubnub_init(const char *publish_key, const char *subscribe_key,
-			const char *secret_key, const char *cipher_key,
-			const char *origin, const char *uuid,
 			const struct pubnub_callbacks *cb, void *cb_data);
 void pubnub_done(struct pubnub *p);
 
-void pubnub_publish(struct pubnub *p, const char *channel,
-		struct json_object *message,
-		long timeout, pubnub_publish_cb cb, void *cb_data);
-void pubnub_subscribe(struct pubnub *p, const char *channel,
-		long timeout, pubnub_subscribe_cb cb, void *cb_data);
-void pubnub_subscribe_multi(struct pubnub *p, const char *channels[], int channels_n,
-		long timeout, pubnub_subscribe_cb cb, void *cb_data);
-void pubnub_history(struct pubnub *p, const char *channel, int limit,
-		long timeout, pubnub_history_cb cb, void *cb_data);
-void pubnub_here_now(struct pubnub *p, const char *channel,
-		long timeout, pubnub_here_now_cb cb, void *cb_data);
-void pubnub_time(struct pubnub *p, long timeout, pubnub_time_cb cb, void *cb_data);
 
-
+void pubnub_set_secret_key(struct pubnub *p, const char *secret_key);
+void pubnub_set_cipher_key(struct pubnub *p, const char *cipher_key);
+void pubnub_set_origin(struct pubnub *p, const char *origin);
 const char *pubnub_current_uuid(struct pubnub *p);
+void pubnub_set_uuid(struct pubnub *p, const char *uuid);
 
 /* Set PubNub error retry policy regarding error handling.
  *
@@ -171,6 +159,20 @@ const char *pubnub_current_uuid(struct pubnub *p);
  * (the DEFAULT); this applies even to errors after which we do not
  * retry for whatever reason. */
 void pubnub_error_policy(struct pubnub *p, unsigned int retry_mask, bool print);
+
+
+void pubnub_publish(struct pubnub *p, const char *channel,
+		struct json_object *message,
+		long timeout, pubnub_publish_cb cb, void *cb_data);
+void pubnub_subscribe(struct pubnub *p, const char *channel,
+		long timeout, pubnub_subscribe_cb cb, void *cb_data);
+void pubnub_subscribe_multi(struct pubnub *p, const char *channels[], int channels_n,
+		long timeout, pubnub_subscribe_cb cb, void *cb_data);
+void pubnub_history(struct pubnub *p, const char *channel, int limit,
+		long timeout, pubnub_history_cb cb, void *cb_data);
+void pubnub_here_now(struct pubnub *p, const char *channel,
+		long timeout, pubnub_here_now_cb cb, void *cb_data);
+void pubnub_time(struct pubnub *p, long timeout, pubnub_time_cb cb, void *cb_data);
 
 #ifdef __cplusplus
 }
