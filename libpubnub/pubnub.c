@@ -87,13 +87,19 @@ pubnub_error_report(struct pubnub *p, enum pubnub_res result, json_object *msg, 
 	return result;
 }
 
-/* Deal with errors. This will print the error and notify the user. */
-static void
-pubnub_handle_error(struct pubnub *p, enum pubnub_res result, json_object *msg, const char *method)
+/* Deal with errors. This will (i) print the error and (ii) notify the user
+ * if @cb is true. It will return true if the caller shall notify the user. */
+/* XXX: This API seems awkward now but it's the scaffolding for retry support. */
+static bool
+pubnub_handle_error(struct pubnub *p, enum pubnub_res result, json_object *msg, const char *method, bool cb)
 {
-	p->finished_cb(p,
-		pubnub_error_report(p, result, msg, method),
-		msg, p->cb_data, p->finished_cb_data);
+	pubnub_error_report(p, result, msg, method);
+	if (cb) {
+		p->finished_cb(p, result, msg, p->cb_data, p->finished_cb_data);
+		return false;
+	} else {
+		return true;
+	}
 }
 
 
@@ -111,10 +117,10 @@ pubnub_connection_finished(struct pubnub *p, CURLcode res, bool stop_wait)
 	if (res != CURLE_OK) {
 		pubnub_connection_cleanup(p, stop_wait);
 		if (res == CURLE_OPERATION_TIMEDOUT) {
-			pubnub_handle_error(p, PNR_TIMEOUT, NULL, method);
+			pubnub_handle_error(p, PNR_TIMEOUT, NULL, method, true);
 		} else {
 			json_object *msgstr = json_object_new_string(curl_easy_strerror(res));
-			pubnub_handle_error(p, PNR_IO_ERROR, msgstr, method);
+			pubnub_handle_error(p, PNR_IO_ERROR, msgstr, method, true);
 			json_object_put(msgstr);
 		}
 		return;
@@ -127,7 +133,7 @@ pubnub_connection_finished(struct pubnub *p, CURLcode res, bool stop_wait)
 	pubnub_connection_cleanup(p, stop_wait);
 	if (code / 100 != 2) {
 		json_object *httpcode = json_object_new_int(code);
-		pubnub_handle_error(p, PNR_HTTP_ERROR, httpcode, method);
+		pubnub_handle_error(p, PNR_HTTP_ERROR, httpcode, method, true);
 		json_object_put(httpcode);
 		return;
 	}
@@ -135,7 +141,7 @@ pubnub_connection_finished(struct pubnub *p, CURLcode res, bool stop_wait)
 	/* Parse body */
 	json_object *response = json_tokener_parse(p->body->buf);
 	if (!response) {
-		pubnub_handle_error(p, PNR_FORMAT_ERROR, NULL, method);
+		pubnub_handle_error(p, PNR_FORMAT_ERROR, NULL, method, true);
 		return;
 	}
 
@@ -171,7 +177,7 @@ pubnub_connection_check(struct pubnub *p, int fd, int bitmask, bool stop_wait)
 		const char *method = p->method;
 		pubnub_connection_cleanup(p, stop_wait);
 		json_object *msgstr = json_object_new_string(curl_multi_strerror(rc));
-		pubnub_handle_error(p, PNR_IO_ERROR, msgstr, method);
+		pubnub_handle_error(p, PNR_IO_ERROR, msgstr, method, true);
 		json_object_put(msgstr);
 		return true;
 	}
@@ -436,9 +442,9 @@ pubnub_subscribe_http_cb(struct pubnub *p, enum pubnub_res result, struct json_o
 	free(cb_http_data);
 
 	if (result != PNR_OK) {
-error:
-		cb(p, pubnub_error_report(p, result, response, "subscribe"),
-			NULL, response, ctx_data, call_data);
+		/* pubnub_handle_error() has been already called along
+		 * the way to here. */
+		cb(p, result, NULL, response, ctx_data, call_data);
 		free(channelset);
 		return;
 	}
@@ -446,7 +452,11 @@ error:
 	/* Response must be an array, and its first element also an array. */
 	if (!json_object_is_type(response, json_type_array)) {
 		result = PNR_FORMAT_ERROR;
-		goto error;
+error:
+		if (pubnub_handle_error(p, result, response, "subscribe", false))
+			cb(p, result, NULL, response, ctx_data, call_data);
+		free(channelset);
+		return;
 	}
 	json_object *msg = json_object_array_get_idx(response, 0);
 	if (!json_object_is_type(msg, json_type_array)) {
@@ -572,16 +582,19 @@ pubnub_history_http_cb(struct pubnub *p, enum pubnub_res result, struct json_obj
 	free(cb_http_data);
 
 	if (result != PNR_OK) {
-error:
-		cb(p, pubnub_error_report(p, result, response, "history"),
-			response, ctx_data, call_data);
+		/* pubnub_handle_error() has been already called along
+		 * the way to here. */
+		cb(p, result, response, ctx_data, call_data);
 		return;
 	}
 
 	/* Response must be an array. */
 	if (!json_object_is_type(response, json_type_array)) {
 		result = PNR_FORMAT_ERROR;
-		goto error;
+error:
+		if (pubnub_handle_error(p, result, response, "history", false))
+			cb(p, result, response, ctx_data, call_data);
+		return;
 	}
 
 	bool put_response = false;
@@ -662,16 +675,18 @@ pubnub_time_http_cb(struct pubnub *p, enum pubnub_res result, struct json_object
 	free(cb_http_data);
 
 	if (result != PNR_OK) {
-error:
-		cb(p, pubnub_error_report(p, result, response, "time"),
-			response, ctx_data, call_data);
+		/* pubnub_handle_error() has been already called along
+		 * the way to here. */
+		cb(p, result, response, ctx_data, call_data);
 		return;
 	}
 
 	/* Response must be an array. */
 	if (!json_object_is_type(response, json_type_array)) {
 		result = PNR_FORMAT_ERROR;
-		goto error;
+		if (pubnub_handle_error(p, result, response, "time", false))
+			cb(p, result, response, ctx_data, call_data);
+		return;
 	}
 
 	/* Extract the first element. */
