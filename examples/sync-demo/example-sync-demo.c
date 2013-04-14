@@ -39,12 +39,8 @@ main(void)
 
 	json_object_put(msg);
 
-	if (pubnub_sync_last_result(sync) != PNR_OK) {
-		msg = pubnub_sync_last_response(sync);
-		fprintf(stderr, "pubnub publish error: %d [%s]\n", pubnub_sync_last_result(sync), json_object_get_string(msg));
-		json_object_put(msg);
+	if (pubnub_sync_last_result(sync) != PNR_OK)
 		return EXIT_FAILURE;
-	}
 	msg = pubnub_sync_last_response(sync);
 	printf("pubnub publish ok: %s\n", json_object_get_string(msg));
 	json_object_put(msg);
@@ -59,12 +55,8 @@ main(void)
 			/* timeout */ 0,
 			/* callback; sync needs NULL! */ NULL,
 			/* callback data */ NULL);
-	if (pubnub_sync_last_result(sync) != PNR_OK) {
-		msg = pubnub_sync_last_response(sync);
-		fprintf(stderr, "pubnub history error: %d [%s]\n", pubnub_sync_last_result(sync), json_object_get_string(msg));
-		json_object_put(msg);
+	if (pubnub_sync_last_result(sync) != PNR_OK)
 		return EXIT_FAILURE;
-	}
 	msg = pubnub_sync_last_response(sync);
 	printf("pubnub history ok: %s\n", json_object_get_string(msg));
 	json_object_put(msg);
@@ -80,17 +72,9 @@ main(void)
 				/* number of listed channels */ 2,
 				/* timeout */ 300,
 				/* callback; sync needs NULL! */ NULL,
-				/* callback data */NULL);
-		if (pubnub_sync_last_result(sync) == PNR_TIMEOUT) {
-			fprintf(stderr, "Time out after 300s reached. Forcibly re-issuing.\n");
-			continue;
-		}
-		if (pubnub_sync_last_result(sync) != PNR_OK) {
-			msg = pubnub_sync_last_response(sync);
-			fprintf(stderr, "pubnub subscribe error: %d [%s]\n", pubnub_sync_last_result(sync), json_object_get_string(msg));
-			json_object_put(msg);
+				/* callback data */ NULL);
+		if (pubnub_sync_last_result(sync) != PNR_OK)
 			return EXIT_FAILURE;
-		}
 		msg = pubnub_sync_last_response(sync);
 		if (json_object_array_length(msg) == 0) {
 			printf("pubnub subscribe ok, no news\n");

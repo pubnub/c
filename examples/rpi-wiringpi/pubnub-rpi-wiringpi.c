@@ -54,15 +54,9 @@ publish(struct pubnub *p, struct pubnub_sync *sync, const char *channel, json_ob
 {
 	printf("pubnub publishing: %s\n", json_object_get_string(msg));
 	pubnub_publish(p, channel, msg, 0, NULL, NULL);
-
 	json_object_put(msg);
-
-	if (pubnub_sync_last_result(sync) != PNR_OK) {
-		msg = pubnub_sync_last_response(sync);
-		fprintf(stderr, "pubnub publish error: %d [%s]\n", pubnub_sync_last_result(sync), json_object_get_string(msg));
-		json_object_put(msg);
+	if (pubnub_sync_last_result(sync) != PNR_OK)
 		exit(EXIT_FAILURE);
-	}
 
 	msg = pubnub_sync_last_response(sync);
 	printf("pubnub publish ok: %s\n", json_object_get_string(msg));
@@ -196,17 +190,8 @@ main(int argc, char *argv[])
 
 	do {
 		pubnub_subscribe(p, "rpi_wiringpi_cmd", 300, NULL, NULL);
-
-		if (pubnub_sync_last_result(sync) == PNR_TIMEOUT) {
-			fprintf(stderr, "Time out after 300s reached. Forcibly re-issuing.\n");
-			continue;
-		}
-		if (pubnub_sync_last_result(sync) != PNR_OK) {
-			struct json_object *msg = pubnub_sync_last_response(sync);
-			fprintf(stderr, "pubnub subscribe error: %d [%s]\n", pubnub_sync_last_result(sync), json_object_get_string(msg));
-			json_object_put(msg);
+		if (pubnub_sync_last_result(sync) != PNR_OK)
 			exit(EXIT_FAILURE);
-		}
 
 		struct json_object *msg = pubnub_sync_last_response(sync);
 		if (json_object_array_length(msg) == 0) {
