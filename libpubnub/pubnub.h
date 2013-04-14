@@ -28,7 +28,7 @@ struct pubnub;
 enum pubnub_res {
 	/* Success. */
 	PNR_OK,
-	/* Another method already in progress. */
+	/* Another method already in progress. (Will not retry.) */
 	PNR_OCCUPIED,
 	/* Time out before the request has completed. */
 	PNR_TIMEOUT,
@@ -142,10 +142,32 @@ void pubnub_time(struct pubnub *p, long timeout, pubnub_time_cb cb, void *cb_dat
 
 /* Set PubNub error retry policy regarding error handling.
  *
+ * The call may be retried if the error is possibly recoverable
+ * and retry is enabled for that error. This is controlled by
+ * @retry_mask; if PNR_xxx-th bit is set, the call is retried in case
+ * of the PNR_xxx result; this is the case for recoverable errors,
+ * specifically PNR_OK and PNR_OCCUPIED bits are always ignored (this
+ * may be further extended in the future). For example,
+ *
+ * 	pubnub_error_policy(p, 0, ...);
+ * will turn off automatic error retry for all errors,
+ *
+ * 	pubnub_error_policy(p, ~0, ...);
+ * will turn it on for all recoverable errors (this is the DEFAULT),
+ *
+ * 	pubnub_error_policy(p, ~(1<<PNR_TIMEOUT), ...);
+ * will turn it on for all errors *except* PNR_TIMEOUT, and so on.
+ *
+ * If the call is not automatically retried after an error, the error
+ * is reported to the application via its specified callback instead
+ * (if you use the pubnub_sync frontend, it can be obtained from
+ * pubnub_last_result(); for future compatibility, you should ideally
+ * check it even when relying on automatic error retry).
+ *
  * A message about the error is printed on stderr if @print is true
- * (the default); this applies even to errors after which we do not
+ * (the DEFAULT); this applies even to errors after which we do not
  * retry for whatever reason. */
-void pubnub_error_policy(struct pubnub *p, bool print);
+void pubnub_error_policy(struct pubnub *p, unsigned int retry_mask, bool print);
 
 #ifdef __cplusplus
 }

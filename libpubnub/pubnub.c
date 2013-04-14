@@ -64,6 +64,8 @@
  */
 
 
+static void pubnub_http_request(struct pubnub *p, pubnub_http_cb cb, void *cb_data, bool cb_internal, bool wait);
+
 static enum pubnub_res
 pubnub_error_report(struct pubnub *p, enum pubnub_res result, json_object *msg, const char *method)
 {
@@ -87,14 +89,35 @@ pubnub_error_report(struct pubnub *p, enum pubnub_res result, json_object *msg, 
 	return result;
 }
 
-/* Deal with errors. This will (i) print the error and (ii) notify the user
- * if @cb is true. It will return true if the caller shall notify the user. */
-/* XXX: This API seems awkward now but it's the scaffolding for retry support. */
+static void
+pubnub_error_retry(struct pubnub *p, void *cb_data)
+{
+	pubnub_http_request(p, p->finished_cb, p->finished_cb_data, p->finished_cb_internal, false);
+}
+
+/* Deal with errors. This will (i) print the error and (ii) either (a) retry
+ * the request or (b) notify the user (if @cb is true).
+ *
+ * It will return true if the caller shall notify the user (i.e. (b) was
+ * the case and @cb was false).
+ *
+ * Note that in case of notifying the user of an error, stop_wait is called
+ * unconditionally, even in case of finished_cb_internal set or cb at false,
+ * as it's certain there will be no retrying anymore. */
 static bool
 pubnub_handle_error(struct pubnub *p, enum pubnub_res result, json_object *msg, const char *method, bool cb)
 {
 	pubnub_error_report(p, result, msg, method);
-	if (cb) {
+
+	if (p->error_retry_mask & (1 << result)) {
+		/* Retry after a 250ms delay; this avoids hammering
+		 * the PubNub service in case of a bug. */
+		struct timespec timeout_ts = { .tv_nsec = 250*1000*1000 };
+		p->cb->timeout(p, p->cb_data, &timeout_ts, pubnub_error_retry, p);
+		return false;
+
+		/* No auto-retry, somehow notify the user. */
+	} else if (cb) {
 		p->cb->stop_wait(p, p->cb_data); // unconditional!
 		p->finished_cb(p, result, msg, p->cb_data, p->finished_cb_data);
 		return false;
@@ -146,6 +169,8 @@ pubnub_connection_finished(struct pubnub *p, CURLcode res, bool stop_wait)
 		pubnub_handle_error(p, PNR_FORMAT_ERROR, NULL, method, true);
 		return;
 	}
+
+	DBGMSG("DONE: Passed all traps! stop_wait %d\n", p->finished_cb_internal);
 
 	/* The regular callback */
 	if (!p->finished_cb_internal)
@@ -296,6 +321,7 @@ pubnub_init(const char *publish_key, const char *subscribe_key,
 	p->url = printbuf_new();
 	p->body = printbuf_new();
 
+	p->error_retry_mask = ~0;
 	p->error_print = true;
 
 	p->curlm = curl_multi_init();
@@ -362,7 +388,7 @@ pubnub_http_setup(struct pubnub *p, const char *urlelems[], long timeout)
 }
 
 static void
-pubnub_http_request(struct pubnub *p, pubnub_http_cb cb, void *cb_data, bool cb_internal)
+pubnub_http_request(struct pubnub *p, pubnub_http_cb cb, void *cb_data, bool cb_internal, bool wait)
 {
 	p->curl = curl_easy_init();
 
@@ -390,7 +416,11 @@ pubnub_http_request(struct pubnub *p, pubnub_http_cb cb, void *cb_data, bool cb_
 	if (!pubnub_connection_check(p, CURL_SOCKET_TIMEOUT, 0, false)) {
 		/* Connection did not fail early, let's call wait and return. */
 		DBGMSG("wait: pre\n");
-		p->cb->wait(p, p->cb_data);
+		/* Call wait() only if this is not an error retry; wait
+		 * and stop_wait should be paired 1:1 and we did not
+		 * call stop_wait either. */
+		if (wait)
+			p->cb->wait(p, p->cb_data);
 		DBGMSG("wait: post\n");
 	}
 }
@@ -405,7 +435,7 @@ pubnub_publish(struct pubnub *p, const char *channel, struct json_object *messag
 
 	if (p->method) {
 		if (cb)
-			cb(p, pubnub_error_report(p, PNR_OCCUPIED, NULL, "publish"),
+			cb(p, pubnub_error_report(p, PNR_OCCUPIED, NULL, "publish", false),
 				NULL, p->cb_data, cb_data);
 		return;
 	}
@@ -432,7 +462,7 @@ pubnub_publish(struct pubnub *p, const char *channel, struct json_object *messag
 	if (put_message)
 		json_object_put(message);
 
-	pubnub_http_request(p, (pubnub_http_cb) cb, cb_data, false);
+	pubnub_http_request(p, (pubnub_http_cb) cb, cb_data, false, true);
 }
 
 
@@ -546,7 +576,7 @@ pubnub_subscribe(struct pubnub *p, const char *channel,
 
 	if (p->method) {
 		if (cb)
-			cb(p, pubnub_error_report(p, PNR_OCCUPIED, NULL, "subscribe"),
+			cb(p, pubnub_error_report(p, PNR_OCCUPIED, NULL, "subscribe", false),
 				NULL, NULL, p->cb_data, cb_data);
 		return;
 	}
@@ -559,7 +589,7 @@ pubnub_subscribe(struct pubnub *p, const char *channel,
 
 	const char *urlelems[] = { "subscribe", p->subscribe_key, channel, "0", p->time_token, NULL };
 	pubnub_http_setup(p, urlelems, timeout);
-	pubnub_http_request(p, pubnub_subscribe_http_cb, cb_http_data, true);
+	pubnub_http_request(p, pubnub_subscribe_http_cb, cb_http_data, true, true);
 }
 
 PUBNUB_API
@@ -638,7 +668,7 @@ pubnub_history(struct pubnub *p, const char *channel, int limit,
 
 	if (p->method) {
 		if (cb)
-			cb(p, pubnub_error_report(p, PNR_OCCUPIED, NULL, "history"),
+			cb(p, pubnub_error_report(p, PNR_OCCUPIED, NULL, "history", false),
 				NULL, p->cb_data, cb_data);
 		return;
 	}
@@ -651,7 +681,7 @@ pubnub_history(struct pubnub *p, const char *channel, int limit,
 	char strlimit[64]; snprintf(strlimit, sizeof(strlimit), "%d", limit);
 	const char *urlelems[] = { "history", p->subscribe_key, channel, "0", strlimit, NULL };
 	pubnub_http_setup(p, urlelems, timeout);
-	pubnub_http_request(p, pubnub_history_http_cb, cb_http_data, true);
+	pubnub_http_request(p, pubnub_history_http_cb, cb_http_data, true, true);
 }
 
 
@@ -664,7 +694,7 @@ pubnub_here_now(struct pubnub *p, const char *channel,
 
 	if (p->method) {
 		if (cb)
-			cb(p, pubnub_error_report(p, PNR_OCCUPIED, NULL, "here_now"),
+			cb(p, pubnub_error_report(p, PNR_OCCUPIED, NULL, "here_now", false),
 				NULL, p->cb_data, cb_data);
 		return;
 	}
@@ -672,7 +702,7 @@ pubnub_here_now(struct pubnub *p, const char *channel,
 
 	const char *urlelems[] = { "v2", "presence", "sub-key", p->subscribe_key, "channel", channel, NULL };
 	pubnub_http_setup(p, urlelems, timeout);
-	pubnub_http_request(p, (pubnub_http_cb) cb, cb_data, false);
+	pubnub_http_request(p, (pubnub_http_cb) cb, cb_data, false, true);
 }
 
 
@@ -723,7 +753,7 @@ pubnub_time(struct pubnub *p, long timeout, pubnub_time_cb cb, void *cb_data)
 
 	if (p->method) {
 		if (cb)
-			cb(p, pubnub_error_report(p, PNR_OCCUPIED, NULL, "time"),
+			cb(p, pubnub_error_report(p, PNR_OCCUPIED, NULL, "time", false),
 				NULL, p->cb_data, cb_data);
 		return;
 	}
@@ -735,13 +765,14 @@ pubnub_time(struct pubnub *p, long timeout, pubnub_time_cb cb, void *cb_data)
 
 	const char *urlelems[] = { "time", "0", NULL };
 	pubnub_http_setup(p, urlelems, timeout);
-	pubnub_http_request(p, pubnub_time_http_cb, cb_http_data, true);
+	pubnub_http_request(p, pubnub_time_http_cb, cb_http_data, true, true);
 }
 
 
 PUBNUB_API
 void
-pubnub_error_policy(struct pubnub *p, bool print)
+pubnub_error_policy(struct pubnub *p, unsigned int retry_mask, bool print)
 {
+	p->error_retry_mask = retry_mask;
 	p->error_print = print;
 }

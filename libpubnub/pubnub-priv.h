@@ -35,6 +35,7 @@ struct pubnub {
 	bool finished_cb_internal;
 
 	/* Error retry policy. */
+	unsigned int error_retry_mask;
 	bool error_print;
 
 	CURL *curl;
