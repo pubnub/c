@@ -73,7 +73,7 @@ pubnub_error_report(struct pubnub *p, enum pubnub_res result, json_object *msg, 
 		static const char *pubnub_res_str[] = {
 			[PNR_OK] = "Success",
 			[PNR_OCCUPIED] = "Another method already in progress",
-			[PNR_TIMEOUT] = "Time out before the request has completed",
+			[PNR_TIMEOUT] = "Timeout",
 			[PNR_IO_ERROR] = "Communication error",
 			[PNR_HTTP_ERROR] = "HTTP error",
 			[PNR_FORMAT_ERROR] = "Unexpected input in received JSON",
