@@ -87,6 +87,15 @@ pubnub_error_report(struct pubnub *p, enum pubnub_res result, json_object *msg, 
 	return result;
 }
 
+/* Deal with errors. This will print the error and notify the user. */
+static void
+pubnub_handle_error(struct pubnub *p, enum pubnub_res result, json_object *msg, const char *method)
+{
+	p->finished_cb(p,
+		pubnub_error_report(p, result, msg, method),
+		msg, p->cb_data, p->finished_cb_data);
+}
+
 
 static void pubnub_connection_cleanup(struct pubnub *p, bool stop_wait);
 
@@ -100,14 +109,10 @@ pubnub_connection_finished(struct pubnub *p, CURLcode res, bool stop_wait)
 		const char *method = p->method;
 		pubnub_connection_cleanup(p, stop_wait);
 		if (res == CURLE_OPERATION_TIMEDOUT) {
-			p->finished_cb(p,
-				pubnub_error_report(p, PNR_TIMEOUT, NULL, method),
-				NULL, p->cb_data, p->finished_cb_data);
+			pubnub_handle_error(p, PNR_TIMEOUT, NULL, method);
 		} else {
 			json_object *msgstr = json_object_new_string(curl_easy_strerror(res));
-			p->finished_cb(p,
-				pubnub_error_report(p, PNR_IO_ERROR, msgstr, method),
-				msgstr, p->cb_data, p->finished_cb_data);
+			pubnub_handle_error(p, PNR_IO_ERROR, msgstr, method);
 			json_object_put(msgstr);
 		}
 		return;
@@ -120,9 +125,7 @@ pubnub_connection_finished(struct pubnub *p, CURLcode res, bool stop_wait)
 	pubnub_connection_cleanup(p, stop_wait);
 	if (code / 100 != 2) {
 		json_object *httpcode = json_object_new_int(code);
-		p->finished_cb(p,
-			pubnub_error_report(p, PNR_HTTP_ERROR, httpcode, p->method),
-			httpcode, p->cb_data, p->finished_cb_data);
+		pubnub_handle_error(p, PNR_HTTP_ERROR, httpcode, p->method);
 		json_object_put(httpcode);
 		return;
 	}
@@ -130,9 +133,7 @@ pubnub_connection_finished(struct pubnub *p, CURLcode res, bool stop_wait)
 	/* Parse body */
 	json_object *response = json_tokener_parse(p->body->buf);
 	if (!response) {
-		p->finished_cb(p,
-			pubnub_error_report(p, PNR_FORMAT_ERROR, NULL, p->method),
-			NULL, p->cb_data, p->finished_cb_data);
+		pubnub_handle_error(p, PNR_FORMAT_ERROR, NULL, p->method);
 		return;
 	}
 
@@ -167,9 +168,7 @@ pubnub_connection_check(struct pubnub *p, int fd, int bitmask, bool stop_wait)
 	if (rc != CURLM_OK) {
 		pubnub_connection_cleanup(p, stop_wait);
 		json_object *msgstr = json_object_new_string(curl_multi_strerror(rc));
-		p->finished_cb(p,
-			pubnub_error_report(p, PNR_IO_ERROR, msgstr, p->method),
-			msgstr, p->cb_data, p->finished_cb_data);
+		pubnub_handle_error(p, PNR_IO_ERROR, msgstr, p->method);
 		json_object_put(msgstr);
 		return true;
 	}
