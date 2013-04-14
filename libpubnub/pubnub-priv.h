@@ -14,6 +14,7 @@ struct pubnub {
 	char *publish_key, *subscribe_key;
 	char *secret_key, *cipher_key;
 	char *origin;
+	char *uuid;
 	char time_token[64];
 
 	const struct pubnub_callbacks *cb;

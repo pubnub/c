@@ -121,7 +121,7 @@ struct pubnub_callbacks {
 /* curl_global_init() caveat */
 struct pubnub *pubnub_init(const char *publish_key, const char *subscribe_key,
 			const char *secret_key, const char *cipher_key,
-			const char *origin,
+			const char *origin, const char *uuid,
 			const struct pubnub_callbacks *cb, void *cb_data);
 void pubnub_done(struct pubnub *p);
 
@@ -137,6 +137,8 @@ void pubnub_history(struct pubnub *p, const char *channel, int limit,
 void pubnub_here_now(struct pubnub *p, const char *channel,
 		long timeout, pubnub_here_now_cb cb, void *cb_data);
 void pubnub_time(struct pubnub *p, long timeout, pubnub_time_cb cb, void *cb_data);
+
+const char *pubnub_current_uuid(struct pubnub *p);
 
 #ifdef __cplusplus
 }
