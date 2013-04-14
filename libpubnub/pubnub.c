@@ -104,9 +104,11 @@ pubnub_connection_finished(struct pubnub *p, CURLcode res, bool stop_wait)
 {
 	DBGMSG("DONE: (%d) %s\n", res, p->curl_error);
 
+	/* pubnub_connection_cleanup() will clobber p->method */
+	const char *method = p->method;
+
 	/* Check against I/O errors */
 	if (res != CURLE_OK) {
-		const char *method = p->method;
 		pubnub_connection_cleanup(p, stop_wait);
 		if (res == CURLE_OPERATION_TIMEDOUT) {
 			pubnub_handle_error(p, PNR_TIMEOUT, NULL, method);
@@ -125,7 +127,7 @@ pubnub_connection_finished(struct pubnub *p, CURLcode res, bool stop_wait)
 	pubnub_connection_cleanup(p, stop_wait);
 	if (code / 100 != 2) {
 		json_object *httpcode = json_object_new_int(code);
-		pubnub_handle_error(p, PNR_HTTP_ERROR, httpcode, p->method);
+		pubnub_handle_error(p, PNR_HTTP_ERROR, httpcode, method);
 		json_object_put(httpcode);
 		return;
 	}
@@ -133,7 +135,7 @@ pubnub_connection_finished(struct pubnub *p, CURLcode res, bool stop_wait)
 	/* Parse body */
 	json_object *response = json_tokener_parse(p->body->buf);
 	if (!response) {
-		pubnub_handle_error(p, PNR_FORMAT_ERROR, NULL, p->method);
+		pubnub_handle_error(p, PNR_FORMAT_ERROR, NULL, method);
 		return;
 	}
 
@@ -166,9 +168,10 @@ pubnub_connection_check(struct pubnub *p, int fd, int bitmask, bool stop_wait)
 	CURLMcode rc = curl_multi_socket_action(p->curlm, fd, bitmask, &running_handles);
 	DBGMSG("event_sockcb fd %d bitmask %d rc %d rh %d\n", fd, bitmask, rc, running_handles);
 	if (rc != CURLM_OK) {
+		const char *method = p->method;
 		pubnub_connection_cleanup(p, stop_wait);
 		json_object *msgstr = json_object_new_string(curl_multi_strerror(rc));
-		pubnub_handle_error(p, PNR_IO_ERROR, msgstr, p->method);
+		pubnub_handle_error(p, PNR_IO_ERROR, msgstr, method);
 		json_object_put(msgstr);
 		return true;
 	}
