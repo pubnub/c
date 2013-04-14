@@ -20,10 +20,9 @@ struct pubnub {
 	const struct pubnub_callbacks *cb;
 	void *cb_data;
 
-	enum pubnub_state {
-		PNS_IDLE, /* No method in progress. */
-		PNS_BUSY, /* A method in progress. */
-	} state;
+	/* Name of method currently in progress; NULL if there is no
+	 * method in progress currently. */
+	const char *method;
 	/* Callback information for the method currently
 	 * in progress. Call this when we have received
 	 * complete HTTP reply and the method should be
@@ -31,12 +30,22 @@ struct pubnub {
 	 * required! */
 	pubnub_http_cb finished_cb;
 	void *finished_cb_data;
+	/* True if finished_cb points to our internal handler;
+	 * in that case, we can still call pubnub_handle_error()
+	 * later and therefore shall not call stop_wait just yet. */
+	bool finished_cb_internal;
+
+	/* Error retry policy. */
+	unsigned int error_retry_mask;
+	bool error_print;
 
 	CURL *curl;
 	CURLM *curlm;
 	struct curl_slist *curl_headers;
 	char curl_error[CURL_ERROR_SIZE];
+	struct printbuf *url;
 	struct printbuf *body;
+	long timeout;
 };
 
 #ifdef DEBUG

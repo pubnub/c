@@ -33,12 +33,8 @@ main(void)
 			/* callback; sync needs NULL! */ NULL,
 			/* callback data */ NULL);
 
-	if (pubnub_sync_last_result(sync) != PNR_OK) {
-		msg = pubnub_sync_last_response(sync);
-		fprintf(stderr, "pubnub history error: %d [%s]\n", pubnub_sync_last_result(sync), json_object_get_string(msg));
-		json_object_put(msg);
+	if (pubnub_sync_last_result(sync) != PNR_OK)
 		return EXIT_FAILURE;
-	}
 
 
 	msg = pubnub_sync_last_response(sync);

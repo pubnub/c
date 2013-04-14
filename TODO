@@ -1,5 +1,3 @@
-- standardized timeout handling (configurable)
-- standardized error retry policy (configurable)
 - fix missing function documentation in pubnub.h
 
 later?

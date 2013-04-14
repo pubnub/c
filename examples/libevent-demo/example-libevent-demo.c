@@ -94,12 +94,12 @@ publish_done(struct pubnub *p, enum pubnub_res result, struct json_object *msg, 
 	/* ctx_data is (struct pubnub_libevent *) */
 	/* call_data is NULL as that's what we passed to pubnub_publish() */
 
-	if (result != PNR_OK) {
-		fprintf(stderr, "pubnub publish error: %d [%s]\n", result, msg ? json_object_get_string(msg) : "N/A");
-		/* Instead of a retry strategy, we just terminate
-		 * with an error. You might choose to do differently. */
+	if (result != PNR_OK)
+		/* An unrecoverable error, we just terminate with an
+		 * error code. Since pubnub_error_policy()'s print is
+		 * true by default, an explanation has already been
+		 * written to stderr and we tried to retry as well. */
 		exit(EXIT_FAILURE);
-	}
 
 	printf("pubnub publish ok\n");
 
@@ -123,12 +123,8 @@ history_received(struct pubnub *p, enum pubnub_res result, struct json_object *m
 	/* ctx_data is (struct pubnub_libevent *) */
 	/* call_data is NULL as that's what we passed to pubnub_history() */
 
-	if (result != PNR_OK) {
-		fprintf(stderr, "pubnub history error: %d [%s]\n", result, msg ? json_object_get_string(msg) : "N/A");
-		/* Instead of a retry strategy, we just terminate
-		 * with an error. You might choose to do differently. */
+	if (result != PNR_OK)
 		exit(EXIT_FAILURE);
-	}
 
 	printf("pubnub history ok: %s\n", json_object_get_string(msg));
 
@@ -142,11 +138,7 @@ history_received(struct pubnub *p, enum pubnub_res result, struct json_object *m
 /* How does channel subscription work? The subscribe() call will issue
  * a PubNub subscribe request and call subscribe_received() when some
  * messages arrived. subscribe_received() will process the messages,
- * then "loop" by calling subscribe() again to issue a new request.
- *
- * Sometimes (on errors), the subsequenty subscribe() call will be
- * delayed by funneling it through subscribe_retry_timer that will
- * call subscribe_retry(). */
+ * then "loop" by calling subscribe() again to issue a new request. */
 
 static void
 subscribe(struct pubnub *p)
@@ -157,40 +149,16 @@ subscribe(struct pubnub *p)
 	/* ...continues later in subscribe_received(). */
 }
 
-/* Delayed retry handling intermezzo. */
-struct event subscribe_retry_timer;
-static void
-subscribe_retry(int fd, short kind, void *userp)
-{
-	subscribe(userp);
-}
-
 static void
 subscribe_received(struct pubnub *p, enum pubnub_res result, char **channels, struct json_object *msg, void *ctx_data, void *call_data)
 {
 	/* ctx_data is (struct pubnub_libevent *) */
 	/* call_data is NULL as that's what we passed to pubnub_subscribe_multi() */
 
-	if (result == PNR_TIMEOUT) {
-		fprintf(stderr, "Time out after 300s reached. Forcibly re-issuing.\n");
-		subscribe(p);
-		return;
-	}
-
-	if (result != PNR_OK) {
-		fprintf(stderr, "pubnub subscribe error: %d [%s]\n", result, msg ? json_object_get_string(msg) : "N/A");
-
-		/* We will set up a timer that will make a retry in one second.
-		 * You should never retry _immediately_ as that will likely
-		 * just cause high CPU load, flood your network and put useless
-		 * load on the PubNub servers if some kind of longer outage
-		 * happenned. */
-		/* TODO: Move this logic to libpubnub itself. */
-		evtimer_set(&subscribe_retry_timer, subscribe_retry, p);
-		struct timeval timeout = { .tv_sec = 1, .tv_usec = 0 };
-		evtimer_add(&subscribe_retry_timer, &timeout);
-		return;
-	}
+	if (result != PNR_OK)
+		/* This must be something fatal, we retry on recoverable
+		 * errors. */
+		exit(EXIT_FAILURE);
 
 	if (json_object_array_length(msg) == 0) {
 		printf("pubnub subscribe ok, no news\n");
