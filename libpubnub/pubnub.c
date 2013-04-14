@@ -67,7 +67,7 @@
 static void pubnub_http_request(struct pubnub *p, pubnub_http_cb cb, void *cb_data, bool cb_internal, bool wait);
 
 static enum pubnub_res
-pubnub_error_report(struct pubnub *p, enum pubnub_res result, json_object *msg, const char *method)
+pubnub_error_report(struct pubnub *p, enum pubnub_res result, json_object *msg, const char *method, bool retry)
 {
 	if (p->error_print) {
 		static const char *pubnub_res_str[] = {
@@ -79,11 +79,14 @@ pubnub_error_report(struct pubnub *p, enum pubnub_res result, json_object *msg, 
 			[PNR_FORMAT_ERROR] = "Unexpected input in received JSON",
 		};
 		if (msg) {
-			fprintf(stderr, "pubnub %s error: %s [%s]\n",
-				method, pubnub_res_str[result], json_object_get_string(msg));
+			fprintf(stderr, "pubnub %s result: %s [%s]%s\n",
+				method, pubnub_res_str[result],
+				json_object_get_string(msg),
+				retry ? " (reissuing)" : "");
 		} else {
-			fprintf(stderr, "pubnub %s error: %s\n",
-				method, pubnub_res_str[result]);
+			fprintf(stderr, "pubnub %s result: %s%s\n",
+				method, pubnub_res_str[result],
+				retry ? " (reissuing)" : "");
 		}
 	}
 	return result;
@@ -107,23 +110,29 @@ pubnub_error_retry(struct pubnub *p, void *cb_data)
 static bool
 pubnub_handle_error(struct pubnub *p, enum pubnub_res result, json_object *msg, const char *method, bool cb)
 {
-	pubnub_error_report(p, result, msg, method);
-
 	if (p->error_retry_mask & (1 << result)) {
-		/* Retry after a 250ms delay; this avoids hammering
+		/* Retry ... */
+
+		pubnub_error_report(p, result, msg, method, true);
+		p->method = method; // restore after cleanup
+
+		/* ... after a 250ms delay; this avoids hammering
 		 * the PubNub service in case of a bug. */
 		struct timespec timeout_ts = { .tv_nsec = 250*1000*1000 };
 		p->cb->timeout(p, p->cb_data, &timeout_ts, pubnub_error_retry, p);
+
 		return false;
 
-		/* No auto-retry, somehow notify the user. */
-	} else if (cb) {
-		p->cb->stop_wait(p, p->cb_data); // unconditional!
-		p->finished_cb(p, result, msg, p->cb_data, p->finished_cb_data);
-		return false;
 	} else {
+		/* No auto-retry, somehow notify the user. */
+
+		pubnub_error_report(p, result, msg, method, false);
 		p->cb->stop_wait(p, p->cb_data); // unconditional!
-		return true;
+
+		if (cb)
+			p->finished_cb(p, result, msg, p->cb_data, p->finished_cb_data);
+
+		return !cb;
 	}
 }
 
