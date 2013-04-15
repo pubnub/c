@@ -39,6 +39,8 @@ struct pubnub {
 	unsigned int error_retry_mask;
 	bool error_print;
 
+	bool nosignal;
+
 	CURL *curl;
 	CURLM *curlm;
 	struct curl_slist *curl_headers;

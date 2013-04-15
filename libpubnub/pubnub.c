@@ -353,6 +353,8 @@ pubnub_init(const char *publish_key, const char *subscribe_key,
 	p->error_retry_mask = ~0;
 	p->error_print = true;
 
+	p->nosignal = true;
+
 	p->curlm = curl_multi_init();
 	curl_multi_setopt(p->curlm, CURLMOPT_SOCKETFUNCTION, pubnub_http_sockcb);
 	curl_multi_setopt(p->curlm, CURLMOPT_SOCKETDATA, p);
@@ -412,6 +414,13 @@ pubnub_set_origin(struct pubnub *p, const char *origin)
 {
 	free(p->origin);
 	p->origin = strdup(origin);
+}
+
+PUBNUB_API
+void
+pubnub_set_nosignal(struct pubnub *p, bool nosignal)
+{
+	p->nosignal = nosignal;
 }
 
 PUBNUB_API
@@ -495,8 +504,7 @@ pubnub_http_request(struct pubnub *p, pubnub_http_cb cb, void *cb_data, bool cb_
 	curl_easy_setopt(p->curl, CURLOPT_ERRORBUFFER, p->curl_error);
 	curl_easy_setopt(p->curl, CURLOPT_PRIVATE, p);
 	curl_easy_setopt(p->curl, CURLOPT_NOPROGRESS, 1L);
-	/* TODO: Make this user-configurable */
-	curl_easy_setopt(p->curl, CURLOPT_NOSIGNAL, 1L);
+	curl_easy_setopt(p->curl, CURLOPT_NOSIGNAL, (long) p->nosignal);
 	curl_easy_setopt(p->curl, CURLOPT_TIMEOUT, p->timeout);
 
 	printbuf_reset(p->body);

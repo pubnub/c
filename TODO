@@ -4,7 +4,6 @@ later?
 - add a way to unsubscribe / cancel call
 - build C++ wrapper
 - factor out libpubnub-event.so so that libevent is not hard dep for libpubnub
-- way to configure NOSIGNAL curl mode
 - more demo's?
 - executable wrapper for PubNub integration in shell scripts?
 - some unit tests?

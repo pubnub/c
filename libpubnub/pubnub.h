@@ -131,6 +131,18 @@ void pubnub_set_origin(struct pubnub *p, const char *origin);
 const char *pubnub_current_uuid(struct pubnub *p);
 void pubnub_set_uuid(struct pubnub *p, const char *uuid);
 
+/* This function selects the value of CURLOPT_NOSIGNAL which involves
+ * a tradeoff:
+ *
+ * (i) nosignal is true (DEFAULT) - the library is thread safe and does
+ * not modify signal handlers, however timeout handling will be broken
+ * with regards to DNS requests
+ *
+ * (ii) nosignal is false - DNS requests will be timing out properly,
+ * but the library will install custom SIGPIPE (and possibly SIGCHLD)
+ * handlers and won't be thread safe */
+void pubnub_set_nosignal(struct pubnub *p, bool nosignal);
+
 /* Set PubNub error retry policy regarding error handling.
  *
  * The call may be retried if the error is possibly recoverable
