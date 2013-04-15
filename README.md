@@ -25,7 +25,7 @@ Build your program with compile flags as provided by
 	#include <pubnub-sync.h>
 
 	struct pubnub_sync *sync = pubnub_sync_init();
-	struct pubnub *p = pubnub_init("demo", "demo", NULL, NULL, NULL,
+	struct pubnub *p = pubnub_init("demo", "demo",
 			 &pubnub_sync_callbacks, sync);
 
 	pubnub_publish(p, "my_channel", json_object, 0, NULL, NULL);
@@ -33,7 +33,7 @@ Build your program with compile flags as provided by
 	do {
 		pubnub_subscribe(p, "my_channel", 300, NULL, NULL);
 		if (pubnub_sync_last_result(sync) != PNR_OK)
-			continue;
+			exit(EXIT_FAILURE);
 		struct json_object *msg = pubnub_sync_last_response(sync);
 		for (int i = 0; i < json_object_array_length(msg); i++) {
 			json_object *msg1 = json_object_array_get_idx(msg, i);
@@ -41,7 +41,7 @@ Build your program with compile flags as provided by
 		}
 	} while (1);
 
-See the provided examples for full error handling and more desriptive code.
+See the provided examples for more desriptive code.
 
 Installation
 ------------
