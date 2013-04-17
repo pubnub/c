@@ -340,7 +340,7 @@ pubnub_init(const char *publish_key, const char *subscribe_key,
 
 	p->publish_key = strdup(publish_key);
 	p->subscribe_key = strdup(subscribe_key);
-	p->origin = strdup("pubsub.pubnub.com");
+	p->origin = strdup("http://pubsub.pubnub.com");
 	p->uuid = pubnub_gen_uuid();
 	strcpy(p->time_token, "0");
 
@@ -460,7 +460,6 @@ static void
 pubnub_http_setup(struct pubnub *p, const char *urlelems[], const char **qparelems, long timeout)
 {
 	printbuf_reset(p->url);
-	printbuf_memappend_fast(p->url, "http://", 7);
 	printbuf_memappend_fast(p->url, p->origin, strlen(p->origin));
 	for (const char **urlelemp = urlelems; *urlelemp; urlelemp++) {
 		/* Join urlemes by slashes, e.g.
