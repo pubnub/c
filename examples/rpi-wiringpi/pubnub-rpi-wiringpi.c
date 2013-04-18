@@ -53,7 +53,7 @@ void
 publish(struct pubnub *p, struct pubnub_sync *sync, const char *channel, json_object *msg)
 {
 	printf("pubnub publishing: %s\n", json_object_get_string(msg));
-	pubnub_publish(p, channel, msg, 0, NULL, NULL);
+	pubnub_publish(p, channel, msg, -1, NULL, NULL);
 	json_object_put(msg);
 	if (pubnub_sync_last_result(sync) != PNR_OK)
 		exit(EXIT_FAILURE);

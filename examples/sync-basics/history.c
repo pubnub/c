@@ -25,7 +25,7 @@ main(void)
 			/* struct pubnub */ p,
 			/* channel */ channel,
 			/* #messages */ 10,
-			/* timeout */ 0,
+			/* default timeout */ -1,
 			/* callback; sync needs NULL! */ NULL,
 			/* callback data */ NULL);
 

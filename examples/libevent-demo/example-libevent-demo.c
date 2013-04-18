@@ -81,7 +81,7 @@ publish(struct pubnub *p)
 	json_object_object_add(msg, "num", json_object_new_int(42));
 	json_object_object_add(msg, "str", json_object_new_string("\"Hello, world!\" she said."));
 
-	pubnub_publish(p, "my_channel", msg, 0, publish_done, NULL);
+	pubnub_publish(p, "my_channel", msg, -1, publish_done, NULL);
 
 	json_object_put(msg);
 
@@ -112,7 +112,7 @@ publish_done(struct pubnub *p, enum pubnub_res result, struct json_object *msg, 
 static void
 history(struct pubnub *p)
 {
-	pubnub_history(p, "my_channel", 10, 0, history_received, NULL);
+	pubnub_history(p, "my_channel", 10, -1, history_received, NULL);
 
 	/* ...continues later in history_received(). */
 }
@@ -144,7 +144,7 @@ static void
 subscribe(struct pubnub *p)
 {
 	const char *channels[] = { "my_channel", "demo_channel" };
-	pubnub_subscribe_multi(p, channels, 2, 300, subscribe_received, NULL);
+	pubnub_subscribe_multi(p, channels, 2, -1, subscribe_received, NULL);
 
 	/* ...continues later in subscribe_received(). */
 }

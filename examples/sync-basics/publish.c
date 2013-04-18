@@ -29,7 +29,7 @@ main(void)
 			/* struct pubnub */ p,
 			/* channel */ "my_channel",
 			/* message */ msg,
-			/* timeout */ 0,
+			/* default timeout */ -1,
 			/* callback; sync needs NULL! */ NULL,
 			/* callback data */ NULL);
 

@@ -30,7 +30,7 @@ main(void)
 			/* struct pubnub */ p,
 			/* channel */ "my_channel",
 			/* message */ msg,
-			/* timeout */ 0,
+			/* default timeout */ -1,
 			/* callback; sync needs NULL! */ NULL,
 			/* callback data */ NULL);
 
@@ -49,7 +49,7 @@ main(void)
 			/* struct pubnub */ p,
 			/* channel */ "my_channel",
 			/* #messages */ 10,
-			/* timeout */ 0,
+			/* default timeout */ -1,
 			/* callback; sync needs NULL! */ NULL,
 			/* callback data */ NULL);
 	if (pubnub_sync_last_result(sync) != PNR_OK)
@@ -67,7 +67,7 @@ main(void)
 				/* struct pubnub */ p,
 				/* list of channels */ channels,
 				/* number of listed channels */ 2,
-				/* timeout */ 300,
+				/* default timeout */ -1,
 				/* callback; sync needs NULL! */ NULL,
 				/* callback data */ NULL);
 		if (pubnub_sync_last_result(sync) != PNR_OK)

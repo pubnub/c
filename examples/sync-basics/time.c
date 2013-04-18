@@ -22,7 +22,7 @@ main(void)
 
 	pubnub_time(
 			/* struct pubnub */ p,
-			/* timeout */ 0,
+			/* default timeout */ -1,
 			/* callback; sync needs NULL! */ NULL,
 			/* callback data */ NULL);
 

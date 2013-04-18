@@ -28,10 +28,10 @@ Build your program with compile flags as provided by
 	struct pubnub *p = pubnub_init("demo", "demo",
 			 &pubnub_sync_callbacks, sync);
 
-	pubnub_publish(p, "my_channel", json_object, 0, NULL, NULL);
+	pubnub_publish(p, "my_channel", json_object, -1, NULL, NULL);
 
 	do {
-		pubnub_subscribe(p, "my_channel", 300, NULL, NULL);
+		pubnub_subscribe(p, "my_channel", -1, NULL, NULL);
 		if (pubnub_sync_last_result(sync) != PNR_OK)
 			exit(EXIT_FAILURE);
 		struct json_object *msg = pubnub_sync_last_response(sync);

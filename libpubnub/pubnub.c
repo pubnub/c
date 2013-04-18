@@ -543,6 +543,9 @@ pubnub_publish(struct pubnub *p, const char *channel, struct json_object *messag
 	}
 	p->method = "publish";
 
+	if (timeout < 0)
+		timeout = 5;
+
 	bool put_message = false;
 	if (p->cipher_key) {
 		message = pubnub_encrypt(p->cipher_key, json_object_to_json_string(message));
@@ -684,6 +687,9 @@ pubnub_subscribe(struct pubnub *p, const char *channel,
 	}
 	p->method = "subscribe";
 
+	if (timeout < 0)
+		timeout = 310;
+
 	struct pubnub_subscribe_http_cb *cb_http_data = malloc(sizeof(*cb_http_data));
 	cb_http_data->channelset = strdup(channel);
 	cb_http_data->cb = cb;
@@ -777,6 +783,9 @@ pubnub_history(struct pubnub *p, const char *channel, int limit,
 	}
 	p->method = "history";
 
+	if (timeout < 0)
+		timeout = 5;
+
 	struct pubnub_history_http_cb *cb_http_data = malloc(sizeof(*cb_http_data));
 	cb_http_data->cb = cb;
 	cb_http_data->call_data = cb_data;
@@ -802,6 +811,9 @@ pubnub_here_now(struct pubnub *p, const char *channel,
 		return;
 	}
 	p->method = "here_now";
+
+	if (timeout < 0)
+		timeout = 5;
 
 	const char *urlelems[] = { "v2", "presence", "sub-key", p->subscribe_key, "channel", channel, NULL };
 	pubnub_http_setup(p, urlelems, NULL, timeout);
@@ -861,6 +873,9 @@ pubnub_time(struct pubnub *p, long timeout, pubnub_time_cb cb, void *cb_data)
 		return;
 	}
 	p->method = "time";
+
+	if (timeout < 0)
+		timeout = 5;
 
 	struct pubnub_time_http_cb *cb_http_data = malloc(sizeof(*cb_http_data));
 	cb_http_data->cb = cb;

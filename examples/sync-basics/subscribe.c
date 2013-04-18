@@ -26,7 +26,7 @@ main(void)
 				/* struct pubnub */ p,
 				/* list of channels */ channels,
 				/* number of listed channels */ 2,
-				/* timeout */ 300,
+				/* default timeout */ -1,
 				/* callback; sync needs NULL! */ NULL,
 				/* callback data */NULL);
 

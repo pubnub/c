@@ -221,9 +221,10 @@ void pubnub_error_policy(struct pubnub *p, unsigned int retry_mask, bool print);
  * and callback parameters @cb and @cb_data.
  *
  * The @timeout [s] parameter describes how long to wait for request
- * fulfillment before the PNR_TIMEOUT error is generated. Supply 300
- * if in doubt. (Note that by default, PNR_TIMEOUT will just print
- * a message and retry the request; see pubnub_error_policy() above.)
+ * fulfillment before the PNR_TIMEOUT error is generated. Supply -1
+ * if in doubt to obtain the optimal default value. (Note that normally,
+ * PNR_TIMEOUT will just print a message and retry the request; see
+ * pubnub_error_policy() above.)
  *
  * If you are using the pubnub_sync frontend, the function calls
  * will block until the request is fulfilled and you should pass

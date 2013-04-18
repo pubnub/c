@@ -23,7 +23,7 @@ main(void)
 	pubnub_here_now(
 			/* struct pubnub */ p,
 			/* channel */ "my_channel",
-			/* timeout */ 0,
+			/* default timeout */ -1,
 			/* callback; sync needs NULL! */ NULL,
 			/* callback data */ NULL);
 
