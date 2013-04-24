@@ -20,11 +20,11 @@ class PubNub;
  * by the callee; to ease iteration by user code, there is guaranteed to
  * be as many elements as there are messages in the channels list, and
  * an extra NULL pointer at the end of the array. */
-typedef void (*PubNub_publish_cb)(PubNub *p, enum pubnub_res result, json_object *response, void *ctx_data, void *call_data);
-typedef void (*PubNub_subscribe_cb)(PubNub *p, enum pubnub_res result, std::vector<std::string> &channels, json_object *response, void *ctx_data, void *call_data);
-typedef void (*PubNub_history_cb)(PubNub *p, enum pubnub_res result, json_object *response, void *ctx_data, void *call_data);
-typedef void (*PubNub_here_now_cb)(PubNub *p, enum pubnub_res result, json_object *response, void *ctx_data, void *call_data);
-typedef void (*PubNub_time_cb)(PubNub *p, enum pubnub_res result, json_object *response, void *ctx_data, void *call_data);
+typedef void (*PubNub_publish_cb)(PubNub &p, enum pubnub_res result, json_object *response, void *ctx_data, void *call_data);
+typedef void (*PubNub_subscribe_cb)(PubNub &p, enum pubnub_res result, std::vector<std::string> &channels, json_object *response, void *ctx_data, void *call_data);
+typedef void (*PubNub_history_cb)(PubNub &p, enum pubnub_res result, json_object *response, void *ctx_data, void *call_data);
+typedef void (*PubNub_here_now_cb)(PubNub &p, enum pubnub_res result, json_object *response, void *ctx_data, void *call_data);
+typedef void (*PubNub_time_cb)(PubNub &p, enum pubnub_res result, json_object *response, void *ctx_data, void *call_data);
 
 
 /* Only one method may operate on a single context at once - this means

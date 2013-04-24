@@ -103,7 +103,7 @@ static void
 pubnub_cpp_publish_cb(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data)
 {
 	publish_pair *cb_info = (publish_pair *) call_data;
-	cb_info->first.first(cb_info->first.second, result, response, ctx_data, cb_info->second);
+	cb_info->first.first(*cb_info->first.second, result, response, ctx_data, cb_info->second);
 	delete cb_info;
 }
 
@@ -136,7 +136,7 @@ pubnub_cpp_subscribe_cb(struct pubnub *p, enum pubnub_res result, char **channel
 	std::vector<std::string> ch(channels, channels + ch_n);
 
 	subscribe_pair *cb_info = (subscribe_pair *) call_data;
-	cb_info->first.first(cb_info->first.second, result, ch, response, ctx_data, cb_info->second);
+	cb_info->first.first(*cb_info->first.second, result, ch, response, ctx_data, cb_info->second);
 	delete cb_info;
 }
 
@@ -182,7 +182,7 @@ static void
 pubnub_cpp_history_cb(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data)
 {
 	history_pair *cb_info = (history_pair *) call_data;
-	cb_info->first.first(cb_info->first.second, result, response, ctx_data, cb_info->second);
+	cb_info->first.first(*cb_info->first.second, result, response, ctx_data, cb_info->second);
 	delete cb_info;
 }
 
@@ -208,7 +208,7 @@ static void
 pubnub_cpp_here_now_cb(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data)
 {
 	here_now_pair *cb_info = (here_now_pair *) call_data;
-	cb_info->first.first(cb_info->first.second, result, response, ctx_data, cb_info->second);
+	cb_info->first.first(*cb_info->first.second, result, response, ctx_data, cb_info->second);
 	delete cb_info;
 }
 
@@ -234,7 +234,7 @@ static void
 pubnub_cpp_time_cb(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data)
 {
 	time_pair *cb_info = (time_pair *) call_data;
-	cb_info->first.first(cb_info->first.second, result, response, ctx_data, cb_info->second);
+	cb_info->first.first(*cb_info->first.second, result, response, ctx_data, cb_info->second);
 	delete cb_info;
 }
 
