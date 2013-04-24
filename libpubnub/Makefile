@@ -1,7 +1,3 @@
-PREFIX=/usr/local
-INCDIR=$(PREFIX)/include
-LIBDIR=$(PREFIX)/lib
-
 # Compile using `make XCFLAGS=-DDEBUG` to enable debugging code.
 CUSTOM_CFLAGS=-Wall -ggdb3 -O3
 SOFLAGS=-fPIC -fvisibility=internal
@@ -17,12 +13,18 @@ libpubnub.so.0.1: $(OBJS)
 	$(CC) $(LDFLAGS) -o $@ $^ $(LIBS)
 
 libpubnub.pc: libpubnub.pc.in
+ifndef INCDIR
+	$(error INCDIR is undefined; have you run make in the project root?)
+endif
 	sed -e 's#@LIBDIR@#$(LIBDIR)#g; s#@INCDIR@#$(INCDIR)#g' $^ >$@
 
 clean:
 	rm -f *.o libpubnub.so.0.1 libpubnub.pc
 
 install:
+ifndef INCDIR
+	$(error INCDIR is undefined; have you run make in the project root?)
+endif
 	$(INSTALL) -D -m 0644 pubnub.h $(DESTDIR)$(INCDIR)/pubnub.h
 	$(INSTALL) -D -m 0644 pubnub-sync.h $(DESTDIR)$(INCDIR)/pubnub-sync.h
 	$(INSTALL) -D -m 0644 pubnub-libevent.h $(DESTDIR)$(INCDIR)/pubnub-libevent.h
