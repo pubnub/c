@@ -15,6 +15,9 @@ struct pubnub;
 class PubNub;
 
 
+/* The PubNub methods return result codes as listed in enum pubnub_res.
+ * Please refer to pubnub.h for their listing and brief description. */
+
 /* Callback functions to user code upon completion of various methods. */
 /* Note that if the function wants to preserve the response, it should
  * bump its reference count, otherwise it will be auto-released after
