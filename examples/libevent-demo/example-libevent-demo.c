@@ -12,9 +12,9 @@
 
 
 /* We must ensure that only one method call is in progress at once within a
- * single context, this is the libpubnub requirement. There are many things to
- * take care of, common issues that show up in a variety of multi-threading as
- * well.
+ * single context, this is the libpubnub requirement. There are many tricky
+ * issues that might also commonly show up in a variety of multi-threading
+ * scenarios.
  *
  * For example, what to do if we want to regularly publish messages but are hit
  * with a stuck message - shall we maintain a queue of messages to publish,
