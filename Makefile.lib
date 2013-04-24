@@ -33,11 +33,18 @@ quiet_cmd_compile = '[CC]   $<'
  masq_cmd_compile = $(COMPILE) -c $<
       cmd_compile = $(COMPILE) -Wp,-MD,.deps/$(*F).pp -c $<
 
+quiet_cmd_cxxcompile = '[CXX]   $<'
+ masq_cmd_cxxcompile = $(CXXCOMPILE) -c $<
+      cmd_cxxcompile = $(CXXCOMPILE) -Wp,-MD,.deps/$(*F).pp -c $<
+
 quiet_cmd_archive = '[AR]   $@'
       cmd_archive = $(AR) r $@ $^
 
    quiet_cmd_link = '[LINK] $@'
          cmd_link = $(LINK) -o $@ $^ $(LIBS)
+
+quiet_cmd_cxxlink = '[CXXLINK] $@'
+      cmd_cxxlink = $(CXXLINK) -o $@ $^ $(LIBS)
 
 # Recursive make
 quiet_cmd_recmake = "[MAKE $$target]   $$subdir"
@@ -47,10 +54,13 @@ quiet_cmd_recmake = "[MAKE $$target]   $$subdir"
 
 ### Internal build rules
 
-unexport CFLAGS
+unexport CFLAGS CXXFLAGS
 CFLAGS += $(CUSTOM_CFLAGS) $(XCFLAGS) $(INCLUDES) $(SYS_CFLAGS)
 COMPILE = $(CC) $(CFLAGS)
+CXXFLAGS += $(CUSTOM_CXXFLAGS) $(XCXXFLAGS) $(INCLUDES) $(SYS_CXXFLAGS)
+CXXCOMPILE = $(CXX) $(CXXFLAGS)
 LINK = $(CC) $(LDFLAGS) $(XLDFLAGS)
+CXXLINK = $(CXX) $(LDFLAGS) $(XLDFLAGS)
 INSTALL = install
 
 DEP_FILES_1 = $(foreach src,$(OBJS),.deps/$(src))
@@ -64,6 +74,14 @@ endif
 
 %.o: %.c
 	$(call mcmd,compile)
+	@-cp .deps/$(*F).pp .deps/$(*F).P; \
+		tr ' ' '\012' < .deps/$(*F).pp \
+			| sed -e 's/^\\$$//' -e '/^$$/ d' -e '/:$$/ d' -e 's/$$/ :/' \
+			>> .deps/$(*F).P; \
+		rm .deps/$(*F).pp
+
+%.o: %.cpp
+	$(call mcmd,cxxcompile)
 	@-cp .deps/$(*F).pp .deps/$(*F).P; \
 		tr ' ' '\012' < .deps/$(*F).pp \
 			| sed -e 's/^\\$$//' -e '/^$$/ d' -e '/:$$/ d' -e 's/$$/ :/' \
