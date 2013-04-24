@@ -233,6 +233,11 @@ void pubnub_error_policy(struct pubnub *p, unsigned int retry_mask, bool print);
  * and @cb shall point to a function that will be called upon
  * completion (with @cb_data as its last parameter). */
 
+/* For pointer parameters like @channel, @channels or @message (though
+ * obviously not @p or @cb_data), no assumption is made regarding their
+ * memory lifetime; the pointers may be released by the caller right
+ * after the function call. */
+
 /* Publish the @message JSON object on @channel. The response
  * will usually be just a success confirmation. */
 void pubnub_publish(struct pubnub *p, const char *channel,
