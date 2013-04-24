@@ -138,6 +138,12 @@ pubnub_cpp_subscribe_cb(struct pubnub *p, enum pubnub_res result, char **channel
 	subscribe_pair *cb_info = (subscribe_pair *) call_data;
 	cb_info->first.first(*cb_info->first.second, result, ch, response, ctx_data, cb_info->second);
 	delete cb_info;
+
+	if (channels) {
+		for (char **i = channels; *i; i++)
+			free(*i);
+		free(channels);
+	}
 }
 
 PUBNUB_API
