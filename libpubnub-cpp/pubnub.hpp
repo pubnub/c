@@ -1,6 +1,9 @@
 #ifndef PUBNUB__PubNub_hpp
 #define PUBNUB__PubNub_hpp
 
+#include <string>
+#include <vector>
+
 #include <json.h>
 
 #include <pubnub.h>
