@@ -1,5 +1,4 @@
 - add a way to unsubscribe / cancel call
-- build C++ wrapper
 - factor out libpubnub-event.so so that libevent is not hard dep for libpubnub
 - more demo's?
 - executable wrapper for PubNub integration in shell scripts?
