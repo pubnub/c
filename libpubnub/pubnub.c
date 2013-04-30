@@ -314,17 +314,25 @@ pubnub_gen_uuid(void)
 	char uuidbuf[] = "xxxxxxxx-xxxx-4xxx-9xxx-xxxxxxxxxxxx";
 
 	unsigned int seed;
+#ifdef __MINGW32__
+	seed = time(NULL);
+	srand(seed);
+#else
 	/* About the best world-unique random seed we can manage without
 	 * absurd measures... */
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	seed = ts.tv_nsec;
-
+#endif
 	char hex[] = "0123456789abcdef";
 	for (int i = 0; i < strlen(uuidbuf); i++) {
 		if (uuidbuf[i] != 'x')
 			continue;
+#ifdef __MINGW32__
+		uuidbuf[i] = hex[rand() % 16];
+#else
 		uuidbuf[i] = hex[rand_r(&seed) % 16];
+#endif
 	}
 
 	return strdup(uuidbuf);
@@ -646,9 +654,16 @@ error:
 		channelset = strdup(json_object_get_string(channelset_json));
 
 		/* Comma-split the channelset to channels[] array. */
-		char *channelsetp = channelset, *channelsettok = NULL;
+		char *channelsetp = channelset;
+#ifndef __MINGW32__
+		char *channelsettok = NULL;
+#endif
 		for (int i = 0; i < msg_n; channelsetp = NULL, i++) {
+#ifdef __MINGW32__			
+			char *channelset1 = strtok(channelsetp, ",");
+#else			
 			char *channelset1 = strtok_r(channelsetp, ",", &channelsettok);
+#endif
 			if (!channelset1) {
 				for (; i < msg_n; i++) {
 					/* Fill the rest of the array with

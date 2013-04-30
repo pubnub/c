@@ -1,0 +1,48 @@
+#
+# Makefile.mingw
+#
+# Description: Makefile for win32 (mingw) version of libcampfire
+#
+
+C_FLAGS = -std=gnu99
+CC = i586-mingw32msvc-cc
+AR = i586-mingw32msvc-ar
+
+TARGET = libpubnub
+
+##
+## INCLUDE PATHS
+##
+INCLUDE_PATHS =	-I ../../win32-dev/curl-7.30.0-devel-mingw32/include/ \
+		-I ../../win32-dev/json-c/ \
+		-I ../../win32-dev/openssl-1.0.1c/include
+
+##
+##  SOURCES, OBJECTS
+##
+C_SRC =	pubnub.c crypto.c
+
+OBJECTS = $(C_SRC:%.c=%.o)
+
+.PHONY: all clean
+
+all: $(TARGET).a
+
+%.o : %.c
+	$(CC) -c $(C_FLAGS) $(INCLUDE_PATHS) $< -o $@
+
+##
+## BUILD LIBRARY
+##
+$(TARGET).a: $(OBJECTS)
+	$(AR) cr $(TARGET).a $(OBJECTS)
+
+
+##
+## CLEAN RULES
+##
+
+clean:
+	rm -f $(OBJECTS)
+	rm -f $(TARGET).a
+

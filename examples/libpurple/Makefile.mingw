@@ -30,17 +30,22 @@ INCLUDE_PATHS +=	-I. \
 			-I$(GTK_TOP)/include/glib-2.0 \
 			-I$(GTK_TOP)/lib/glib-2.0/include \
 			-I$(PURPLE_TOP) \
+			-I$(PURPLE_TOP)/.. \
 			-I$(PURPLE_TOP)/win32 \
-			-I$(PIDGIN_TREE_TOP)
+			-I$(PIDGIN_TREE_TOP)/../win32-dev/json-c \
+			-I$(PIDGIN_TREE_TOP)/../c/libpubnub
 
 LIB_PATHS +=		-L$(GTK_TOP)/lib \
-			-L$(PURPLE_TOP)
+			-L$(PURPLE_TOP) \
+			-L$(PIDGIN_TREE_TOP)/../c/libpubnub \
+			-L$(PIDGIN_TREE_TOP)/../win32-dev/json-c \
+			-L$(PIDGIN_TREE_TOP)/../win32-dev/curl-7.30.0-devel-mingw32/lib
 
 ##
 ##  SOURCES, OBJECTS
 ##
-C_SRC =			pubnub.c \
-            events.c
+C_SRC =	pubnub.c \
+	events.c
 
 OBJECTS = $(C_SRC:%.c=%.o)
 
@@ -48,9 +53,13 @@ OBJECTS = $(C_SRC:%.c=%.o)
 ## LIBRARIES
 ##
 LIBS =	\
-			-lglib-2.0 \
-			-lintl \
-			-lpurple
+	-lglib-2.0 \
+	-lintl \
+	-lpurple \
+	-lpubnub \
+	-lcrypto \
+	-ljson \
+	-lcurldll
 
 
 ifeq ($(CYRUS_SASL), 1)
@@ -77,7 +86,7 @@ $(OBJECTS): $(PURPLE_CONFIG_H)
 ## BUILD DLL
 ##
 $(TARGET).dll: $(PURPLE_DLL).a $(OBJECTS)
-	$(CC) -shared $(OBJECTS) $(LIB_PATHS) $(LIBS) $(DLL_LD_FLAGS) -o $(TARGET).dll
+	$(CC) -shared $(OBJECTS) $(LIB_PATHS) $(LIBS) $(DLL_LD_FLAGS) -Wl,--allow-multiple-definition -o $(TARGET).dll
 
 ##
 ## CLEAN RULES
