@@ -20,12 +20,13 @@ add_chat_messages(PubnubRoom * room, char **channels, json_object * msgs)
 	gint chat_id = g_str_hash(room->name);
 	for (i = 0; i < len; i++) {
 		json_object *msg = json_object_array_get_idx(msgs, i);
-		json_object *from, *message;
+		json_object *from = json_object_object_get(msg, "from");
+		json_object *message = json_object_object_get(msg, "message");
 		int flag = PURPLE_MESSAGE_RECV;
 		char *username = g_strdup("?");
-		if (json_object_object_get_ex(msg, "from", &from)
+		if (from
 		    && json_object_get_type(from) == json_type_string
-		    && json_object_object_get_ex(msg, "message", &message)
+		    && message
 		    && json_object_get_type(message) == json_type_string) {
 			msg = message;
 			const char *from_s = json_object_get_string(from);
@@ -108,8 +109,9 @@ here_cb(G_GNUC_UNUSED struct pubnub *p, enum pubnub_res result,
 		purple_find_chat(con->gc, g_str_hash(con->here_channel));
 	if (conv) {
 		if (result == PNR_OK && msg) {
-			json_object *uuids;
-			if (json_object_object_get_ex(msg, "uuids", &uuids)
+			json_object *uuids =
+				json_object_object_get(msg, "uuids");
+			if (uuids
 			    && json_object_get_type(uuids) == json_type_array) {
 				guint len = json_object_array_length(uuids);
 				purple_conv_chat_clear_users(PURPLE_CONV_CHAT
@@ -269,8 +271,7 @@ pubnub_join_chat(PurpleConnection * gc, GHashTable * data)
 				 room);
 	} else {
 		char *tmp = g_strdup_printf(_("%s is already in chat room %s."),
-					    username,
-					    roomname);
+					    username, roomname);
 		purple_notify_info(gc, _("Join chat"), _("Join chat"), tmp);
 		g_free(tmp);
 	}
@@ -297,9 +298,10 @@ pubnub_chat_leave(PurpleConnection * gc, int id)
 }
 
 static void
-publish_cb(G_GNUC_UNUSED struct pubnub *p, G_GNUC_UNUSED enum pubnub_res result,
-	   G_GNUC_UNUSED struct json_object *msg, G_GNUC_UNUSED void *ctx_data,
-	   G_GNUC_UNUSED void *call_data)
+publish_cb(G_GNUC_UNUSED struct pubnub *p,
+	   G_GNUC_UNUSED enum pubnub_res result,
+	   G_GNUC_UNUSED struct json_object *msg,
+	   G_GNUC_UNUSED void *ctx_data, G_GNUC_UNUSED void *call_data)
 {
 }
 
@@ -331,15 +333,12 @@ pubnub_chat_send(PurpleConnection * gc, int id, const char *message,
 
 static PurplePluginProtocolInfo pubnub_protocol_info = {
 	/* options */
-	OPT_PROTO_NO_PASSWORD,
-	NULL,			/* user_splits */
+	OPT_PROTO_NO_PASSWORD, NULL,	/* user_splits */
 	NULL,			/* protocol_options */
-	NO_BUDDY_ICONS,
-	pubnub_list_icon,	/* list_icon */
+	NO_BUDDY_ICONS, pubnub_list_icon,	/* list_icon */
 	NULL,			/* list_emblems */
 	pubnub_status_text,	/* status_text */
-	NULL,
-	pubnub_statuses,	/* status_types */
+	NULL, pubnub_statuses,	/* status_types */
 	NULL,			/* blist_node_menu */
 	pubnub_chat_info,	/* chat_info */
 	NULL,			/* chat_info_defaults */
@@ -428,7 +427,6 @@ static PurplePluginInfo info = {
 	0,			/* flags */
 	NULL,			/* dependencies */
 	PURPLE_PRIORITY_DEFAULT,	/* priority */
-
 	PLUGIN_ID,		/* id */
 	"PubNub",		/* name */
 	"1.0",			/* version */
@@ -436,11 +434,9 @@ static PurplePluginInfo info = {
 	"PubNub",		/* description */
 	PLUGIN_AUTHOR,		/* author */
 	"http://pidgin.im",	/* homepage */
-
 	plugin_load,		/* load */
 	NULL,			/* unload */
 	NULL,			/* destroy */
-
 	NULL,			/* ui info */
 	&pubnub_protocol_info,	/* extra info */
 	NULL,			/* prefs info */
