@@ -100,6 +100,48 @@ subscribe_cb(G_GNUC_UNUSED struct pubnub *p, enum pubnub_res result,
 	}
 }
 
+gint static
+users_compare_fn(gconstpointer a, gconstpointer b)
+{
+	PurpleConvChatBuddy *ab = a;
+	PurpleConvChatBuddy *bb = b;
+	return strcmp(a, b);
+}
+
+static void
+add_users(json_object * list, PurpleConversation * conv)
+{
+	guint len = json_object_array_length(list);
+	GList *list_old = purple_conv_chat_get_users(PURPLE_CONV_CHAT(conv));
+	guint i;
+	if (len == g_list_length(list_old)) {
+		json_object *uuid = json_object_array_get_idx(list, i);
+		for (i = 0; i < len; i++) {
+			PurpleConvChatBuddy u;
+			u.name = json_object_get_string(uuid);
+			if (g_list_find_custom(list_old, &u, users_compare_fn)) {
+				break;
+			}
+		}
+		if (i >= len) {
+			return;
+		}
+	}
+	GList *users = NULL;
+	GList *flags = NULL;
+	for (i = 0; i < len; i++) {
+		json_object *uuid = json_object_array_get_idx(list, i);
+		users = g_list_prepend(users, json_object_get_string(uuid));
+		flags = g_list_prepend(flags,
+				       GINT_TO_POINTER(PURPLE_CBFLAGS_NONE));
+	}
+	purple_conv_chat_clear_users(PURPLE_CONV_CHAT(conv));
+	purple_conv_chat_add_users
+		(PURPLE_CONV_CHAT(conv), users, NULL, flags, FALSE);
+	g_list_free(users);
+	g_list_free(flags);
+}
+
 static void
 here_cb(G_GNUC_UNUSED struct pubnub *p, enum pubnub_res result,
 	struct json_object *msg, G_GNUC_UNUSED void *ctx_data, void *call_data)
@@ -113,19 +155,7 @@ here_cb(G_GNUC_UNUSED struct pubnub *p, enum pubnub_res result,
 				json_object_object_get(msg, "uuids");
 			if (uuids
 			    && json_object_get_type(uuids) == json_type_array) {
-				guint len = json_object_array_length(uuids);
-				purple_conv_chat_clear_users(PURPLE_CONV_CHAT
-							     (conv));
-				guint i;
-				for (i = 0; i < len; i++) {
-					json_object *uuid =
-						json_object_array_get_idx(uuids,
-									  i);
-					purple_conv_chat_add_user
-						(PURPLE_CONV_CHAT(conv),
-						 json_object_get_string(uuid),
-						 NULL, 0, FALSE);
-				}
+				add_users(uuids, conv);
 			}
 		}
 	}
