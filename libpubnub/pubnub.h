@@ -25,6 +25,14 @@ extern "C" {
  * prevent improper concurrent access. */
 struct pubnub;
 
+#ifdef __MINGW32__
+struct timespec {
+	int tv_sec;
+	int tv_nsec;
+};
+#endif
+
+
 
 /* Result codes for PubNub methods. */
 enum pubnub_res {
