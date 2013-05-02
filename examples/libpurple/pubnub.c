@@ -245,6 +245,17 @@ pubnub_chat_info(G_GNUC_UNUSED PurpleConnection * gc)
 	return m;
 }
 
+static GHashTable *
+pubnub_chat_info_defaults(PurpleConnection * gc, const char *room)
+{
+	GHashTable *defaults;
+
+	defaults = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, g_free);
+	g_hash_table_insert(defaults, "room", g_strdup("my_channel"));
+
+	return defaults;
+}
+
 static char *
 pubnub_get_chat_name(GHashTable * data)
 {
@@ -341,7 +352,7 @@ static PurplePluginProtocolInfo pubnub_protocol_info = {
 	NULL, pubnub_statuses,	/* status_types */
 	NULL,			/* blist_node_menu */
 	pubnub_chat_info,	/* chat_info */
-	NULL,			/* chat_info_defaults */
+	pubnub_chat_info_defaults,	/* chat_info_defaults */
 	pubnub_login,		/* login */
 	pubnub_close,		/* close */
 	NULL,			/* send_im */
