@@ -100,12 +100,12 @@ subscribe_cb(G_GNUC_UNUSED struct pubnub *p, enum pubnub_res result,
 	}
 }
 
-gint static
+static gint
 users_compare_fn(gconstpointer a, gconstpointer b)
 {
-	PurpleConvChatBuddy *ab = a;
-	PurpleConvChatBuddy *bb = b;
-	return strcmp(a, b);
+	const PurpleConvChatBuddy *ab = a;
+	const PurpleConvChatBuddy *bb = b;
+	return strcmp(ab->name, bb->name);
 }
 
 static void
@@ -115,11 +115,12 @@ add_users(json_object * list, PurpleConversation * conv)
 	GList *list_old = purple_conv_chat_get_users(PURPLE_CONV_CHAT(conv));
 	guint i;
 	if (len == g_list_length(list_old)) {
-		json_object *uuid = json_object_array_get_idx(list, i);
 		for (i = 0; i < len; i++) {
+			json_object *uuid = json_object_array_get_idx(list, i);
 			PurpleConvChatBuddy u;
-			u.name = json_object_get_string(uuid);
-			if (g_list_find_custom(list_old, &u, users_compare_fn)) {
+			u.name = (char *) json_object_get_string(uuid);
+			if (g_list_find_custom(list_old, &u, users_compare_fn)
+			    == NULL) {
 				break;
 			}
 		}
@@ -131,7 +132,8 @@ add_users(json_object * list, PurpleConversation * conv)
 	GList *flags = NULL;
 	for (i = 0; i < len; i++) {
 		json_object *uuid = json_object_array_get_idx(list, i);
-		users = g_list_prepend(users, json_object_get_string(uuid));
+		users = g_list_prepend(users,
+				       (gpointer) json_object_get_string(uuid));
 		flags = g_list_prepend(flags,
 				       GINT_TO_POINTER(PURPLE_CBFLAGS_NONE));
 	}
@@ -276,7 +278,8 @@ pubnub_chat_info(G_GNUC_UNUSED PurpleConnection * gc)
 }
 
 static GHashTable *
-pubnub_chat_info_defaults(PurpleConnection * gc, const char *room)
+pubnub_chat_info_defaults(G_GNUC_UNUSED PurpleConnection * gc,
+			  G_GNUC_UNUSED const char *room)
 {
 	GHashTable *defaults;
 
