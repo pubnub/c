@@ -185,44 +185,6 @@ here_timer(gpointer data)
 	return TRUE;
 }
 
-
-static void
-pubnub_login(PurpleAccount * account)
-{
-	PurpleConnection *gc = purple_account_get_connection(account);
-
-	PubnubConn *con = gc->proto_data = g_new0(PubnubConn, 1);
-	con->gc = gc;
-	con->account = account;
-
-	const char *username = purple_account_get_username(account);
-
-	con->pn_pub = pubnub_events_new(account, username);
-	con->pn_here = pubnub_events_new(account, NULL);
-
-	con->here_timer = purple_timeout_add_seconds(5, here_timer, con);
-	purple_connection_set_state(gc, PURPLE_CONNECTED);
-}
-
-static void
-pubnub_close(PurpleConnection * gc)
-{
-	PubnubConn *con = gc->proto_data;
-	purple_timeout_remove(con->here_timer);
-	if (con->here_channel) {
-		g_free(con->here_channel);
-	}
-	pubnub_events_free(con->pn_pub);
-	GList *i = g_list_last(con->rooms);
-	while (i) {
-		PubnubRoom *room = i->data;
-		i = g_list_previous(i);
-		PurpleConversation *conv =
-			purple_find_chat(con->gc, g_str_hash(room->name));
-		purple_conversation_destroy(conv);
-	}
-}
-
 static const char *
 pubnub_list_icon(G_GNUC_UNUSED PurpleAccount * account,
 		 G_GNUC_UNUSED PurpleBuddy * buddy)
@@ -373,6 +335,52 @@ pubnub_chat_send(PurpleConnection * gc, int id, const char *message,
 		json_object_put(msg);
 	}
 	return 0;
+}
+
+static void
+pubnub_login(PurpleAccount * account)
+{
+	PurpleConnection *gc = purple_account_get_connection(account);
+
+	PubnubConn *con = gc->proto_data = g_new0(PubnubConn, 1);
+	con->gc = gc;
+	con->account = account;
+
+	const char *username = purple_account_get_username(account);
+
+	con->pn_pub = pubnub_events_new(account, username);
+	con->pn_here = pubnub_events_new(account, NULL);
+
+	con->here_timer = purple_timeout_add_seconds(5, here_timer, con);
+	purple_connection_set_state(gc, PURPLE_CONNECTED);
+
+	GHashTable *hash = g_hash_table_new(g_str_hash, g_str_equal);
+	g_hash_table_insert(hash, "room",
+			    (gpointer) pubnub_current_uuid(con->pn_pub->pn));
+	pubnub_join_chat(gc, hash);
+	g_hash_table_destroy(hash);
+}
+
+static void
+pubnub_close(PurpleConnection * gc)
+{
+	PubnubConn *con = gc->proto_data;
+	purple_timeout_remove(con->here_timer);
+	if (con->here_channel) {
+		g_free(con->here_channel);
+	}
+	pubnub_events_free(con->pn_pub);
+	pubnub_events_free(con->pn_here);
+	GList *i = g_list_last(con->rooms);
+	while (i) {
+		PubnubRoom *room = i->data;
+		i = g_list_previous(i);
+		PurpleConversation *conv =
+			purple_find_chat(con->gc, g_str_hash(room->name));
+		purple_conversation_destroy(conv);
+	}
+	g_free(con);
+	gc->proto_data = NULL;
 }
 
 static PurplePluginProtocolInfo pubnub_protocol_info = {
