@@ -314,7 +314,7 @@ pubnub_gen_uuid(void)
 	char uuidbuf[] = "xxxxxxxx-xxxx-4xxx-9xxx-xxxxxxxxxxxx";
 
 	unsigned int seed;
-#ifdef __MINGW32__
+#if defined(__MINGW32__) || defined(__MACH__)
 	seed = time(NULL);
 	srand(seed);
 #else
@@ -328,7 +328,7 @@ pubnub_gen_uuid(void)
 	for (int i = 0; i < strlen(uuidbuf); i++) {
 		if (uuidbuf[i] != 'x')
 			continue;
-#ifdef __MINGW32__
+#if defined(__MINGW32__) || defined(__MACH__)
 		uuidbuf[i] = hex[rand() % 16];
 #else
 		uuidbuf[i] = hex[rand_r(&seed) % 16];
