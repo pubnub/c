@@ -51,7 +51,29 @@ uninstall: $(LIBNAME)
 clean:
 	-rm *.o
 	-rm $(LIBNAME)
+	-rm *.deb
 
+.PHONY: deb
+deb: $(LIBNAME)
+	mkdir -p dpkg/DEBIAN
+ifeq ($(shell uname -m),x86_64)
+	sed -e 's#i386#amd64#' control.in > dpkg/DEBIAN/control
+else
+	cp control.in dpkg/DEBIAN/control
+endif
+	mkdir -p dpkg/$(PLUGIN_DIR_PURPLE)
+	cp $(LIBNAME) dpkg/$(PLUGIN_DIR_PURPLE)
+#	mkdir -p dpkg/usr/lib
+#	cp ../../libpubnub/libpubnub.so.0.1 dpkg/usr/lib
+	cp -P $(shell pkg-config libpubnub --libs-only-L|cut -c3-|cut -f 1 -d ' ')/libpubnub* dpkg/usr/lib
+	mkdir -p dpkg/$(DATA_ROOT_DIR_PURPLE)/pixmaps/pidgin/protocols/16
+	cp pubnub16.png dpkg/$(DATA_ROOT_DIR_PURPLE)/pixmaps/pidgin/protocols/16/pubnub.png
+	mkdir -p dpkg/$(DATA_ROOT_DIR_PURPLE)/pixmaps/pidgin/protocols/22
+	cp pubnub22.png dpkg/$(DATA_ROOT_DIR_PURPLE)/pixmaps/pidgin/protocols/22/pubnub.png
+	mkdir -p dpkg/$(DATA_ROOT_DIR_PURPLE)/pixmaps/pidgin/protocols/48
+	cp pubnub48.png dpkg/$(DATA_ROOT_DIR_PURPLE)/pixmaps/pidgin/protocols/48/pubnub.png
+	dpkg-deb --build dpkg .
+	rm -r dpkg
 
 # Quiet by default
 VERBOSE ?= 0
