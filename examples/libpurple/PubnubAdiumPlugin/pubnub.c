@@ -5,8 +5,6 @@
 #include <libpurple/version.h>
 #include <libpurple/accountopt.h>
 
-#define PLUGIN_ID "prpl-avy-pubnub"
-#define PLUGIN_AUTHOR "Alexey Yesipenko <alex7y@gmail.com>"
 
 static void
 add_chat_messages(PubnubRoom * room, char **channels, json_object * msgs)

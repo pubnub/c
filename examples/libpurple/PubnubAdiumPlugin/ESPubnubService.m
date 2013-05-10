@@ -9,6 +9,7 @@
 #import "ESPubnubService.h"
 #import "ESPurplePubnubAccount.h"
 #import "ESPubnubJoinChatViewController.h"
+#import "ESPubnubAccountViewController.h"
 
 #import <Adium/AISharedAdium.h>
 #import <Adium/AIStatusControllerProtocol.h>
@@ -96,9 +97,14 @@ ofType:type forService:self]
     return YES;
 }
 
-- (DCJoinChatViewController *)joinChatView{
+- (DCJoinChatViewController *)joinChatView
+{
 	return [ESPubnubJoinChatViewController joinChatView];
 }
 
+-(AIAccountViewController *)accountViewController
+{
+    return [ESPubnubAccountViewController accountViewController];
+}
 
 @end

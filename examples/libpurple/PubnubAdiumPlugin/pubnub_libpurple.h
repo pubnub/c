@@ -3,23 +3,14 @@
 
 #include <glib.h>
 
- #include <libpurple/plugin.h>
- #include <libpurple/prpl.h>
+#include <libpurple/plugin.h>
+#include <libpurple/prpl.h>
 
-#define DEFAULT_PUBLISH_KEY "demo"
-#define OPTION_PUBLISH_KEY "pub_key"
-#define DEFAULT_SUBSCRIBE_KEY "demo"
-#define OPTION_SUBSCRIBE_KEY "sub_key"
-#define DEFAULT_HISTORY_N 5
-#define OPTION_HISTORY_N "history_n"
-#define DEFAULT_ORIGIN_SERVER "http://pubsub.pubnub.com"
-#define OPTION_ORIGIN_SERVER "origin_server"
-#define DEFAULT_CIPHER_KEY ""
-#define OPTION_CIPHER_KEY "cipher_key"
-#define DEFAULT_SECRET_KEY ""
-#define OPTION_SECRET_KEY "secret_key"
-
+#include "pubnub_options.h"
 #include "pubnub.h"
+
+#define PLUGIN_ID "prpl-avy-pubnub"
+#define PLUGIN_AUTHOR "Alexey Yesipenko <alex7y@gmail.com>"
 
 typedef struct
 {
