@@ -13,8 +13,11 @@ The library should be fully thread safe and signal safe. The code currently
 covers only POSIX systems and has not been tested on Windows yet.
 Suitable platforms for using this library include Raspberry Pi.
 
-Synopsis
---------
+C++ bindings wrapping the C library in a C++ friendly interface is also
+distributed alongside.
+
+C Synopsis
+----------
 
 Build your program with compile flags as provided by
 ``pkg-config --cflags libpubnub'' and build flags based on
@@ -38,6 +41,37 @@ Build your program with compile flags as provided by
 		for (int i = 0; i < json_object_array_length(msg); i++) {
 			json_object *msg1 = json_object_array_get_idx(msg, i);
 			printf("received: %s\n", json_object_get_string(msg1));
+		}
+	} while (1);
+
+See the provided examples for more desriptive code.
+
+C++ Synopsis
+------------
+
+Build your program with compile flags as provided by
+``pkg-config --cflags libpubnub-cpp'' and build flags based on
+``pkg-config --libs libpubnub-cpp''.
+
+	#include <json.h>
+	#include <pubnub.hpp>
+	#include <pubnub-sync.hpp>
+
+	pubnub_sync *sync = pubnub_sync_init();
+	PubNub p("demo", "demo", &pubnub_sync_callbacks, sync);
+
+	p.publish("my_channel", json_object);
+
+	do {
+		p.subscribe("my_channel");
+		PubNub_sync_reply reply = pubnub_sync_last_reply(sync);
+		if (reply.result() != PNR_OK)
+			exit(EXIT_FAILURE);
+		json_object *msg = reply.response();
+		for (int i = 0; i < json_object_array_length(msg); i++) {
+			json_object *msg1 = json_object_array_get_idx(msg, i);
+			std::cout << "received: "
+				<< json_object_get_string(msg1) << std::endl;
 		}
 	} while (1);
 
@@ -77,8 +111,15 @@ API Description
 ---------------
 
 This section of the documentation is still TODO. In the meantime, please refer
-to the header files (pubnub.h, pubnub-sync.h, pubnub-libevent.h) which are
-heavily commented (in general).
+to the header files in libpubnub/ (pubnub.h, pubnub-sync.h, pubnub-libevent.h)
+which are heavily commented (in general).
+
+The C++ API wraps the C library. While a full C++ "view" is provided for the
+basic struct pubnub (class PubNub in libpubnub-cpp/pubnub.hpp), the libevent
+frontend is so thin that a separate C++ view would not make any difference.
+The sync frontend struct does not have a C++ view, but information about
+the last pubnub call can be accessed through a C++ class as described in
+libpubnub-cpp/pubnub-sync.hpp.
 
 Examples
 --------
@@ -92,3 +133,6 @@ demonstrate all the PubNub API calls.
 The examples can be built and run after the library itself is installed.
 A simple ``make'' command should suffice to build the binary. Refer to the
 local README.md files regarding any special details regarding each example.
+
+Some of the C examples have their C++ counterparts in the examples-cpp/
+directory.

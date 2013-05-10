@@ -1,13 +1,14 @@
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
+#include <cstdio>
+#include <iostream>
+#include <string>
+#include <vector>
 #include <unistd.h>
 
 #include <event.h>
 
 #include <json.h>
 
-#include "pubnub.h"
+#include "pubnub.hpp"
 #include "pubnub-libevent.h"
 
 
@@ -65,23 +66,23 @@ clock_update(int fd, short kind, void *userp)
  * (i) when issuing a call that must be handled asynchronously, and
  * (ii) for clarity. */
 
-static void publish(struct pubnub *p);
-static void publish_done(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data);
+static void publish(PubNub &p);
+static void publish_done(PubNub &p, enum pubnub_res result, json_object *response, void *ctx_data, void *call_data);
 
-static void history(struct pubnub *p);
-static void history_received(struct pubnub *p, enum pubnub_res result, struct json_object *msg, void *ctx_data, void *call_data);
+static void history(PubNub &p);
+static void history_received(PubNub &p, enum pubnub_res result, json_object *msg, void *ctx_data, void *call_data);
 
-static void subscribe(struct pubnub *p);
-static void subscribe_received(struct pubnub *p, enum pubnub_res result, char **channels, struct json_object *msg, void *ctx_data, void *call_data);
+static void subscribe(PubNub &p);
+static void subscribe_received(PubNub &p, enum pubnub_res result, std::vector<std::string> &channels, json_object *msg, void *ctx_data, void *call_data);
 
 static void
-publish(struct pubnub *p)
+publish(PubNub &p)
 {
 	json_object *msg = json_object_new_object();
 	json_object_object_add(msg, "num", json_object_new_int(42));
 	json_object_object_add(msg, "str", json_object_new_string("\"Hello, world!\" she said."));
 
-	pubnub_publish(p, "my_channel", msg, -1, publish_done, NULL);
+	p.publish("my_channel", *msg, -1, publish_done);
 
 	json_object_put(msg);
 
@@ -89,7 +90,7 @@ publish(struct pubnub *p)
 }
 
 static void
-publish_done(struct pubnub *p, enum pubnub_res result, struct json_object *msg, void *ctx_data, void *call_data)
+publish_done(PubNub &p, enum pubnub_res result, json_object *msg, void *ctx_data, void *call_data)
 {
 	/* ctx_data is (struct pubnub_libevent *) */
 	/* call_data is NULL as that's what we passed to pubnub_publish() */
@@ -101,7 +102,7 @@ publish_done(struct pubnub *p, enum pubnub_res result, struct json_object *msg, 
 		 * written to stderr and we tried to retry as well. */
 		exit(EXIT_FAILURE);
 
-	printf("pubnub publish ok\n");
+	std::cout << "pubnub publish ok" << std::endl;
 
 	/* Next step in the sequence is retrieving history. */
 
@@ -110,15 +111,15 @@ publish_done(struct pubnub *p, enum pubnub_res result, struct json_object *msg, 
 
 
 static void
-history(struct pubnub *p)
+history(PubNub &p)
 {
-	pubnub_history(p, "my_channel", 10, -1, history_received, NULL);
+	p.history("my_channel", 10, -1, history_received);
 
 	/* ...continues later in history_received(). */
 }
 
 static void
-history_received(struct pubnub *p, enum pubnub_res result, struct json_object *msg, void *ctx_data, void *call_data)
+history_received(PubNub &p, enum pubnub_res result, json_object *msg, void *ctx_data, void *call_data)
 {
 	/* ctx_data is (struct pubnub_libevent *) */
 	/* call_data is NULL as that's what we passed to pubnub_history() */
@@ -126,7 +127,7 @@ history_received(struct pubnub *p, enum pubnub_res result, struct json_object *m
 	if (result != PNR_OK)
 		exit(EXIT_FAILURE);
 
-	printf("pubnub history ok: %s\n", json_object_get_string(msg));
+	std::cout << "pubnub history ok: " << json_object_get_string(msg) << std::endl;
 
 
 	/* Next step in the sequence is entering the subscribe "loop". */
@@ -141,16 +142,19 @@ history_received(struct pubnub *p, enum pubnub_res result, struct json_object *m
  * then "loop" by calling subscribe() again to issue a new request. */
 
 static void
-subscribe(struct pubnub *p)
+subscribe(PubNub &p)
 {
-	const char *channels[] = { "my_channel", "demo_channel" };
-	pubnub_subscribe_multi(p, channels, 2, -1, subscribe_received, NULL);
+	std::vector<std::string> channels;
+	channels.push_back("my_channel");
+	channels.push_back("demo_channel");
+
+	p.subscribe_multi(channels, -1, subscribe_received);
 
 	/* ...continues later in subscribe_received(). */
 }
 
 static void
-subscribe_received(struct pubnub *p, enum pubnub_res result, char **channels, struct json_object *msg, void *ctx_data, void *call_data)
+subscribe_received(PubNub &p, enum pubnub_res result, std::vector<std::string> &channels, json_object *msg, void *ctx_data, void *call_data)
 {
 	/* ctx_data is (struct pubnub_libevent *) */
 	/* call_data is NULL as that's what we passed to pubnub_subscribe_multi() */
@@ -161,15 +165,16 @@ subscribe_received(struct pubnub *p, enum pubnub_res result, char **channels, st
 		exit(EXIT_FAILURE);
 
 	if (json_object_array_length(msg) == 0) {
-		printf("pubnub subscribe ok, no news\n");
+		std::cout << "pubnub subscribe ok, no news" << std::endl;
 	} else {
 		for (int i = 0; i < json_object_array_length(msg); i++) {
 			json_object *msg1 = json_object_array_get_idx(msg, i);
-			printf("pubnub subscribe [%s]: %s\n", channels[i], json_object_get_string(msg1));
-			free(channels[i]);
+			std::cout << "pubnub subscribe ["
+				<< channels[i]
+				<< "]: " << json_object_get_string(msg1)
+				<< std::endl;
 		}
 	}
-	free(channels);
 
 	/* Loop. */
 	subscribe(p);
@@ -184,7 +189,7 @@ main(void)
 
 	/* Set up the PubNub library, with a single shared context,
 	 * using the libevent backend for event handling. */
-	struct pubnub *p = pubnub_init("demo", "demo", &pubnub_libevent_callbacks, pubnub_libevent_init());
+	PubNub p("demo", "demo", &pubnub_libevent_callbacks, pubnub_libevent_init());
 
 	/* Set the clock update timer. */
 	evtimer_set(&clock_update_timer, clock_update, NULL);
@@ -200,6 +205,5 @@ main(void)
 	event_dispatch();
 
 	/* We should never reach here. */
-	pubnub_done(p);
 	return EXIT_SUCCESS;
 }
