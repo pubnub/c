@@ -62,7 +62,7 @@
 }
 
 - (NSString *)userNameLabel {
-    return AILocalizedString(@"User Name", nil); // Sign-in name
+    return AILocalizedString(@"Nick", nil); // Sign-in name
 }
 
 - (void)registerStatuses {

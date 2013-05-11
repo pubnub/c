@@ -62,4 +62,10 @@
     [account setPreference:cipher forKey:@OPTION_CIPHER_KEY group:GROUP_ACCOUNT_STATUS];
     purple_account_set_string(pAccount, OPTION_CIPHER_KEY, [cipher UTF8String]);
 }
+
+- (NSView *)privacyView
+{
+    return nil;
+}
+
 @end

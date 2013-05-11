@@ -28,7 +28,7 @@
 		C27F53F51732723300C7D09D /* libglib.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C27F53F41732723300C7D09D /* libglib.framework */; };
 		C27F53F81732744A00C7D09D /* libgobject.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C27F53F61732744A00C7D09D /* libgobject.framework */; };
 		C27F53F91732744A00C7D09D /* libintl.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C27F53F71732744A00C7D09D /* libintl.framework */; };
-		C27F53FC17328E8700C7D09D /* pubnub.c in Sources */ = {isa = PBXBuildFile; fileRef = C27F53FB17328E8700C7D09D /* pubnub.c */; };
+		C27F53FC17328E8700C7D09D /* pubnub.c in Sources */ = {isa = PBXBuildFile; fileRef = C27F53FB17328E8700C7D09D /* pubnub.c */; settings = {COMPILER_FLAGS = "-DADIUM"; }; };
 		C2A964FC172CDEC4003C77E7 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C2A964FB172CDEC4003C77E7 /* Cocoa.framework */; };
 		C2A96506172CDEC4003C77E7 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = C2A96504172CDEC4003C77E7 /* InfoPlist.strings */; };
 		C2A96513172CE152003C77E7 /* AIPubnubPlugin.m in Sources */ = {isa = PBXBuildFile; fileRef = C2A96512172CE152003C77E7 /* AIPubnubPlugin.m */; };
@@ -45,8 +45,8 @@
 		C24BBA2D173C183F00F18657 /* ESPubnubAccountViewController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = ESPubnubAccountViewController.h; sourceTree = "<group>"; };
 		C24BBA2E173C183F00F18657 /* ESPubnubAccountViewController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = ESPubnubAccountViewController.m; sourceTree = "<group>"; };
 		C24BBA30173C1F2700F18657 /* ESPubnubAccountView.nib */ = {isa = PBXFileReference; lastKnownFileType = wrapper.nib; path = ESPubnubAccountView.nib; sourceTree = "<group>"; };
-		C24BBA32173C2B0600F18657 /* pubnub_options.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = pubnub_options.h; sourceTree = "<group>"; };
-		C250BA67173A6435005D3E11 /* events.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = events.c; sourceTree = "<group>"; };
+		C24BBA32173C2B0600F18657 /* pubnub_options.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = pubnub_options.h; path = ../pubnub_options.h; sourceTree = "<group>"; };
+		C250BA67173A6435005D3E11 /* events.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = events.c; path = ../events.c; sourceTree = "<group>"; };
 		C250BA69173A844B005D3E11 /* PurpleDefaultsPubnub.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = PurpleDefaultsPubnub.plist; sourceTree = "<group>"; };
 		C250BA6B173B3E4E005D3E11 /* ESPubnubJoinChatViewController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = ESPubnubJoinChatViewController.h; sourceTree = "<group>"; };
 		C250BA6C173B3E4E005D3E11 /* ESPubnubJoinChatViewController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = ESPubnubJoinChatViewController.m; sourceTree = "<group>"; };
@@ -61,8 +61,8 @@
 		C27F53F41732723300C7D09D /* libglib.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = libglib.framework; sourceTree = "<group>"; };
 		C27F53F61732744A00C7D09D /* libgobject.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = libgobject.framework; sourceTree = "<group>"; };
 		C27F53F71732744A00C7D09D /* libintl.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = libintl.framework; sourceTree = "<group>"; };
-		C27F53FA17328E8700C7D09D /* pubnub_libpurple.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = pubnub_libpurple.h; sourceTree = "<group>"; };
-		C27F53FB17328E8700C7D09D /* pubnub.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = pubnub.c; sourceTree = "<group>"; };
+		C27F53FA17328E8700C7D09D /* pubnub_libpurple.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = pubnub_libpurple.h; path = ../pubnub_libpurple.h; sourceTree = "<group>"; };
+		C27F53FB17328E8700C7D09D /* pubnub.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = pubnub.c; sourceTree = SOURCE_ROOT; };
 		C2A964F8172CDEC4003C77E7 /* PubnubAdiumPlugin.AdiumPlugin */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PubnubAdiumPlugin.AdiumPlugin; sourceTree = BUILT_PRODUCTS_DIR; };
 		C2A964FB172CDEC4003C77E7 /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = System/Library/Frameworks/Cocoa.framework; sourceTree = SDKROOT; };
 		C2A964FE172CDEC4003C77E7 /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppKit.framework; path = System/Library/Frameworks/AppKit.framework; sourceTree = SDKROOT; };
@@ -98,6 +98,17 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		C24BBA33173EAD4300F18657 /* PubnubLibpurple */ = {
+			isa = PBXGroup;
+			children = (
+				C250BA67173A6435005D3E11 /* events.c */,
+				C27F53FA17328E8700C7D09D /* pubnub_libpurple.h */,
+				C27F53FB17328E8700C7D09D /* pubnub.c */,
+				C24BBA32173C2B0600F18657 /* pubnub_options.h */,
+			);
+			name = PubnubLibpurple;
+			sourceTree = "<group>";
+		};
 		C2A964ED172CDEC4003C77E7 = {
 			isa = PBXGroup;
 			children = (
@@ -148,9 +159,7 @@
 		C2A96501172CDEC4003C77E7 /* PubnubAdiumPlugin */ = {
 			isa = PBXGroup;
 			children = (
-				C250BA67173A6435005D3E11 /* events.c */,
-				C27F53FA17328E8700C7D09D /* pubnub_libpurple.h */,
-				C27F53FB17328E8700C7D09D /* pubnub.c */,
+				C24BBA33173EAD4300F18657 /* PubnubLibpurple */,
 				C2A96511172CE152003C77E7 /* AIPubnubPlugin.h */,
 				C2A96512172CE152003C77E7 /* AIPubnubPlugin.m */,
 				C2A96502172CDEC4003C77E7 /* Supporting Files */,
@@ -165,7 +174,6 @@
 				C24BBA2D173C183F00F18657 /* ESPubnubAccountViewController.h */,
 				C24BBA2E173C183F00F18657 /* ESPubnubAccountViewController.m */,
 				C24BBA30173C1F2700F18657 /* ESPubnubAccountView.nib */,
-				C24BBA32173C2B0600F18657 /* pubnub_options.h */,
 			);
 			path = PubnubAdiumPlugin;
 			sourceTree = "<group>";

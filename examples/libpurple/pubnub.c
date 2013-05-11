@@ -20,10 +20,11 @@ add_chat_messages(PubnubRoom * room, char **channels, json_object * msgs)
 	gint chat_id = g_str_hash(room->name);
 	for (i = 0; i < len; i++) {
 		json_object *msg = json_object_array_get_idx(msgs, i);
-		json_object *from = json_object_object_get(msg, "from");
-		json_object *message = json_object_object_get(msg, "message");
 		int flag = PURPLE_MESSAGE_RECV;
 		char *username = g_strdup("?");
+#ifndef ADIUM
+		json_object *from = json_object_object_get(msg, "from");
+		json_object *message = json_object_object_get(msg, "message");
 		if (from
 		    && json_object_get_type(from) == json_type_string
 		    && message
@@ -40,6 +41,7 @@ add_chat_messages(PubnubRoom * room, char **channels, json_object * msgs)
 				username = g_strndup(from_s, t - from_s);
 			}
 		}
+#endif
 		if (!channels) {
 			flag |= PURPLE_MESSAGE_DELAYED | PURPLE_MESSAGE_NO_LOG;
 		}
@@ -357,7 +359,10 @@ pubnub_chat_send(PurpleConnection * gc, int id, const char *message,
 	if (conv) {
 		PubnubConn *con = gc->proto_data;
 		char *txt = purple_unescape_text(message);
-		json_object *msg = json_tokener_parse(txt);
+        json_object *msg = NULL;
+#ifndef ADIUM
+		msg = json_tokener_parse(txt);
+#endif
 		if (!msg) {
 			msg = json_object_new_object();
 			json_object_object_add(msg, "from",

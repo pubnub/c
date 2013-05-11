@@ -51,7 +51,7 @@ pubnub_events_timeout(G_GNUC_UNUSED struct pubnub *p, void *ctx_data,
 	}
 	d->timeout_cb = cb;
 	d->timeout_cb_data = cb_data;
-	gint msecs = ts->tv_sec * 1000 + ts->tv_nsec / 1000000;
+	int msecs = (int)(ts->tv_sec * 1000 + ts->tv_nsec / 1000000);
 	if (msecs && cb) {
 		d->timeout_timer = purple_timeout_add(msecs, timeout_cb, d);
 	}

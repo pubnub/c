@@ -17,11 +17,6 @@
 
 extern PurplePluginProtocolInfo pubnub_protocol_info;
 
-- (PurplePluginProtocolInfo *)protocolInfo
-{
-    return &pubnub_protocol_info;
-}
-
 - (BOOL)connectivityBasedOnNetworkReachability
 {
     return FALSE;
