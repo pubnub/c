@@ -5,7 +5,12 @@
 
 #include <libpurple/plugin.h>
 #include <libpurple/prpl.h>
+
+#ifdef ADIUM
 #include <libpurple/internal.h>
+#else
+#include <glib/gi18n.h>
+#endif
 
 #include "pubnub_options.h"
 #include "pubnub.h"

@@ -359,7 +359,7 @@ pubnub_chat_send(PurpleConnection * gc, int id, const char *message,
 	if (conv) {
 		PubnubConn *con = gc->proto_data;
 		char *txt = purple_unescape_text(message);
-        json_object *msg = NULL;
+		json_object *msg = NULL;
 #ifndef ADIUM
 		msg = json_tokener_parse(txt);
 #endif
