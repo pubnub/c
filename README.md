@@ -137,19 +137,8 @@ local README.md files regarding any special details regarding each example.
 Some of the C examples have their C++ counterparts in the examples-cpp/
 directory.
 
-## Pidgin and Finch Chat Plugins
-Using our own C client, we've built an example chat plugin which uses libpurple-compatible
-PubNub plugin!
-### Building for Mac
-1. $ install macports (macports.org) 
-1. $ sudo port install pidgin +finch 
-1. $ sudo port install json-c 
-1. $ sudo port install libevent 
-1. $ git clone https://github.com/pubnub/c.git 
-1. $ cd c/libpubnub 
-1. $ make -f Makefile.darwin 
-1. $ sudo make -f Makefile.darwin install 
-1. $ cd ../examples/libpurple 
-1. $ make 
-1. $ mkdir -p ~/.purple/plugins 
-1. $ cp libpubnub.so ~/.purple/plugins
+## Adium, Pidgin, and Finch Chat Plugins
+Using our own C client, we've built example chat plugins for Adium, Pidgin, and Finch.
+
+Check them out in our examples directory at https://github.com/pubnub/c/blob/master/examples/libpurple !
+
