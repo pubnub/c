@@ -711,7 +711,7 @@ pubnub_subscribe(struct pubnub *p, const char *channel,
 	cb_http_data->call_data = cb_data;
 
 	const char *urlelems[] = { "subscribe", p->subscribe_key, channel, "0", p->time_token, NULL };
-	const char *qparamelems[] = { "UUID", p->uuid, NULL };
+	const char *qparamelems[] = { "uuid", p->uuid, NULL };
 	pubnub_http_setup(p, urlelems, qparamelems, timeout);
 	pubnub_http_request(p, pubnub_subscribe_http_cb, cb_http_data, true, true);
 }

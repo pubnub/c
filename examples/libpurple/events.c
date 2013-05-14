@@ -87,7 +87,7 @@ const struct pubnub_callbacks pubnub_events_callbacks = {
 };
 
 PubnubEvents *
-pubnub_events_new(PurpleAccount * account, const char *username)
+pubnub_events_new(PurpleAccount * account, const char *uuid)
 {
 	PubnubEvents *e = g_new0(PubnubEvents, 1);
 	const char *pub_key =
@@ -114,11 +114,8 @@ pubnub_events_new(PurpleAccount * account, const char *username)
 		pubnub_set_cipher_key(e->pn, cipher_key);
 	}
 	pubnub_error_policy(e->pn, 0, true);
-	if (username) {
-		char *new_uuid = g_strdup_printf("%s@%s", username,
-						 pubnub_current_uuid(e->pn));
-		pubnub_set_uuid(e->pn, new_uuid);
-		g_free(new_uuid);
+	if (uuid) {
+		pubnub_set_uuid(e->pn, uuid);
 	}
 	return e;
 }

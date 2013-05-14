@@ -30,7 +30,7 @@ typedef struct
 } PubnubEvents;
 
 extern PubnubEvents *pubnub_events_new(PurpleAccount * account,
-				       const char *username);
+				       const char *uuid);
 extern void pubnub_events_free(PubnubEvents * e);
 
 typedef struct
@@ -38,21 +38,19 @@ typedef struct
 	PurpleAccount *account;
 	PurpleConnection *gc;
 
-	PubnubEvents *pn_pub;
-	PubnubEvents *pn_here;
+	PubnubEvents *e;
+	PubnubEvents *private_e;
 
 	GList *rooms;
-	GList *next_here;
-	char *here_channel;
-	gint here_timer;
 
 	gboolean is_sub_active;
 } PubnubConn;
 
 typedef struct
 {
-	gchar *name;
+	const char *channels[2];
 	PubnubEvents *e;
+	guint id;
 	gboolean is_subscribed;
 	PubnubConn *con;
 } PubnubRoom;
