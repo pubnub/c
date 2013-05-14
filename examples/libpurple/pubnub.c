@@ -13,19 +13,21 @@ static void
 add_chat_message(PubnubRoom * room, json_object * msg, bool is_history,
 		 bool is_private)
 {
-	json_object *from = json_object_object_get(msg, "from");
-	json_object *message = json_object_object_get(msg, "message");
 	int flag = PURPLE_MESSAGE_RECV;
 	const char *from_s = NULL;
-	if (from
-	    && json_object_get_type(from) == json_type_string
-	    && message && json_object_get_type(message) == json_type_string) {
-		msg = message;
-		from_s = json_object_get_string(from);
-		if (strcmp(from_s, pubnub_current_uuid(room->con->e->pn)) == 0) {
-			flag = PURPLE_MESSAGE_SEND;
-		}
-	}
+    if (json_object_get_type(msg) == json_type_object) {
+        json_object *from = json_object_object_get(msg, "from");
+        json_object *message = json_object_object_get(msg, "message");
+        if (from
+            && json_object_get_type(from) == json_type_string
+            && message && json_object_get_type(message) == json_type_string) {
+                msg = message;
+                from_s = json_object_get_string(from);
+                if (strcmp(from_s, pubnub_current_uuid(room->con->e->pn)) == 0) {
+                    flag = PURPLE_MESSAGE_SEND;
+                }
+        }
+    }
 	if (is_history) {
 		flag |= PURPLE_MESSAGE_DELAYED | PURPLE_MESSAGE_NO_LOG;
 	}
@@ -299,20 +301,23 @@ pubnub_join_chat(PurpleConnection * gc, GHashTable * data)
 
 	if (roomname) {
 		int chat_id = g_str_hash(roomname);
-		purple_debug_misc(PLUGIN_ID, "join chat: %s\n", roomname);
-
-		if (!purple_find_chat(gc, chat_id)) {
-			serv_got_joined_chat(gc, chat_id, roomname);
-			PubnubRoom *room = g_new0(PubnubRoom, 1);
-			room->e = pubnub_events_new(con->account, NULL);
-			room->con = con;
-			room->name = g_strdup(roomname);
-			con->rooms = g_list_prepend(con->rooms, room);
-			con->next_here = con->rooms;
-			pubnub_subscribe(room->e->pn, room->name, -1,
-					 subscribe_cb, room);
-		}
-	}
+        if (!purple_find_chat(gc, chat_id)) {
+            serv_got_joined_chat(gc, chat_id, roomname);
+            PubnubConn *con = gc->proto_data;
+            PubnubRoom *room = g_new0(PubnubRoom, 1);
+            room->e =
+			pubnub_events_new(con->account,
+                              pubnub_current_uuid(con->e->pn));
+            room->con = con;
+            room->channels[0] = g_strdup(roomname);
+            room->channels[1] =
+			g_strdup_printf("%s%s", roomname, PRESENCE_SUFFIX);
+            room->id = chat_id;
+            con->rooms = g_list_append(con->rooms, room);
+            pubnub_subscribe_multi(room->e->pn, room->channels, 2, -1,
+                                   subscribe_cb, room);
+        }
+    }
 }
 
 static void

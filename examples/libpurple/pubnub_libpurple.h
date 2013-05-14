@@ -1,16 +1,10 @@
 #ifndef PUBNUB_LIBPURPLE_H
 #define PUBNUB_LIBPURPLE_H
 
-#include <glib.h>
+#include <glib/gi18n.h>
 
 #include <libpurple/plugin.h>
 #include <libpurple/prpl.h>
-
-#ifdef ADIUM
-#include <libpurple/internal.h>
-#else
-#include <glib/gi18n.h>
-#endif
 
 #include "pubnub_options.h"
 #include "pubnub.h"
