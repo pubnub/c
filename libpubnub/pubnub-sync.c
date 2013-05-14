@@ -5,6 +5,20 @@
 #include <string.h>
 #include <time.h>
 
+#ifdef __MACH__ 
+#include <mach/clock.h>
+#include <mach/mach.h>
+#define GET_CLOCK_NOW clock_serv_t cclock; \
+	mach_timespec_t mts; \
+	host_get_clock_service(mach_host_self(), CALENDAR_CLOCK, &cclock); \
+	clock_get_time(cclock, &mts); \
+	mach_port_deallocate(mach_task_self(), cclock); \
+	now.tv_sec = mts.tv_sec; \
+	now.tv_nsec = mts.tv_nsec;
+#else
+#define GET_CLOCK_NOW clock_gettime(CLOCK_REALTIME, &now); 
+#endif
+
 #include "pubnub.h"
 #include "pubnub-priv.h"
 #include "pubnub-sync.h"
@@ -137,7 +151,7 @@ pubnub_sync_timeout(struct pubnub *p, void *ctx_data, const struct timespec *ts,
 
 	if (sync->timeout_cb) {
 		struct timespec now;
-		clock_gettime(CLOCK_REALTIME, &now);
+		GET_CLOCK_NOW
 		sync->timeout_at.tv_sec = now.tv_sec + ts->tv_sec;
 		sync->timeout_at.tv_nsec = now.tv_nsec + ts->tv_nsec;
 		if (sync->timeout_at.tv_nsec > 1000000000L) {
@@ -158,7 +172,7 @@ pubnub_sync_wait(struct pubnub *p, void *ctx_data)
 		long timeout;
 		if (sync->timeout_cb) {
 			struct timespec now;
-			clock_gettime(CLOCK_REALTIME, &now);
+			GET_CLOCK_NOW
 			timeout = (sync->timeout_at.tv_sec - now.tv_sec) * 1000;
 			timeout += (sync->timeout_at.tv_nsec - now.tv_nsec) / 1000000;
 			DBGMSG("timeout in %ld ms\n", timeout);

@@ -1,0 +1,38 @@
+
+CUSTOM_CFLAGS=-Wall -O3
+SOFLAGS=-fPIC
+PREFIX=/opt/local
+LDFLAGS=$(SOFLAGS) -dynamiclib -Wl,-install_name,$(PREFIX)/lib/libpubnub.0.dylib
+
+INCDIR=$(PREFIX)/include
+LIBDIR=$(PREFIX)/lib
+
+
+# Compile using `make XCFLAGS=-DDEBUG` to enable debugging code.
+LIBS=`pkg-config --libs json libcurl libcrypto libevent`
+
+SYS_CFLAGS=-std=gnu99 $(SOFLAGS) -I. `pkg-config --cflags json libcurl libcrypto libevent`
+
+
+OBJS=pubnub.o pubnub-sync.o pubnub-libevent.o crypto.o
+
+all: libpubnub.0.dylib libpubnub.pc
+
+libpubnub.0.dylib: $(OBJS)
+	$(CC) $(LDFLAGS) -o $@ $^ $(LIBS)
+
+libpubnub.pc: libpubnub.pc.in
+	sed -e 's#@LIBDIR@#$(LIBDIR)#g; s#@INCDIR@#$(INCDIR)#g' $^ >$@
+
+clean:
+	rm -f *.o libpubnub.0.dylib libpubnub.pc
+
+install:
+	$(INSTALL) $(INSTALL_FLAGS) -m 0644 pubnub.h $(DESTDIR)$(INCDIR)/pubnub.h
+	$(INSTALL) $(INSTALL_FLAGS) -m 0644 pubnub-sync.h $(DESTDIR)$(INCDIR)/pubnub-sync.h
+	$(INSTALL) $(INSTALL_FLAGS) -m 0644 pubnub-libevent.h $(DESTDIR)$(INCDIR)/pubnub-libevent.h
+	$(INSTALL) $(INSTALL_FLAGS) -m 0755 libpubnub.0.dylib $(DESTDIR)$(LIBDIR)/libpubnub.0.dylib
+	ln -s -f libpubnub.0.dylib $(DESTDIR)$(LIBDIR)/libpubnub.dylib
+	$(INSTALL) $(INSTALL_FLAGS) -m 0644 libpubnub.pc $(DESTDIR)$(LIBDIR)/pkgconfig/libpubnub.pc
+
+-include ../Makefile.lib
