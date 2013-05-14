@@ -1,0 +1,417 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 46;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		C24BBA22173BC36700F18657 /* Adium.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C24BBA1F173BC36700F18657 /* Adium.framework */; };
+		C24BBA23173BC36700F18657 /* AdiumLibpurple.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C24BBA20173BC36700F18657 /* AdiumLibpurple.framework */; };
+		C24BBA24173BC36700F18657 /* AIUtilities.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C24BBA21173BC36700F18657 /* AIUtilities.framework */; };
+		C24BBA29173BC40600F18657 /* libglib.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C24BBA25173BC40600F18657 /* libglib.framework */; };
+		C24BBA2A173BC40600F18657 /* libgobject.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C24BBA26173BC40600F18657 /* libgobject.framework */; };
+		C24BBA2B173BC40600F18657 /* libintl.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C24BBA27173BC40600F18657 /* libintl.framework */; };
+		C24BBA2C173BC40600F18657 /* libpurple.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C24BBA28173BC40600F18657 /* libpurple.framework */; };
+		C24BBA2F173C183F00F18657 /* ESPubnubAccountViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = C24BBA2E173C183F00F18657 /* ESPubnubAccountViewController.m */; };
+		C24BBA31173C1F2700F18657 /* ESPubnubAccountView.nib in Resources */ = {isa = PBXBuildFile; fileRef = C24BBA30173C1F2700F18657 /* ESPubnubAccountView.nib */; };
+		C250BA68173A6435005D3E11 /* events.c in Sources */ = {isa = PBXBuildFile; fileRef = C250BA67173A6435005D3E11 /* events.c */; };
+		C250BA6A173A844B005D3E11 /* PurpleDefaultsPubnub.plist in Resources */ = {isa = PBXBuildFile; fileRef = C250BA69173A844B005D3E11 /* PurpleDefaultsPubnub.plist */; };
+		C250BA6D173B3E4E005D3E11 /* ESPubnubJoinChatViewController.m in Sources */ = {isa = PBXBuildFile; fileRef = C250BA6C173B3E4E005D3E11 /* ESPubnubJoinChatViewController.m */; };
+		C250BA71173B46CF005D3E11 /* ESPubnubJoinChatView.nib in Resources */ = {isa = PBXBuildFile; fileRef = C250BA70173B46CE005D3E11 /* ESPubnubJoinChatView.nib */; };
+		C27F53E817325C3700C7D09D /* pubnub_small.png in Resources */ = {isa = PBXBuildFile; fileRef = C27F53E617325C3700C7D09D /* pubnub_small.png */; };
+		C27F53E917325C3700C7D09D /* pubnub.png in Resources */ = {isa = PBXBuildFile; fileRef = C27F53E717325C3700C7D09D /* pubnub.png */; };
+		C27F53EC17325E4000C7D09D /* ESPubnubService.m in Sources */ = {isa = PBXBuildFile; fileRef = C27F53EB17325E4000C7D09D /* ESPubnubService.m */; };
+		C27F53F117326ACA00C7D09D /* ESPurplePubnubAccount.m in Sources */ = {isa = PBXBuildFile; fileRef = C27F53F017326ACA00C7D09D /* ESPurplePubnubAccount.m */; };
+		C27F53F3173271E200C7D09D /* libpurple.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C27F53F2173271E200C7D09D /* libpurple.framework */; };
+		C27F53F51732723300C7D09D /* libglib.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C27F53F41732723300C7D09D /* libglib.framework */; };
+		C27F53F81732744A00C7D09D /* libgobject.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C27F53F61732744A00C7D09D /* libgobject.framework */; };
+		C27F53F91732744A00C7D09D /* libintl.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C27F53F71732744A00C7D09D /* libintl.framework */; };
+		C27F53FC17328E8700C7D09D /* pubnub.c in Sources */ = {isa = PBXBuildFile; fileRef = C27F53FB17328E8700C7D09D /* pubnub.c */; settings = {COMPILER_FLAGS = "-DADIUM"; }; };
+		C2A964FC172CDEC4003C77E7 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = C2A964FB172CDEC4003C77E7 /* Cocoa.framework */; };
+		C2A96506172CDEC4003C77E7 /* InfoPlist.strings in Resources */ = {isa = PBXBuildFile; fileRef = C2A96504172CDEC4003C77E7 /* InfoPlist.strings */; };
+		C2A96513172CE152003C77E7 /* AIPubnubPlugin.m in Sources */ = {isa = PBXBuildFile; fileRef = C2A96512172CE152003C77E7 /* AIPubnubPlugin.m */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		C24BBA1F173BC36700F18657 /* Adium.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Adium.framework; path = PubnubAdiumPlugin/Adium.framework; sourceTree = "<group>"; };
+		C24BBA20173BC36700F18657 /* AdiumLibpurple.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AdiumLibpurple.framework; path = PubnubAdiumPlugin/AdiumLibpurple.framework; sourceTree = "<group>"; };
+		C24BBA21173BC36700F18657 /* AIUtilities.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AIUtilities.framework; path = PubnubAdiumPlugin/AIUtilities.framework; sourceTree = "<group>"; };
+		C24BBA25173BC40600F18657 /* libglib.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = libglib.framework; sourceTree = "<group>"; };
+		C24BBA26173BC40600F18657 /* libgobject.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = libgobject.framework; sourceTree = "<group>"; };
+		C24BBA27173BC40600F18657 /* libintl.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = libintl.framework; sourceTree = "<group>"; };
+		C24BBA28173BC40600F18657 /* libpurple.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = libpurple.framework; sourceTree = "<group>"; };
+		C24BBA2D173C183F00F18657 /* ESPubnubAccountViewController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = ESPubnubAccountViewController.h; sourceTree = "<group>"; };
+		C24BBA2E173C183F00F18657 /* ESPubnubAccountViewController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = ESPubnubAccountViewController.m; sourceTree = "<group>"; };
+		C24BBA30173C1F2700F18657 /* ESPubnubAccountView.nib */ = {isa = PBXFileReference; lastKnownFileType = wrapper.nib; path = ESPubnubAccountView.nib; sourceTree = "<group>"; };
+		C24BBA32173C2B0600F18657 /* pubnub_options.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; name = pubnub_options.h; path = ../pubnub_options.h; sourceTree = "<group>"; };
+		C250BA67173A6435005D3E11 /* events.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = events.c; path = ../events.c; sourceTree = "<group>"; };
+		C250BA69173A844B005D3E11 /* PurpleDefaultsPubnub.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = PurpleDefaultsPubnub.plist; sourceTree = "<group>"; };
+		C250BA6B173B3E4E005D3E11 /* ESPubnubJoinChatViewController.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = ESPubnubJoinChatViewController.h; sourceTree = "<group>"; };
+		C250BA6C173B3E4E005D3E11 /* ESPubnubJoinChatViewController.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = ESPubnubJoinChatViewController.m; sourceTree = "<group>"; };
+		C250BA70173B46CE005D3E11 /* ESPubnubJoinChatView.nib */ = {isa = PBXFileReference; lastKnownFileType = wrapper.nib; path = ESPubnubJoinChatView.nib; sourceTree = "<group>"; };
+		C27F53E617325C3700C7D09D /* pubnub_small.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = pubnub_small.png; sourceTree = "<group>"; };
+		C27F53E717325C3700C7D09D /* pubnub.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = pubnub.png; sourceTree = "<group>"; };
+		C27F53EA17325E4000C7D09D /* ESPubnubService.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = ESPubnubService.h; sourceTree = "<group>"; };
+		C27F53EB17325E4000C7D09D /* ESPubnubService.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = ESPubnubService.m; sourceTree = "<group>"; };
+		C27F53EF17326AC900C7D09D /* ESPurplePubnubAccount.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = ESPurplePubnubAccount.h; sourceTree = "<group>"; };
+		C27F53F017326ACA00C7D09D /* ESPurplePubnubAccount.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = ESPurplePubnubAccount.m; sourceTree = "<group>"; };
+		C27F53F2173271E200C7D09D /* libpurple.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = libpurple.framework; sourceTree = "<group>"; };
+		C27F53F41732723300C7D09D /* libglib.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = libglib.framework; sourceTree = "<group>"; };
+		C27F53F61732744A00C7D09D /* libgobject.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = libgobject.framework; sourceTree = "<group>"; };
+		C27F53F71732744A00C7D09D /* libintl.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = libintl.framework; sourceTree = "<group>"; };
+		C27F53FA17328E8700C7D09D /* pubnub_libpurple.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = pubnub_libpurple.h; path = ../pubnub_libpurple.h; sourceTree = "<group>"; };
+		C27F53FB17328E8700C7D09D /* pubnub.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = pubnub.c; sourceTree = SOURCE_ROOT; };
+		C2A964F8172CDEC4003C77E7 /* PubnubAdiumPlugin.AdiumPlugin */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PubnubAdiumPlugin.AdiumPlugin; sourceTree = BUILT_PRODUCTS_DIR; };
+		C2A964FB172CDEC4003C77E7 /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = System/Library/Frameworks/Cocoa.framework; sourceTree = SDKROOT; };
+		C2A964FE172CDEC4003C77E7 /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppKit.framework; path = System/Library/Frameworks/AppKit.framework; sourceTree = SDKROOT; };
+		C2A964FF172CDEC4003C77E7 /* CoreData.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreData.framework; path = System/Library/Frameworks/CoreData.framework; sourceTree = SDKROOT; };
+		C2A96500172CDEC4003C77E7 /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = System/Library/Frameworks/Foundation.framework; sourceTree = SDKROOT; };
+		C2A96503172CDEC4003C77E7 /* PubnubAdiumPlugin-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = "PubnubAdiumPlugin-Info.plist"; sourceTree = "<group>"; };
+		C2A96505172CDEC4003C77E7 /* en */ = {isa = PBXFileReference; lastKnownFileType = text.plist.strings; name = en; path = en.lproj/InfoPlist.strings; sourceTree = "<group>"; };
+		C2A96507172CDEC4003C77E7 /* PubnubAdiumPlugin-Prefix.pch */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "PubnubAdiumPlugin-Prefix.pch"; sourceTree = "<group>"; };
+		C2A96511172CE152003C77E7 /* AIPubnubPlugin.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = AIPubnubPlugin.h; sourceTree = "<group>"; };
+		C2A96512172CE152003C77E7 /* AIPubnubPlugin.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = AIPubnubPlugin.m; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		C2A964F5172CDEC4003C77E7 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C2A964FC172CDEC4003C77E7 /* Cocoa.framework in Frameworks */,
+				C27F53F3173271E200C7D09D /* libpurple.framework in Frameworks */,
+				C27F53F51732723300C7D09D /* libglib.framework in Frameworks */,
+				C27F53F81732744A00C7D09D /* libgobject.framework in Frameworks */,
+				C27F53F91732744A00C7D09D /* libintl.framework in Frameworks */,
+				C24BBA22173BC36700F18657 /* Adium.framework in Frameworks */,
+				C24BBA23173BC36700F18657 /* AdiumLibpurple.framework in Frameworks */,
+				C24BBA24173BC36700F18657 /* AIUtilities.framework in Frameworks */,
+				C24BBA29173BC40600F18657 /* libglib.framework in Frameworks */,
+				C24BBA2A173BC40600F18657 /* libgobject.framework in Frameworks */,
+				C24BBA2B173BC40600F18657 /* libintl.framework in Frameworks */,
+				C24BBA2C173BC40600F18657 /* libpurple.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		C24BBA33173EAD4300F18657 /* PubnubLibpurple */ = {
+			isa = PBXGroup;
+			children = (
+				C250BA67173A6435005D3E11 /* events.c */,
+				C27F53FA17328E8700C7D09D /* pubnub_libpurple.h */,
+				C27F53FB17328E8700C7D09D /* pubnub.c */,
+				C24BBA32173C2B0600F18657 /* pubnub_options.h */,
+			);
+			name = PubnubLibpurple;
+			sourceTree = "<group>";
+		};
+		C2A964ED172CDEC4003C77E7 = {
+			isa = PBXGroup;
+			children = (
+				C2A96501172CDEC4003C77E7 /* PubnubAdiumPlugin */,
+				C2A964FA172CDEC4003C77E7 /* Frameworks */,
+				C2A964F9172CDEC4003C77E7 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		C2A964F9172CDEC4003C77E7 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				C2A964F8172CDEC4003C77E7 /* PubnubAdiumPlugin.AdiumPlugin */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		C2A964FA172CDEC4003C77E7 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				C24BBA25173BC40600F18657 /* libglib.framework */,
+				C24BBA26173BC40600F18657 /* libgobject.framework */,
+				C24BBA27173BC40600F18657 /* libintl.framework */,
+				C24BBA28173BC40600F18657 /* libpurple.framework */,
+				C24BBA1F173BC36700F18657 /* Adium.framework */,
+				C24BBA20173BC36700F18657 /* AdiumLibpurple.framework */,
+				C24BBA21173BC36700F18657 /* AIUtilities.framework */,
+				C2A964FE172CDEC4003C77E7 /* AppKit.framework */,
+				C2A964FF172CDEC4003C77E7 /* CoreData.framework */,
+				C2A96500172CDEC4003C77E7 /* Foundation.framework */,
+				C27F53F41732723300C7D09D /* libglib.framework */,
+				C27F53F71732744A00C7D09D /* libintl.framework */,
+				C27F53F2173271E200C7D09D /* libpurple.framework */,
+				C27F53F61732744A00C7D09D /* libgobject.framework */,
+				C2A964FB172CDEC4003C77E7 /* Cocoa.framework */,
+				C2A964FD172CDEC4003C77E7 /* Other Frameworks */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		C2A964FD172CDEC4003C77E7 /* Other Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = "Other Frameworks";
+			sourceTree = "<group>";
+		};
+		C2A96501172CDEC4003C77E7 /* PubnubAdiumPlugin */ = {
+			isa = PBXGroup;
+			children = (
+				C24BBA33173EAD4300F18657 /* PubnubLibpurple */,
+				C2A96511172CE152003C77E7 /* AIPubnubPlugin.h */,
+				C2A96512172CE152003C77E7 /* AIPubnubPlugin.m */,
+				C2A96502172CDEC4003C77E7 /* Supporting Files */,
+				C27F53EA17325E4000C7D09D /* ESPubnubService.h */,
+				C27F53EB17325E4000C7D09D /* ESPubnubService.m */,
+				C27F53EF17326AC900C7D09D /* ESPurplePubnubAccount.h */,
+				C27F53F017326ACA00C7D09D /* ESPurplePubnubAccount.m */,
+				C250BA69173A844B005D3E11 /* PurpleDefaultsPubnub.plist */,
+				C250BA6B173B3E4E005D3E11 /* ESPubnubJoinChatViewController.h */,
+				C250BA6C173B3E4E005D3E11 /* ESPubnubJoinChatViewController.m */,
+				C250BA70173B46CE005D3E11 /* ESPubnubJoinChatView.nib */,
+				C24BBA2D173C183F00F18657 /* ESPubnubAccountViewController.h */,
+				C24BBA2E173C183F00F18657 /* ESPubnubAccountViewController.m */,
+				C24BBA30173C1F2700F18657 /* ESPubnubAccountView.nib */,
+			);
+			path = PubnubAdiumPlugin;
+			sourceTree = "<group>";
+		};
+		C2A96502172CDEC4003C77E7 /* Supporting Files */ = {
+			isa = PBXGroup;
+			children = (
+				C27F53E617325C3700C7D09D /* pubnub_small.png */,
+				C27F53E717325C3700C7D09D /* pubnub.png */,
+				C2A96503172CDEC4003C77E7 /* PubnubAdiumPlugin-Info.plist */,
+				C2A96504172CDEC4003C77E7 /* InfoPlist.strings */,
+				C2A96507172CDEC4003C77E7 /* PubnubAdiumPlugin-Prefix.pch */,
+			);
+			name = "Supporting Files";
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		C2A964F7172CDEC4003C77E7 /* PubnubAdiumPlugin */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C2A9650A172CDEC4003C77E7 /* Build configuration list for PBXNativeTarget "PubnubAdiumPlugin" */;
+			buildPhases = (
+				C2A964F4172CDEC4003C77E7 /* Sources */,
+				C2A964F5172CDEC4003C77E7 /* Frameworks */,
+				C2A964F6172CDEC4003C77E7 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = PubnubAdiumPlugin;
+			productName = PubnubAdiumPlugin;
+			productReference = C2A964F8172CDEC4003C77E7 /* PubnubAdiumPlugin.AdiumPlugin */;
+			productType = "com.apple.product-type.bundle";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		C2A964EF172CDEC4003C77E7 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				LastUpgradeCheck = 0450;
+				ORGANIZATIONNAME = "Alexey Yesipenko";
+			};
+			buildConfigurationList = C2A964F2172CDEC4003C77E7 /* Build configuration list for PBXProject "PubnubAdiumPlugin" */;
+			compatibilityVersion = "Xcode 3.2";
+			developmentRegion = English;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+			);
+			mainGroup = C2A964ED172CDEC4003C77E7;
+			productRefGroup = C2A964F9172CDEC4003C77E7 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				C2A964F7172CDEC4003C77E7 /* PubnubAdiumPlugin */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		C2A964F6172CDEC4003C77E7 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C2A96506172CDEC4003C77E7 /* InfoPlist.strings in Resources */,
+				C27F53E817325C3700C7D09D /* pubnub_small.png in Resources */,
+				C27F53E917325C3700C7D09D /* pubnub.png in Resources */,
+				C250BA6A173A844B005D3E11 /* PurpleDefaultsPubnub.plist in Resources */,
+				C250BA71173B46CF005D3E11 /* ESPubnubJoinChatView.nib in Resources */,
+				C24BBA31173C1F2700F18657 /* ESPubnubAccountView.nib in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		C2A964F4172CDEC4003C77E7 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C2A96513172CE152003C77E7 /* AIPubnubPlugin.m in Sources */,
+				C27F53EC17325E4000C7D09D /* ESPubnubService.m in Sources */,
+				C27F53F117326ACA00C7D09D /* ESPurplePubnubAccount.m in Sources */,
+				C27F53FC17328E8700C7D09D /* pubnub.c in Sources */,
+				C250BA68173A6435005D3E11 /* events.c in Sources */,
+				C250BA6D173B3E4E005D3E11 /* ESPubnubJoinChatViewController.m in Sources */,
+				C24BBA2F173C183F00F18657 /* ESPubnubAccountViewController.m in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXVariantGroup section */
+		C2A96504172CDEC4003C77E7 /* InfoPlist.strings */ = {
+			isa = PBXVariantGroup;
+			children = (
+				C2A96505172CDEC4003C77E7 /* en */,
+			);
+			name = InfoPlist.strings;
+			sourceTree = "<group>";
+		};
+/* End PBXVariantGroup section */
+
+/* Begin XCBuildConfiguration section */
+		C2A96508172CDEC4003C77E7 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = "$(ARCHS_STANDARD_64_BIT)";
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++0x";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				GCC_C_LANGUAGE_STANDARD = gnu99;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_ENABLE_OBJC_EXCEPTIONS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_SYMBOLS_PRIVATE_EXTERN = NO;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 10.8;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+			};
+			name = Debug;
+		};
+		C2A96509172CDEC4003C77E7 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ARCHS = "$(ARCHS_STANDARD_64_BIT)";
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++0x";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = YES;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				GCC_C_LANGUAGE_STANDARD = gnu99;
+				GCC_ENABLE_OBJC_EXCEPTIONS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 10.8;
+				SDKROOT = macosx;
+			};
+			name = Release;
+		};
+		C2A9650B172CDEC4003C77E7 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				COMBINE_HIDPI_IMAGES = YES;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\"$(SRCROOT)\"",
+					"\"$(SRCROOT)/PubnubAdiumPlugin\"",
+				);
+				GCC_PRECOMPILE_PREFIX_HEADER = YES;
+				GCC_PREFIX_HEADER = "PubnubAdiumPlugin/PubnubAdiumPlugin-Prefix.pch";
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/libgobject.framework/Versions/2.34.3/Headers",
+					/opt/local/include,
+					/opt/local/include/json,
+				);
+				INFOPLIST_FILE = "PubnubAdiumPlugin/PubnubAdiumPlugin-Info.plist";
+				INSTALL_PATH = "$(HOME)/Library/Application Support/Adium 2.0/PlugIns/";
+				LIBRARY_SEARCH_PATHS = /opt/local/lib;
+				OTHER_LDFLAGS = (
+					"-ljson",
+					"-lpubnub",
+				);
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				WRAPPER_EXTENSION = AdiumPlugin;
+			};
+			name = Debug;
+		};
+		C2A9650C172CDEC4003C77E7 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				COMBINE_HIDPI_IMAGES = YES;
+				FRAMEWORK_SEARCH_PATHS = (
+					"$(inherited)",
+					"\"$(SRCROOT)\"",
+					"\"$(SRCROOT)/PubnubAdiumPlugin\"",
+				);
+				GCC_PRECOMPILE_PREFIX_HEADER = YES;
+				GCC_PREFIX_HEADER = "PubnubAdiumPlugin/PubnubAdiumPlugin-Prefix.pch";
+				HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/libgobject.framework/Versions/2.34.3/Headers",
+					/opt/local/include,
+					/opt/local/include/json,
+				);
+				INFOPLIST_FILE = "PubnubAdiumPlugin/PubnubAdiumPlugin-Info.plist";
+				INSTALL_PATH = "$(HOME)/Library/Application Support/Adium 2.0/PlugIns/";
+				LIBRARY_SEARCH_PATHS = /opt/local/lib;
+				OTHER_LDFLAGS = (
+					"-ljson",
+					"-lpubnub",
+				);
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				WRAPPER_EXTENSION = AdiumPlugin;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		C2A964F2172CDEC4003C77E7 /* Build configuration list for PBXProject "PubnubAdiumPlugin" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C2A96508172CDEC4003C77E7 /* Debug */,
+				C2A96509172CDEC4003C77E7 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C2A9650A172CDEC4003C77E7 /* Build configuration list for PBXNativeTarget "PubnubAdiumPlugin" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C2A9650B172CDEC4003C77E7 /* Debug */,
+				C2A9650C172CDEC4003C77E7 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = C2A964EF172CDEC4003C77E7 /* Project object */;
+}
