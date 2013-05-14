@@ -279,18 +279,6 @@ pubnub_chat_info(G_GNUC_UNUSED PurpleConnection * gc)
 	return m;
 }
 
-static GHashTable *
-pubnub_chat_info_defaults(G_GNUC_UNUSED PurpleConnection * gc,
-			  G_GNUC_UNUSED const char *room)
-{
-	GHashTable *defaults;
-
-	defaults = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, g_free);
-	g_hash_table_insert(defaults, "room", g_strdup("my_channel"));
-
-	return defaults;
-}
-
 static char *
 pubnub_get_chat_name(GHashTable * data)
 {
@@ -300,26 +288,36 @@ pubnub_get_chat_name(GHashTable * data)
 static void
 pubnub_join_chat(PurpleConnection * gc, GHashTable * data)
 {
-	const char *username = gc->account->username;
+	PubnubConn *con = gc->proto_data;
 	const char *roomname = g_hash_table_lookup(data, "room");
-	int chat_id = g_str_hash(roomname);
 
-	if (!purple_find_chat(gc, chat_id)) {
-		serv_got_joined_chat(gc, chat_id, roomname);
-		PubnubConn *con = gc->proto_data;
-		PubnubRoom *room = g_new0(PubnubRoom, 1);
-		room->e = pubnub_events_new(con->account, NULL);
-		room->con = con;
-		room->name = g_strdup(roomname);
-		con->rooms = g_list_prepend(con->rooms, room);
-		con->next_here = con->rooms;
-		pubnub_subscribe(room->e->pn, room->name, -1, subscribe_cb,
-				 room);
-	} else {
-		char *tmp = g_strdup_printf(_("%s is already in chat room %s."),
-					    username, roomname);
-		purple_notify_info(gc, _("Join chat"), _("Join chat"), tmp);
-		g_free(tmp);
+	// finch missing room name fix
+	if (!roomname) {
+		const GList *chats = purple_get_chats();
+		for (; chats; chats = g_list_next(chats)) {
+			PurpleConversation *p = chats->data;
+			if (p->account == con->account && !p->u.chat->id) {
+				roomname = p->name;
+				break;
+			}
+		}
+	}
+
+	if (roomname) {
+		int chat_id = g_str_hash(roomname);
+		purple_debug_misc(PLUGIN_ID, "join chat: %s\n", roomname);
+
+		if (!purple_find_chat(gc, chat_id)) {
+			serv_got_joined_chat(gc, chat_id, roomname);
+			PubnubRoom *room = g_new0(PubnubRoom, 1);
+			room->e = pubnub_events_new(con->account, NULL);
+			room->con = con;
+			room->name = g_strdup(roomname);
+			con->rooms = g_list_prepend(con->rooms, room);
+			con->next_here = con->rooms;
+			pubnub_subscribe(room->e->pn, room->name, -1,
+					 subscribe_cb, room);
+		}
 	}
 }
 
@@ -390,7 +388,7 @@ static PurplePluginProtocolInfo pubnub_protocol_info = {
 	NULL, pubnub_statuses,	/* status_types */
 	NULL,			/* blist_node_menu */
 	pubnub_chat_info,	/* chat_info */
-	pubnub_chat_info_defaults,	/* chat_info_defaults */
+	NULL,			/* chat_info_defaults */
 	pubnub_login,		/* login */
 	pubnub_close,		/* close */
 	NULL,			/* send_im */
