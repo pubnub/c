@@ -1,0 +1,9 @@
+Package: pubnub-libpurple
+Version: 1.0.0-1
+Section: net
+Priority: optional
+Architecture: i386
+Depends: libpurple0 (>= 2.8.0), libcurl3 (>= 7.26.0)
+Maintainer: Alexey Yesipenko <alex7y@gmail.com>
+Description: PubNub libpurple plugin for the Pidgin/Finch
+ Purple library plugin for connecting to the PubNub Real-Time Network
