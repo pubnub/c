@@ -15,19 +15,22 @@ add_chat_message(PubnubRoom * room, json_object * msg, bool is_history,
 {
 	int flag = PURPLE_MESSAGE_RECV;
 	const char *from_s = NULL;
-    if (json_object_get_type(msg) == json_type_object) {
-        json_object *from = json_object_object_get(msg, "from");
-        json_object *message = json_object_object_get(msg, "message");
-        if (from
-            && json_object_get_type(from) == json_type_string
-            && message && json_object_get_type(message) == json_type_string) {
-                msg = message;
-                from_s = json_object_get_string(from);
-                if (strcmp(from_s, pubnub_current_uuid(room->con->e->pn)) == 0) {
-                    flag = PURPLE_MESSAGE_SEND;
-                }
-        }
-    }
+	if (json_object_get_type(msg) == json_type_object) {
+		json_object *from = json_object_object_get(msg, "from");
+		json_object *message = json_object_object_get(msg, "message");
+		if (from
+		    && json_object_get_type(from) == json_type_string
+		    && message
+		    && json_object_get_type(message) == json_type_string) {
+			msg = message;
+			from_s = json_object_get_string(from);
+			if (strcmp
+			    (from_s,
+			     pubnub_current_uuid(room->con->e->pn)) == 0) {
+				flag = PURPLE_MESSAGE_SEND;
+			}
+		}
+	}
 	if (is_history) {
 		flag |= PURPLE_MESSAGE_DELAYED | PURPLE_MESSAGE_NO_LOG;
 	}
@@ -56,8 +59,6 @@ process_chat_presence(PubnubRoom * room, json_object * msg)
 		if (strcmp(action_s, "join") == 0) {
 			purple_conv_chat_add_user
 				(PURPLE_CONV_CHAT(conv), uuid_s, NULL, 0, TRUE);
-			purple_serv_got_private_alias(room->con->gc, uuid_s,
-						      "username");
 		} else if (strcmp(action_s, "leave") == 0) {
 			purple_conv_chat_remove_user
 				(PURPLE_CONV_CHAT(conv), uuid_s, NULL);
@@ -301,23 +302,25 @@ pubnub_join_chat(PurpleConnection * gc, GHashTable * data)
 
 	if (roomname) {
 		int chat_id = g_str_hash(roomname);
-        if (!purple_find_chat(gc, chat_id)) {
-            serv_got_joined_chat(gc, chat_id, roomname);
-            PubnubConn *con = gc->proto_data;
-            PubnubRoom *room = g_new0(PubnubRoom, 1);
-            room->e =
-			pubnub_events_new(con->account,
-                              pubnub_current_uuid(con->e->pn));
-            room->con = con;
-            room->channels[0] = g_strdup(roomname);
-            room->channels[1] =
-			g_strdup_printf("%s%s", roomname, PRESENCE_SUFFIX);
-            room->id = chat_id;
-            con->rooms = g_list_append(con->rooms, room);
-            pubnub_subscribe_multi(room->e->pn, room->channels, 2, -1,
-                                   subscribe_cb, room);
-        }
-    }
+		if (!purple_find_chat(gc, chat_id)) {
+			serv_got_joined_chat(gc, chat_id, roomname);
+			PubnubConn *con = gc->proto_data;
+			PubnubRoom *room = g_new0(PubnubRoom, 1);
+			room->e =
+				pubnub_events_new(con->account,
+						  pubnub_current_uuid(con->e->
+								      pn));
+			room->con = con;
+			room->channels[0] = g_strdup(roomname);
+			room->channels[1] =
+				g_strdup_printf("%s%s", roomname,
+						PRESENCE_SUFFIX);
+			room->id = chat_id;
+			con->rooms = g_list_append(con->rooms, room);
+			pubnub_subscribe_multi(room->e->pn, room->channels, 2,
+					       -1, subscribe_cb, room);
+		}
+	}
 }
 
 static void
@@ -354,9 +357,9 @@ pubnub_send_message(PurpleConnection * gc, const char *who, const char *message)
 {
 	PubnubConn *con = gc->proto_data;
 	char *txt = purple_unescape_text(message);
-		json_object *msg = NULL;
+	json_object *msg = NULL;
 #ifndef ADIUM
-		msg = json_tokener_parse(txt);
+	msg = json_tokener_parse(txt);
 #endif
 	if (!msg) {
 		msg = json_object_new_object();
