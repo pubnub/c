@@ -2,12 +2,12 @@ A pubnub plugin for Pidgin, Adium and other libpurple based messengers.
 
 # Building
     $ sudo apt-get install libpurple-dev libevent-dev libjson0-dev libcurl4-openssl-dev libssl-dev
-    $ git clone git://github.com/a212/c
+    $ git clone git://github.com/pubnub/c
     $ cd c
     $ make
     $ sudo make install
     $ cd examples/libpurple
-    $ make
+    $ make deb # optionaly
     $ sudo make install
 
 And now, restart Pidgin.
