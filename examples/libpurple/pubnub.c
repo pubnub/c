@@ -359,7 +359,9 @@ pubnub_send_message(PurpleConnection * gc, const char *who, const char *message)
 	char *txt = purple_unescape_text(message);
 	json_object *msg = NULL;
 #ifndef ADIUM
-	msg = json_tokener_parse(txt);
+	if (*txt == '\\') {
+		msg = json_tokener_parse(txt+1);
+	}
 #endif
 	if (!msg) {
 		msg = json_object_new_object();
