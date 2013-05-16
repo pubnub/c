@@ -48,6 +48,9 @@ add_chat_message(PubnubRoom * room, json_object * msg, bool is_history,
 static void
 process_chat_presence(PubnubRoom * room, json_object * msg)
 {
+	if (json_object_get_type(msg) != json_type_object) {
+        return;
+    }
 	PurpleConversation *conv = purple_find_chat(room->con->gc, room->id);
 	json_object *action = json_object_object_get(msg, "action");
 	json_object *uuid = json_object_object_get(msg, "uuid");
