@@ -45,15 +45,20 @@ add_chat_message(PubnubRoom * room, json_object * msg, bool is_history,
 	}
 }
 
-static void
+static bool
 process_chat_presence(PubnubRoom * room, json_object * msg)
 {
+	if (json_object_get_type(msg) != json_type_object) {
+		return false;
+	}
 	PurpleConversation *conv = purple_find_chat(room->con->gc, room->id);
 	json_object *action = json_object_object_get(msg, "action");
 	json_object *uuid = json_object_object_get(msg, "uuid");
+	json_object *occupancy = json_object_object_get(msg, "occupancy");
 	purple_debug_misc(PLUGIN_ID, "PRESENCE MESSAGE\n");
 	if (action && json_object_get_type(action) == json_type_string
-	    && uuid && json_object_get_type(uuid) == json_type_string) {
+	    && uuid && json_object_get_type(uuid) == json_type_string
+	    && occupancy && json_object_get_type(occupancy) == json_type_int) {
 		const char *action_s = json_object_get_string(action);
 		const char *uuid_s = json_object_get_string(uuid);
 		if (strcmp(action_s, "join") == 0) {
@@ -63,16 +68,22 @@ process_chat_presence(PubnubRoom * room, json_object * msg)
 			purple_conv_chat_remove_user
 				(PURPLE_CONV_CHAT(conv), uuid_s, NULL);
 		}
+		int new_len =
+			g_list_length(purple_conv_chat_get_users
+				      (PURPLE_CONV_CHAT(conv)));
+		return new_len == json_object_get_int(occupancy);
 
 	}
+	return false;
 }
 
-static void
-add_chat_messages(PubnubRoom * room, char **channels, json_object * msgs,
-		  bool is_private)
+static bool
+process_messages(PubnubRoom * room, char **channels, json_object * msgs,
+		 bool is_private)
 {
+	bool is_userslist_correct = true;
 	if (json_object_get_type(msgs) != json_type_array) {
-		return;
+		return is_userslist_correct;
 	}
 	guint len = json_object_array_length(msgs);
 	purple_debug_misc(PLUGIN_ID, "number of messages: %d\n", len);
@@ -84,13 +95,15 @@ add_chat_messages(PubnubRoom * room, char **channels, json_object * msgs,
 			add_chat_message(room, msg, channels == NULL,
 					 is_private);
 		} else {
-			process_chat_presence(room, msg);
+			is_userslist_correct = is_userslist_correct
+				&& process_chat_presence(room, msg);
 		}
 		if (channels) {
 			g_free(channels[i]);
 		}
 	}
 	g_free(channels);
+	return is_userslist_correct;
 }
 
 
@@ -105,7 +118,7 @@ history_cb(G_GNUC_UNUSED struct pubnub *p, G_GNUC_UNUSED enum pubnub_res result,
 {
 	PubnubRoom *room = call_data;
 	json_object *msgs = json_object_get(msg);
-	add_chat_messages(room, NULL, msgs, false);
+	process_messages(room, NULL, msgs, false);
 	json_object_put(msgs);
 	pubnub_subscribe_multi(room->e->pn, room->channels, 2, -1, subscribe_cb,
 			       room);
@@ -192,10 +205,17 @@ subscribe_cb(G_GNUC_UNUSED struct pubnub *p, enum pubnub_res result,
 	if (result == PNR_OK && response) {
 		if (room->is_subscribed) {
 			json_object *msgs = json_object_get(response);
-			add_chat_messages(room, channels, msgs, false);
+			if (process_messages(room, channels, msgs, false)) {
+				pubnub_subscribe_multi(room->e->pn,
+						       room->channels, 2, -1,
+						       subscribe_cb, room);
+			} else {
+				purple_debug_misc(PLUGIN_ID,
+						  "Userslist has been updated to force\n");
+				pubnub_here_now(room->e->pn, room->channels[0],
+						-1, here_cb, room);
+			}
 			json_object_put(msgs);
-			pubnub_subscribe_multi(room->e->pn, room->channels, 2,
-					       -1, subscribe_cb, room);
 		} else {
 			room->is_subscribed = true;
 			pubnub_here_now(room->e->pn, room->channels[0], -1,
@@ -215,7 +235,7 @@ private_subscribe_cb(G_GNUC_UNUSED struct pubnub *p, enum pubnub_res result,
 		json_object_put(msgs);
 		PubnubRoom room;
 		room.con = con;
-		add_chat_messages(&room, channels, msgs, true);
+		process_messages(&room, channels, msgs, true);
 		pubnub_subscribe(con->private_e->pn,
 				 pubnub_current_uuid(con->e->pn), -1,
 				 private_subscribe_cb, con);
@@ -308,8 +328,8 @@ pubnub_join_chat(PurpleConnection * gc, GHashTable * data)
 			PubnubRoom *room = g_new0(PubnubRoom, 1);
 			room->e =
 				pubnub_events_new(con->account,
-						  pubnub_current_uuid(con->e->
-								      pn));
+						  pubnub_current_uuid(con->
+								      e->pn));
 			room->con = con;
 			room->channels[0] = g_strdup(roomname);
 			room->channels[1] =
