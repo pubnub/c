@@ -1,7 +1,6 @@
+#include <cstdlib>
 #include <string>
 #include <vector>
-
-#include <cstdlib>
 
 #include <json.h>
 
