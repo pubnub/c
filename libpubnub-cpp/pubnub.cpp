@@ -1,6 +1,8 @@
 #include <string>
 #include <vector>
 
+#include <cstdlib>
+
 #include <json.h>
 
 #include "pubnub.hpp"
