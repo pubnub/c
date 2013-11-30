@@ -1,8 +1,8 @@
 # Compile using `make XCFLAGS=-DDEBUG` to enable debugging code.
 CUSTOM_CXXFLAGS=-Wall -ggdb3 -O3
 SOFLAGS=-fPIC -fvisibility=internal
-SYS_CXXFLAGS=$(SOFLAGS) -I. -I../libpubnub `pkg-config --cflags json libcurl libcrypto libevent`
-LIBS=`pkg-config --libs json libcurl libcrypto libevent`
+SYS_CXXFLAGS=$(SOFLAGS) -I. -I../libpubnub $(shell pkg-config --cflags $(shell pkg-config --exists json-c && echo json-c || echo json) libcurl libcrypto libevent)
+LIBS=$(shell pkg-config --libs $(shell pkg-config --exists json-c && echo json-c || echo json) libcurl libcrypto libevent)
 LDFLAGS=$(SOFLAGS) -shared -Wl,-soname,libpubnub-cpp.so.0
 
 OBJS=pubnub.o pubnub-sync.o
