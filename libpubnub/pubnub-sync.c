@@ -54,12 +54,13 @@ struct pubnub_sync {
 static void
 pubnub_sync_reset(struct pubnub_sync *sync)
 {
+	int i;
 	if (sync->response) {
 		json_object_put(sync->response);
 		sync->response = NULL;
 	}
 	if (sync->channels) {
-		for (int i = 0; sync->channels[i]; i++)
+		for (i = 0; sync->channels[i]; i++)
 			free(sync->channels[i]);
 		free(sync->channels);
 		sync->channels = NULL;
@@ -127,10 +128,11 @@ pubnub_sync_add_socket(struct pubnub *p, void *ctx_data, int fd, int mode,
 void
 pubnub_sync_rem_socket(struct pubnub *p, void *ctx_data, int fd)
 {
+	int i;
 	DBGMSG("- socket %d\n", fd);
 	struct pubnub_sync *sync = ctx_data;
 
-	for (int i = 0; i < sync->n; i++) {
+	for (i = 0; i < sync->n; i++) {
 		if (sync->fdset[i].fd != fd)
 			continue;
 		memmove(&sync->fdset[i], &sync->fdset[i + 1], (sync->n - i - 1) * sizeof(*sync->fdset));
@@ -165,6 +167,7 @@ pubnub_sync_timeout(struct pubnub *p, void *ctx_data, const struct timespec *ts,
 void
 pubnub_sync_wait(struct pubnub *p, void *ctx_data)
 {
+	int i;
 	struct pubnub_sync *sync = ctx_data;
 	while (!sync->stop) {
 		DBGMSG("=polling= for %d (timeout %p)\n", sync->n, sync->timeout_cb);
@@ -210,7 +213,7 @@ pubnub_sync_wait(struct pubnub *p, void *ctx_data)
 			continue;
 		}
 
-		for (int i = 0; i < sync->n; i++) {
+		for (i = 0; i < sync->n; i++) {
 			short revents = sync->fdset[i].revents;
 			if (!revents)
 				continue;

@@ -1,7 +1,7 @@
 #ifndef PUBNUB__PubNub_libevent_h
 #define PUBNUB__PubNub_libevent_h
 
-#include <pubnub.h>
+#include "pubnub.h"
 
 #ifdef __cplusplus
 extern "C" {

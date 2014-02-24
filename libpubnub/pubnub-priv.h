@@ -55,13 +55,22 @@ struct pubnub {
 };
 
 #ifdef DEBUG
-#define DBGMSG(x...) do { fprintf(stderr, "[%d] ", __LINE__); fprintf(stderr, x); } while (0)
+#define DBGMSG(...) do { fprintf(stderr, "[%d] ", __LINE__); fprintf(stderr, __VA_ARGS__); } while (0)
 #define VERBOSE_VAL 1L
 #else
-#define DBGMSG(x...) do { } while (0)
+#define DBGMSG(...) do { } while (0)
 #define VERBOSE_VAL 0L
 #endif
 
+#ifndef _MSC_VER
 #define PUBNUB_API __attribute__ ((visibility("default")))
+#else
+#define PUBNUB_API
+#endif
+
+#ifdef _MSC_VER
+#define snprintf _snprintf
+#define strdup _strdup
+#endif
 
 #endif

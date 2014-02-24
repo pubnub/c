@@ -1,7 +1,14 @@
 #ifndef PUBNUB__PubNub_h
 #define PUBNUB__PubNub_h
 
-#include <stdbool.h>
+#if !defined(_MSC_VER)
+# include <stdbool.h>
+#elif !defined(__cplusplus)
+typedef int bool;
+# define false 0
+# define true 1
+#endif
+
 #include <time.h>
 
 #include <json.h>
@@ -25,10 +32,10 @@ extern "C" {
  * prevent improper concurrent access. */
 struct pubnub;
 
-#ifdef __MINGW32__
+#if defined(__MINGW32__) || defined(_MSC_VER)
 struct timespec {
-	int tv_sec;
-	int tv_nsec;
+	time_t tv_sec;
+	long tv_nsec;
 };
 #endif
 

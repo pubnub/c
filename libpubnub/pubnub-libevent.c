@@ -1,6 +1,4 @@
 #include <errno.h>
-#include <poll.h>
-#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -79,12 +77,14 @@ void
 pubnub_libevent_add_socket(struct pubnub *p, void *ctx_data, int fd, int mode,
 		void (*cb)(struct pubnub *p, int fd, int mode, void *cb_data), void *cb_data)
 {
+	struct pubnub_libevent *libevent = ctx_data;
+	int i, kind;
+
 	DBGMSG("+ socket %d\n", fd);
 
-	struct pubnub_libevent *libevent = ctx_data;
 	libevent->p = p;
 
-	int i = libevent->n++;
+	i = libevent->n++;
 
 	libevent->fdset = realloc(libevent->fdset, sizeof(*libevent->fdset) * libevent->n);
 	libevent->fdset[i] = fd;
@@ -94,7 +94,7 @@ pubnub_libevent_add_socket(struct pubnub *p, void *ctx_data, int fd, int mode,
 	libevent->cbset[i].cb_data = cb_data;
 
 	libevent->evset = realloc(libevent->evset, sizeof(*libevent->evset) * libevent->n);
-	int kind = (mode & 1 ? EV_READ : 0) | (mode & 2 ? EV_WRITE : 0) | EV_PERSIST;
+	kind = (mode & 1 ? EV_READ : 0) | (mode & 2 ? EV_WRITE : 0) | EV_PERSIST;
 	libevent->evset[i] = event_new(NULL, fd, kind, pubnub_libevent_eventcb, libevent);
 	event_add(libevent->evset[i], NULL);
 
@@ -104,10 +104,11 @@ pubnub_libevent_add_socket(struct pubnub *p, void *ctx_data, int fd, int mode,
 void
 pubnub_libevent_rem_socket(struct pubnub *p, void *ctx_data, int fd)
 {
-	DBGMSG("- socket %d\n", fd);
 	struct pubnub_libevent *libevent = ctx_data;
-
 	int i;
+
+	DBGMSG("- socket %d\n", fd);
+
 	for (i = 0; i < libevent->n; i++) {
 		if (libevent->fdset[i] != fd)
 			continue;
@@ -135,7 +136,9 @@ pubnub_libevent_timeout(struct pubnub *p, void *ctx_data, const struct timespec 
 	libevent->timer_cb_data = cb_data;
 
 	if (libevent->timer_cb) {
-		struct timeval timeout = { .tv_sec = ts->tv_sec, .tv_usec = ts->tv_nsec / 1000 };
+		struct timeval timeout;
+		timeout.tv_sec = (long)ts->tv_sec;
+		timeout.tv_usec = ts->tv_nsec / 1000;
 		evtimer_add(libevent->timer_event, &timeout);
 	}
 }
@@ -178,10 +181,10 @@ pubnub_libevent_done(struct pubnub *p, void *ctx_data)
 
 PUBNUB_API
 const struct pubnub_callbacks pubnub_libevent_callbacks = {
-	.add_socket = pubnub_libevent_add_socket,
-	.rem_socket = pubnub_libevent_rem_socket,
-	.timeout = pubnub_libevent_timeout,
-	.wait = pubnub_libevent_wait,
-	.stop_wait = pubnub_libevent_stop_wait,
-	.done = pubnub_libevent_done,
+	/*.add_socket =*/ pubnub_libevent_add_socket,
+	/*.rem_socket =*/ pubnub_libevent_rem_socket,
+	/*.timeout =*/ pubnub_libevent_timeout,
+	/*.wait =*/ pubnub_libevent_wait,
+	/*.stop_wait =*/ pubnub_libevent_stop_wait,
+	/*.done =*/ pubnub_libevent_done,
 };
