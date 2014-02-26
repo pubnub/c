@@ -356,6 +356,7 @@ pubnub_init(const char *publish_key, const char *subscribe_key,
 
 	p->publish_key = strdup(publish_key);
 	p->subscribe_key = strdup(subscribe_key);
+	p->auth_key = strdup("");
 	p->origin = strdup("http://pubsub.pubnub.com");
 	p->uuid = pubnub_gen_uuid();
 	strcpy(p->time_token, "0");
@@ -409,11 +410,20 @@ pubnub_done(struct pubnub *p)
 	printbuf_free(p->url);
 	free(p->publish_key);
 	free(p->subscribe_key);
+	free(p->auth_key);
 	free(p->secret_key);
 	free(p->cipher_key);
 	free(p->origin);
 	free(p->uuid);
 	free(p);
+}
+
+PUBNUB_API
+void
+pubnub_set_auth_key(struct pubnub *p, const char *auth_key)
+{
+	free(p->auth_key);
+	p->auth_key = strdup(auth_key ? auth_key : "");
 }
 
 PUBNUB_API
@@ -470,6 +480,19 @@ pubnub_error_policy(struct pubnub *p, unsigned int retry_mask, bool print)
 	p->error_print = print;
 }
 
+PUBNUB_API
+void
+pubnub_set_user_data(struct pubnub *p, void *user_data)
+{
+	p->user_data = user_data;
+}
+
+PUBNUB_API
+void *
+pubnub_get_user_data(struct pubnub *p)
+{
+	return p->user_data;
+}
 
 static size_t
 pubnub_http_inputcb(char *ptr, size_t size, size_t nmemb, void *userdata)
@@ -489,7 +512,7 @@ pubnub_http_setup(struct pubnub *p, const char *urlelems[], const char **qparele
 	printbuf_reset(p->url);
 	printbuf_memappend_fast(p->url, p->origin, (int)strlen(p->origin));
 	for (urlelemp = urlelems; *urlelemp; urlelemp++) {
-		/* Join urlemes by slashes, e.g.
+		/* Join urlelems by slashes, e.g.
 		 *   { "v2", "time", NULL }
 		 * means /v2/time */
 		printbuf_memappend_fast(p->url, "/", 1);
@@ -592,13 +615,14 @@ pubnub_publish(struct pubnub *p, const char *channel, struct json_object *messag
 
 	{
 	const char *urlelems[] = { "publish", p->publish_key, p->subscribe_key, signature, channel, "0", message_str, NULL };
-	pubnub_http_setup(p, urlelems, NULL, timeout);
+		const char *qparamelems[] = { "auth", p->auth_key, NULL };
+		pubnub_http_setup(p, urlelems, qparamelems, timeout);
 	}
 	free(signature);
 	if (put_message)
 		json_object_put(message);
 
-	pubnub_http_request(p, (pubnub_http_cb) cb, cb_data, false, true);
+	pubnub_http_request(p, cb, cb_data, false, true);
 }
 
 
@@ -752,9 +776,9 @@ pubnub_subscribe(struct pubnub *p, const char *channel,
 	cb_http_data->call_data = cb_data;
 
 	{
-	const char *urlelems[] = { "subscribe", p->subscribe_key, channel, "0", p->time_token, NULL };
-	const char *qparamelems[] = { "uuid", p->uuid, NULL };
-	pubnub_http_setup(p, urlelems, qparamelems, timeout);
+		const char *urlelems[] = { "subscribe", p->subscribe_key, channel, "0", p->time_token, NULL };
+		const char *qparamelems[] = { "uuid", p->uuid, "auth", p->auth_key, NULL };
+		pubnub_http_setup(p, urlelems, qparamelems, timeout);
 	}
 
 	pubnub_http_request(p, pubnub_subscribe_http_cb, cb_http_data, true, true);
@@ -859,8 +883,9 @@ pubnub_history(struct pubnub *p, const char *channel, int limit,
 
 	snprintf(strlimit, sizeof(strlimit), "%d", limit);
 	{
-	const char *urlelems[] = { "history", p->subscribe_key, channel, "0", strlimit, NULL };
-	pubnub_http_setup(p, urlelems, NULL, timeout);
+		const char *urlelems[] = { "history", p->subscribe_key, channel, "0", strlimit, NULL };
+		const char *qparamelems[] = { "auth", p->auth_key, NULL };
+		pubnub_http_setup(p, urlelems, qparamelems, timeout);
 	}
 
 	pubnub_http_request(p, pubnub_history_http_cb, cb_http_data, true, true);
@@ -886,11 +911,12 @@ pubnub_here_now(struct pubnub *p, const char *channel,
 		timeout = 5;
 
 	{
-	const char *urlelems[] = { "v2", "presence", "sub-key", p->subscribe_key, "channel", channel, NULL };
-	pubnub_http_setup(p, urlelems, NULL, timeout);
+		const char *urlelems[] = { "v2", "presence", "sub-key", p->subscribe_key, "channel", channel, NULL };
+		const char *qparamelems[] = { "auth", p->auth_key, NULL };
+		pubnub_http_setup(p, urlelems, qparamelems, timeout);
 	}
 
-	pubnub_http_request(p, (pubnub_http_cb) cb, cb_data, false, true);
+	pubnub_http_request(p, cb, cb_data, false, true);
 }
 
 
@@ -960,8 +986,9 @@ pubnub_time(struct pubnub *p, long timeout, pubnub_time_cb cb, void *cb_data)
 	cb_http_data->call_data = cb_data;
 
 	{
-	const char *urlelems[] = { "time", "0", NULL };
-	pubnub_http_setup(p, urlelems, NULL, timeout);
+		const char *urlelems[] = { "time", "0", NULL };
+		const char *qparamelems[] = { "auth", p->auth_key, NULL };
+		pubnub_http_setup(p, urlelems, qparamelems, timeout);
 	}
 
 	pubnub_http_request(p, pubnub_time_http_cb, cb_http_data, true, true);

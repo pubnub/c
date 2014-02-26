@@ -13,7 +13,7 @@ typedef void (*pubnub_cancel_cb)(struct pubnub *p, void *ctx_data, void *call_da
 
 struct pubnub {
 	char *publish_key, *subscribe_key;
-	char *secret_key, *cipher_key;
+	char *auth_key, *secret_key, *cipher_key;
 	char *origin;
 	char *uuid;
 	char time_token[64];
@@ -52,6 +52,9 @@ struct pubnub {
 	struct printbuf *url;
 	struct printbuf *body;
 	long timeout;
+
+	/* Application-specific user data */
+	void *user_data;
 };
 
 #ifdef DEBUG

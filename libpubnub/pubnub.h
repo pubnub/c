@@ -169,6 +169,9 @@ struct pubnub *pubnub_init(const char *publish_key, const char *subscribe_key,
  * will not be called (this may change in the future). */
 void pubnub_done(struct pubnub *p);
 
+/* Set the authentication key that is used to determine user-level Access
+ * Manager permissions. */
+void pubnub_set_auth_key(struct pubnub *p, const char *auth_key);
 
 /* Set the secret key that is used for signing published messages
  * to confirm they are genuine. Using the secret key is optional. */
@@ -234,6 +237,14 @@ void pubnub_set_nosignal(struct pubnub *p, bool nosignal);
  * retry for whatever reason. */
 void pubnub_error_policy(struct pubnub *p, unsigned int retry_mask, bool print);
 
+/* Set application-specific data for this PubNub context.  PubNub does not use
+ * this value at all except to return it back through pubnub_get_user_data().
+ */
+void pubnub_set_user_data(struct pubnub *p, void *user_data);
+
+/* Get the application-specific data set earlier with pubnub_set_user_data().
+ */
+void *pubnub_get_user_data(struct pubnub *p);
 
 /** PubNub API requests */
 

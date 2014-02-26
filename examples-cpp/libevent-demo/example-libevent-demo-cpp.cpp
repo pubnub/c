@@ -185,11 +185,11 @@ int
 main(void)
 {
 	/* Set up the libevent library. */
-	event_init();
+	struct event_base *evbase = event_base_new();
 
 	/* Set up the PubNub library, with a single shared context,
 	 * using the libevent backend for event handling. */
-	PubNub p("demo", "demo", &pubnub_libevent_callbacks, pubnub_libevent_init());
+	PubNub p("demo", "demo", &pubnub_libevent_callbacks, pubnub_libevent_init(evbase));
 
 	/* Set the clock update timer. */
 	evtimer_set(&clock_update_timer, clock_update, NULL);
@@ -205,5 +205,6 @@ main(void)
 	event_dispatch();
 
 	/* We should never reach here. */
+	event_base_free(evbase);
 	return EXIT_SUCCESS;
 }
