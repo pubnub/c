@@ -705,14 +705,14 @@ pubnub_subscribe_http_cb(struct pubnub *p, enum pubnub_res result, struct json_o
 	int i;
 
 	call_data = cb_http_data->call_data;
-	free(cb_http_data);
-	p->finished_cb = p->finished_cb_data = p->cancel_cb = NULL;
 
 	if (result != PNR_OK) {
 		/* pubnub_handle_error() has been already called along
 		 * the way to here. */
 		cb(p, result, NULL, response, ctx_data, call_data);
+		free(cb_http_data);
 		free(channelset);
+		p->finished_cb = p->finished_cb_data = p->cancel_cb = NULL;
 		return;
 	}
 
@@ -721,8 +721,12 @@ pubnub_subscribe_http_cb(struct pubnub *p, enum pubnub_res result, struct json_o
 		result = PNR_FORMAT_ERROR;
 error:
 		if (pubnub_handle_error(p, result, response, "subscribe", false))
+		{
 			cb(p, result, NULL, response, ctx_data, call_data);
-		free(channelset);
+			free(cb_http_data);
+			free(channelset);
+			p->finished_cb = p->finished_cb_data = p->cancel_cb = NULL;
+		}
 		return;
 	}
 	msg = json_object_array_get_idx(response, 0);
@@ -797,7 +801,9 @@ error:
 		}
 	}
 	channels[msg_n] = NULL;
+	free(cb_http_data);
 	free(channelset);
+	p->finished_cb = p->finished_cb_data = p->cancel_cb = NULL;
 
 	/* Finally call the user callback. */
 	p->cb->stop_wait(p, p->cb_data);
@@ -871,13 +877,13 @@ pubnub_history_http_cb(struct pubnub *p, enum pubnub_res result, struct json_obj
 	bool put_response;
 
 	call_data = cb_http_data->call_data;
-	free(cb_http_data);
-	p->finished_cb = p->finished_cb_data = NULL;
 
 	if (result != PNR_OK) {
 		/* pubnub_handle_error() has been already called along
 		 * the way to here. */
 		cb(p, result, response, ctx_data, call_data);
+		free(cb_http_data);
+		p->finished_cb = p->finished_cb_data = NULL;
 		return;
 	}
 
@@ -886,7 +892,11 @@ pubnub_history_http_cb(struct pubnub *p, enum pubnub_res result, struct json_obj
 		result = PNR_FORMAT_ERROR;
 error:
 		if (pubnub_handle_error(p, result, response, "history", false))
+		{
 			cb(p, result, response, ctx_data, call_data);
+			free(cb_http_data);
+			p->finished_cb = p->finished_cb_data = NULL;
+		}
 		return;
 	}
 
@@ -901,6 +911,9 @@ error:
 		put_response = true;
 		response = response_new;
 	}
+
+	free(cb_http_data);
+	p->finished_cb = p->finished_cb_data = NULL;
 
 	/* Finally call the user callback. */
 	p->cb->stop_wait(p, p->cb_data);
@@ -987,13 +1000,13 @@ pubnub_time_http_cb(struct pubnub *p, enum pubnub_res result, struct json_object
 	json_object *ts;
 
 	call_data = cb_http_data->call_data;
-	free(cb_http_data);
-	p->finished_cb = p->finished_cb_data = NULL;
 
 	if (result != PNR_OK) {
 		/* pubnub_handle_error() has been already called along
 		 * the way to here. */
 		cb(p, result, response, ctx_data, call_data);
+		free(cb_http_data);
+		p->finished_cb = p->finished_cb_data = NULL;
 		return;
 	}
 
@@ -1001,13 +1014,20 @@ pubnub_time_http_cb(struct pubnub *p, enum pubnub_res result, struct json_object
 	if (!json_object_is_type(response, json_type_array)) {
 		result = PNR_FORMAT_ERROR;
 		if (pubnub_handle_error(p, result, response, "time", false))
+		{
 			cb(p, result, response, ctx_data, call_data);
+			free(cb_http_data);
+			p->finished_cb = p->finished_cb_data = NULL;
+		}
 		return;
 	}
 
 	/* Extract the first element. */
 	ts = json_object_array_get_idx(response, 0);
 	json_object_get(ts);
+
+	free(cb_http_data);
+	p->finished_cb = p->finished_cb_data = NULL;
 
 	/* Finally call the user callback. */
 	p->cb->stop_wait(p, p->cb_data);
