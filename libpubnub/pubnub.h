@@ -237,6 +237,11 @@ void pubnub_set_nosignal(struct pubnub *p, bool nosignal);
  * retry for whatever reason. */
 void pubnub_error_policy(struct pubnub *p, unsigned int retry_mask, bool print);
 
+/* Set CA certificate data (PEM format) used for SSL certificate validation
+ * (multiple certificates are ok)
+ */
+void pubnub_set_ssl_cacerts(struct pubnub *p, const char *cacerts, size_t len);
+
 /* Set application-specific data for this PubNub context.  PubNub does not use
  * this value at all except to return it back through pubnub_get_user_data().
  */

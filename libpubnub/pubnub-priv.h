@@ -52,6 +52,7 @@ struct pubnub {
 	struct printbuf *url;
 	struct printbuf *body;
 	long timeout;
+	struct stack_st_X509_INFO *ssl_cacerts;
 
 	/* Application-specific user data */
 	void *user_data;
