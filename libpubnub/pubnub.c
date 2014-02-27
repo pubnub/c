@@ -716,6 +716,7 @@ error:
 		if (!json_object_is_type(channelset_json, json_type_string)) {
 			free(channels);
 			result = PNR_FORMAT_ERROR;
+			free(channels);
 			goto error;
 		}
 		free(channelset);
