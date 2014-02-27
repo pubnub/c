@@ -403,6 +403,8 @@ pubnub_done(struct pubnub *p)
 	curl_multi_cleanup(p->curlm);
 	curl_slist_free_all(p->curl_headers);
 
+	/* curl can call back into libevent, so if we're using the libevent
+	 * backend, make sure that gets cleaned up after curl is done */
 	if (p->cb->done)
 		p->cb->done(p, p->cb_data);
 
