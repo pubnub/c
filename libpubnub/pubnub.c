@@ -72,12 +72,12 @@ pubnub_error_report(struct pubnub *p, enum pubnub_res result, json_object *msg, 
 {
 	if (p->error_print) {
 		static const char *pubnub_res_str[] = {
-			[PNR_OK] = "Success",
-			[PNR_OCCUPIED] = "Another method already in progress",
-			[PNR_TIMEOUT] = "Timeout",
-			[PNR_IO_ERROR] = "Communication error",
-			[PNR_HTTP_ERROR] = "HTTP error",
-			[PNR_FORMAT_ERROR] = "Unexpected input in received JSON",
+			SFINIT( [PNR_OK] ,           "Success"),
+			SFINIT( [PNR_OCCUPIED] ,     "Another method already in progress"),
+			SFINIT( [PNR_TIMEOUT] ,      "Timeout"),
+			SFINIT( [PNR_IO_ERROR] ,     "Communication error"),
+			SFINIT( [PNR_HTTP_ERROR] ,   "HTTP error"),
+			SFINIT( [PNR_FORMAT_ERROR] , "Unexpected input in received JSON"),
 		};
 		if (msg) {
 			fprintf(stderr, "pubnub %s result: %s [%s]%s\n",
@@ -119,7 +119,9 @@ pubnub_handle_error(struct pubnub *p, enum pubnub_res result, json_object *msg, 
 
 		/* ... after a 250ms delay; this avoids hammering
 		 * the PubNub service in case of a bug. */
-		struct timespec timeout_ts = { .tv_nsec = 250*1000*1000 };
+		struct timespec timeout_ts;
+		timeout_ts.tv_nsec = 250*1000*1000;
+		timeout_ts.tv_sec = 0;
 		p->cb->timeout(p, p->cb_data, &timeout_ts, pubnub_error_retry, p);
 
 		return false;
@@ -257,7 +259,7 @@ pubnub_event_timeoutcb(struct pubnub *p, void *cb_data)
 static int
 pubnub_http_sockcb(CURL *easy, curl_socket_t s, int action, void *userp, void *socketp)
 {
-	struct pubnub *p = userp;
+	struct pubnub *p = (struct pubnub *)userp;
 
 	DBGMSG("http_sockcb: fd %d action %d sockdata %p\n", s, action, socketp);
 
@@ -286,7 +288,7 @@ pubnub_http_sockcb(CURL *easy, curl_socket_t s, int action, void *userp, void *s
 static int
 pubnub_http_timercb(CURLM *multi, long timeout_ms, void *userp)
 {
-	struct pubnub *p = userp;
+	struct pubnub *p = (struct pubnub *)userp;
 
 	DBGMSG("http_timercb: %ld ms\n", timeout_ms);
 
@@ -343,7 +345,7 @@ struct pubnub *
 pubnub_init(const char *publish_key, const char *subscribe_key,
 		const struct pubnub_callbacks *cb, void *cb_data)
 {
-	struct pubnub *p = calloc(1, sizeof(*p));
+	struct pubnub *p = (struct pubnub *)calloc(1, sizeof(*p));
 	if (!p) return NULL;
 
 	p->publish_key = strdup(publish_key);
@@ -458,7 +460,7 @@ pubnub_error_policy(struct pubnub *p, unsigned int retry_mask, bool print)
 static size_t
 pubnub_http_inputcb(char *ptr, size_t size, size_t nmemb, void *userdata)
 {
-	struct pubnub *p = userdata;
+	struct pubnub *p = (struct pubnub *)userdata;
 	DBGMSG("http input: %zd bytes\n", size * nmemb);
 	printbuf_memappend_fast(p->body, ptr, size * nmemb);
 	return size * nmemb;
@@ -588,7 +590,7 @@ struct pubnub_subscribe_http_cb {
 static void
 pubnub_subscribe_http_cb(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data)
 {
-	struct pubnub_subscribe_http_cb *cb_http_data = call_data;
+	struct pubnub_subscribe_http_cb *cb_http_data = (struct pubnub_subscribe_http_cb *)call_data;
 	char *channelset = cb_http_data->channelset;
 	call_data = cb_http_data->call_data;
 	pubnub_subscribe_cb cb = cb_http_data->cb;
@@ -644,7 +646,7 @@ error:
 	 * when multiplexing). */
 	json_object *channelset_json = json_object_array_get_idx(response, 2);
 	int msg_n = json_object_array_length(msg);
-	char **channels = malloc((msg_n + 1) * sizeof(channels[0]));
+	char **channels = (char**)malloc((msg_n + 1) * sizeof(channels[0]));
 	if (channelset_json) {
 		if (!json_object_is_type(channelset_json, json_type_string)) {
 			result = PNR_FORMAT_ERROR;
@@ -705,7 +707,7 @@ pubnub_subscribe(struct pubnub *p, const char *channel,
 	if (timeout < 0)
 		timeout = 310;
 
-	struct pubnub_subscribe_http_cb *cb_http_data = malloc(sizeof(*cb_http_data));
+	struct pubnub_subscribe_http_cb *cb_http_data = (struct pubnub_subscribe_http_cb *)malloc(sizeof(*cb_http_data));
 	cb_http_data->channelset = strdup(channel);
 	cb_http_data->cb = cb;
 	cb_http_data->call_data = cb_data;
@@ -742,7 +744,7 @@ struct pubnub_history_http_cb {
 static void
 pubnub_history_http_cb(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data)
 {
-	struct pubnub_history_http_cb *cb_http_data = call_data;
+	struct pubnub_history_http_cb *cb_http_data = (struct pubnub_history_http_cb *)call_data;
 	call_data = cb_http_data->call_data;
 	pubnub_history_cb cb = cb_http_data->cb;
 	free(cb_http_data);
@@ -801,7 +803,7 @@ pubnub_history(struct pubnub *p, const char *channel, int limit,
 	if (timeout < 0)
 		timeout = 5;
 
-	struct pubnub_history_http_cb *cb_http_data = malloc(sizeof(*cb_http_data));
+	struct pubnub_history_http_cb *cb_http_data = (struct pubnub_history_http_cb *)malloc(sizeof(*cb_http_data));
 	cb_http_data->cb = cb;
 	cb_http_data->call_data = cb_data;
 
@@ -844,7 +846,7 @@ struct pubnub_time_http_cb {
 static void
 pubnub_time_http_cb(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data)
 {
-	struct pubnub_time_http_cb *cb_http_data = call_data;
+	struct pubnub_time_http_cb *cb_http_data = (struct pubnub_time_http_cb *)call_data;
 	call_data = cb_http_data->call_data;
 	pubnub_history_cb cb = cb_http_data->cb;
 	free(cb_http_data);
@@ -892,7 +894,7 @@ pubnub_time(struct pubnub *p, long timeout, pubnub_time_cb cb, void *cb_data)
 	if (timeout < 0)
 		timeout = 5;
 
-	struct pubnub_time_http_cb *cb_http_data = malloc(sizeof(*cb_http_data));
+	struct pubnub_time_http_cb *cb_http_data = (struct pubnub_time_http_cb *)malloc(sizeof(*cb_http_data));
 	cb_http_data->cb = cb;
 	cb_http_data->call_data = cb_data;
 

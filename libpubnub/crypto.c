@@ -31,7 +31,7 @@ pubnub_signature(struct pubnub *p, const char *channel, const char *message_str)
 	unsigned char digest[16];
 	MD5_Final(digest, &md5);
 
-	char *signature = malloc(33);
+	char *signature = (char*)malloc(33);
 	for (int i = 0; i < 16; i++) {
 		snprintf(&signature[i * 2], 3, "%02x", digest[i]);
 	}
@@ -80,7 +80,7 @@ pubnub_encrypt(const char *cipher_key, const char *message_str)
 	}
 
 	int message_len = strlen(message_str);
-	unsigned char *cipher_data = malloc(message_len + EVP_CIPHER_block_size(EVP_aes_256_cbc()));
+	unsigned char *cipher_data = (unsigned char*)malloc(message_len + EVP_CIPHER_block_size(EVP_aes_256_cbc()));
 	int cipher_len = 0;
 
 	if (!EVP_EncryptUpdate(&aes256, cipher_data, &cipher_len, (unsigned char *) message_str, message_len)) {
@@ -142,7 +142,7 @@ pubnub_decrypt(const char *cipher_key, const char *b64_str)
 	BIO *bmem = BIO_new_mem_buf((unsigned char *) b64_str, b64_len);
 	BIO *b64 = BIO_push(b64f, bmem);
 	/* b64_len is fine upper bound for raw data length... */
-	unsigned char *cipher_data = malloc(b64_len);
+	unsigned char *cipher_data = (unsigned char*)malloc(b64_len);
 	int cipher_len = BIO_read(b64, cipher_data, b64_len);
 	BIO_free_all(b64);
 
@@ -155,7 +155,7 @@ pubnub_decrypt(const char *cipher_key, const char *b64_str)
 		return NULL;
 	}
 
-	char *message_str = malloc(cipher_len + EVP_CIPHER_block_size(EVP_aes_256_cbc()) + 1);
+	char *message_str = (char*)malloc(cipher_len + EVP_CIPHER_block_size(EVP_aes_256_cbc()) + 1);
 	int message_len = 0;
 	if (!EVP_DecryptUpdate(&aes256, (unsigned char *) message_str, &message_len, cipher_data, cipher_len)) {
 		DBGMSG("DecryptUpdate error\n");
@@ -208,40 +208,3 @@ error:
 
 	return newlist;
 }
-
-#if 0
-/* Few simple tests. */
-int
-main(void)
-{
-	struct json_object *msg;
-
-	msg = pubnub_encrypt("enigma", "{}");
-	if (!msg) return EXIT_FAILURE;
-	printf("E\t{}\t%s\tIDjZE9BHSjcX67RddfCYYg==\n", json_object_get_string(msg));
-	json_object_put(msg);
-
-	msg = pubnub_encrypt("enigma", "[]");
-	if (!msg) return EXIT_FAILURE;
-	printf("E\t[]\t%s\tNs4TB41JjT2NCXaGLWSPAQ==\n", json_object_get_string(msg));
-	json_object_put(msg);
-
-	msg = pubnub_encrypt("enigma", "\"Pubnub Messaging API 1\"");
-	if (!msg) return EXIT_FAILURE;
-	printf("E\t\"Pubnub Messaging API 1\"\t%s\tf42pIQcWZ9zbTbH8cyLwByD/GsviOE0vcREIEVPARR0=\n", json_object_get_string(msg));
-	json_object_put(msg);
-
-	msg = pubnub_encrypt("enigma", "{\"this stuff\":{\"can get\":\"complicated!\"}}");
-	if (!msg) return EXIT_FAILURE;
-	printf("E\t{\"this stuff\":{\"can get\":\"complicated!\"}}\t%s\tzMqH/RTPlC8yrAZ2UhpEgLKUVzkMI2cikiaVg30AyUu7B6J0FLqCazRzDOmrsFsF\n", json_object_get_string(msg));
-	json_object_put(msg);
-
-	msg = json_object_new_array();
-	json_object_array_add(msg, json_object_new_string("Ns4TB41JjT2NCXaGLWSPAQ=="));
-	struct json_object *newa = pubnub_decrypt_array("enigma", msg);
-	if (!newa) return EXIT_FAILURE;
-	printf("D\tNs4TB41JjT2NCXaGLWSPAQ==\t%s\t[]\n", json_object_get_string(json_object_array_get_idx(newa, 0)));
-
-	return EXIT_SUCCESS;
-}
-#endif
