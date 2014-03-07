@@ -9,7 +9,6 @@ namespace Test {
 #undef PUBNUB_API
 #define PUBNUB_API
 
-#if 0 // ndef EV_READ
 
 struct event {
 	int unused;
@@ -19,7 +18,6 @@ struct event {
 #define EV_WRITE 2
 #define EV_PERSIST 4
 
-#endif
 
 struct pubnub_libevent;
 
@@ -62,7 +60,7 @@ int evtimer_del(struct event *)
 	return 0;
 }
 
-void event_set(void *, int, int, void(*)(int, short, void *), void *)
+void event_set(event *, int, short, void(*)(int, short, void *), void *)
 {
 }
 

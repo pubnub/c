@@ -8,7 +8,7 @@ namespace Test {
 class CryptoTest : public ::testing::Test
 {
 protected:
-	void encryptTest(char *src, char *exp) {
+	void encryptTest(const char *src, const char *exp) {
 		msg = pubnub_encrypt("enigma", src);
 		ASSERT_TRUE(msg);
 		EXPECT_STREQ(exp, json_object_get_string(msg));
@@ -46,12 +46,15 @@ class SignatureTest : public ::testing::Test
 protected:
 	virtual void SetUp() {
 		signature = NULL;
-		p.publish_key = "pub_key";
-		p.subscribe_key = "sub_key";
-		p.secret_key = "";
+		p.publish_key = strdup("pub_key");
+		p.subscribe_key = strdup("sub_key");
+		p.secret_key = strdup("#12345#");
 	}
 	virtual void TearDown() {
 		free(signature);
+		free(p.publish_key);
+		free(p.subscribe_key);
+		free(p.secret_key);
 	}
 
 	struct pubnub p;
@@ -59,12 +62,12 @@ protected:
 };
 
 TEST_F(SignatureTest, Sample1) {
-	p.secret_key = "#12345#";
 	signature = pubnub_signature(&p, "enigma", "{message:\"Message\"}");
 	EXPECT_STREQ(signature, "7d40b6468716629f53828b2054c51198");
 }
 
 TEST_F(SignatureTest, Sample2) {
+	p.secret_key[0] = 0;
 	signature = pubnub_signature(&p, "enigma", "{number1:10, number2: 20}");
 	EXPECT_STREQ(signature, "f32a2342e1202a48a5a037846b278927");
 }
