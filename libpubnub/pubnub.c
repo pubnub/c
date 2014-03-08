@@ -379,15 +379,15 @@ PUBNUB_API
 void
 pubnub_done(struct pubnub *p)
 {
-	if (p->cb->done)
-		p->cb->done(p, p->cb_data);
-
 	if (p->curl) {
 		curl_multi_remove_handle(p->curlm, p->curl);
 		curl_easy_cleanup(p->curl);
 	}
 	curl_multi_cleanup(p->curlm);
 	curl_slist_free_all(p->curl_headers);
+
+	if (p->cb->done)
+		p->cb->done(p, p->cb_data);
 
 	printbuf_free(p->body);
 	printbuf_free(p->url);
