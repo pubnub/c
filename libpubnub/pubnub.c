@@ -598,7 +598,7 @@ struct pubnub_subscribe_http_cb {
 static void
 pubnub_subscribe_cancel_cb(struct pubnub *p, void *ctx_data, void *call_data)
 {
-	struct pubnub_subscribe_http_cb *cb_http_data = call_data;
+	struct pubnub_subscribe_http_cb *cb_http_data = (struct pubnub_subscribe_http_cb *)call_data;
 	free(cb_http_data->channelset);
 	free(cb_http_data);
 }
@@ -611,7 +611,9 @@ pubnub_subscribe_http_cb(struct pubnub *p, enum pubnub_res result, struct json_o
 	call_data = cb_http_data->call_data;
 	pubnub_subscribe_cb cb = cb_http_data->cb;
 	free(cb_http_data);
-	p->finished_cb = p->finished_cb_data = p->cancel_cb = NULL;
+	p->finished_cb = NULL;
+	p->finished_cb_data = NULL;
+	p->cancel_cb = NULL;
 
 	if (result != PNR_OK) {
 		/* pubnub_handle_error() has been already called along
@@ -766,7 +768,8 @@ pubnub_history_http_cb(struct pubnub *p, enum pubnub_res result, struct json_obj
 	call_data = cb_http_data->call_data;
 	pubnub_history_cb cb = cb_http_data->cb;
 	free(cb_http_data);
-	p->finished_cb = p->finished_cb_data = NULL;
+	p->finished_cb = NULL;
+	p->finished_cb_data = NULL;
 
 	if (result != PNR_OK) {
 		/* pubnub_handle_error() has been already called along
@@ -869,7 +872,8 @@ pubnub_time_http_cb(struct pubnub *p, enum pubnub_res result, struct json_object
 	call_data = cb_http_data->call_data;
 	pubnub_history_cb cb = cb_http_data->cb;
 	free(cb_http_data);
-	p->finished_cb = p->finished_cb_data = NULL;
+	p->finished_cb = NULL;
+	p->finished_cb_data = NULL;
 
 	if (result != PNR_OK) {
 		/* pubnub_handle_error() has been already called along
