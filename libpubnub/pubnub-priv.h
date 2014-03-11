@@ -9,6 +9,7 @@
 struct json_object;
 
 typedef void (*pubnub_http_cb)(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data);
+typedef void (*pubnub_cancel_cb)(struct pubnub *p, void *ctx_data, void *call_data);
 
 struct pubnub {
 	char *publish_key, *subscribe_key;
@@ -32,8 +33,11 @@ struct pubnub {
 	void *finished_cb_data;
 	/* True if finished_cb points to our internal handler;
 	 * in that case, we can still call pubnub_handle_error()
-	 * later and therefore shall not call stop_wait just yet. */
+	 * later and therefore shall not call stop_wait just yet;
+	 * also, we will consider it our responsibility to free()
+	 * finished_cb_data in case of cancellation. */
 	bool finished_cb_internal;
+	pubnub_cancel_cb cancel_cb;
 
 	/* Error retry policy. */
 	unsigned int error_retry_mask;

@@ -159,7 +159,12 @@ struct pubnub *pubnub_init(const char *publish_key, const char *subscribe_key,
 			const struct pubnub_callbacks *cb, void *cb_data);
 
 /* Deinitialize the given PubNub context, freeing all memory that is
- * associated with it. */
+ * associated with it.
+ *
+ * Note that calling pubnub_done() while a PubNub call is in progress
+ * is undefined as call cancellation is currently not supported.  It may
+ * work fine in practice depending on your event loop, but your callback
+ * will not be called (this may change in the future). */
 void pubnub_done(struct pubnub *p);
 
 
