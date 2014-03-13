@@ -664,6 +664,7 @@ error:
 	char **channels = malloc((msg_n + 1) * sizeof(channels[0]));
 	if (channelset_json) {
 		if (!json_object_is_type(channelset_json, json_type_string)) {
+			free(channels);
 			result = PNR_FORMAT_ERROR;
 			goto error;
 		}
