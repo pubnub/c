@@ -751,6 +751,45 @@ pubnub_subscribe_multi(struct pubnub *p, const char *channels[], int channels_n,
 }
 
 
+PUBNUB_API
+void
+pubnub_unsubscribe(struct pubnub *p, const char *channels[], int channels_n,
+		long timeout, pubnub_unsubscribe_cb cb, void *cb_data)
+{
+	/* We must have an ongoing subscribe. */
+	if (!p->method || strcmp(p->method, "subscribe")) {
+		if (cb)
+			cb(p, pubnub_error_report(p, PNR_OCCUPIED, NULL, "!subscribe", false),
+				NULL, p->cb_data, cb_data);
+		return;
+	}
+
+	/* First, break off the existing subscribe connection. */
+	pubnub_connection_cancel(p);
+
+	/* Next thing, we issue a leave() call. */
+	p->method = "leave";
+
+	if (timeout < 0)
+		timeout = 5;
+
+	struct printbuf *channelset = printbuf_new();
+	for (int i = 0; i < channels_n; i++) {
+		printbuf_memappend_fast(channelset, channels[i], strlen(channels[i]));
+		if (i < channels_n - 1)
+			printbuf_memappend_fast(channelset, ",", 1);
+		else
+			printbuf_memappend_fast(channelset, "" /* \0 */, 1);
+	}
+
+	const char *urlelems[] = { "v2", "presence", "sub-key", p->subscribe_key, "channel", channelset->buf, "leave", NULL };
+	const char *qparamelems[] = { "uuid", p->uuid, NULL };
+	pubnub_http_setup(p, urlelems, qparamelems, timeout);
+	pubnub_http_request(p, (pubnub_http_cb) cb, cb_data, false, true);
+	printbuf_free(channelset);
+}
+
+
 struct pubnub_history_http_cb {
 	pubnub_history_cb cb;
 	void *call_data;

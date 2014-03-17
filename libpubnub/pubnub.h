@@ -66,6 +66,7 @@ enum pubnub_res {
  * an extra NULL pointer at the end of the array. */
 typedef void (*pubnub_publish_cb)(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data);
 typedef void (*pubnub_subscribe_cb)(struct pubnub *p, enum pubnub_res result, char **channels, struct json_object *response, void *ctx_data, void *call_data);
+typedef void (*pubnub_unsubscribe_cb)(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data);
 typedef void (*pubnub_history_cb)(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data);
 typedef void (*pubnub_here_now_cb)(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data);
 typedef void (*pubnub_time_cb)(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data);
@@ -118,6 +119,7 @@ struct pubnub_callbacks {
 
 	pubnub_publish_cb publish;
 	pubnub_subscribe_cb subscribe;
+	pubnub_unsubscribe_cb unsubscribe;
 	pubnub_history_cb history;
 	pubnub_here_now_cb here_now;
 	pubnub_time_cb time;
@@ -276,6 +278,19 @@ void pubnub_subscribe(struct pubnub *p, const char *channel,
  * the originating channel of each message. */
 void pubnub_subscribe_multi(struct pubnub *p, const char *channels[], int channels_n,
 		long timeout, pubnub_subscribe_cb cb, void *cb_data);
+
+/* Cancel an ongoing subscription.  The @channels parameter must
+ * currently match the set of subscribed channels.  In the future,
+ * if the subscribe channel set is larger than the unsubscribe
+ * channels set, subscribe will be automatically restarted with
+ * the remaining channels.
+ *
+ * This cancellation involves an HTTP notification call, which is
+ * what the @timeout parameter pertains to.  If no channels remain
+ * in the subscription set, the subscribe callback is invokved with
+ * PNR_CANCELLED result. */
+void pubnub_unsubscribe(struct pubnub *p, const char *channels[], int channels_n,
+		long timeout, pubnub_unsubscribe_cb cb, void *cb_data);
 
 /* List the last @limit messages that appeared on a @channel.
  * You do not need to be subscribed to the channel. The response
