@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -199,6 +200,15 @@ pubnub_connection_cleanup(struct pubnub *p, bool stop_wait)
 	p->curl = NULL;
 }
 
+/* Cancel ongoing HTTP connection, freeing all request resources and
+ * invoking the relevant callbacks. */
+static void
+pubnub_connection_cancel(struct pubnub *p)
+{
+	pubnub_connection_cleanup(p, false);
+	p->finished_cb(p, PNR_CANCELLED, NULL, p->cb_data, p->finished_cb_data);
+}
+
 /* Let curl take care of the ongoing connections, then check for new events
  * and handle them (call the user callbacks etc.).  If stop_wait == true,
  * we have already called cb->wait and need to call cb->stop_wait if the
@@ -379,18 +389,13 @@ PUBNUB_API
 void
 pubnub_done(struct pubnub *p)
 {
-	if (p->finished_cb && p->finished_cb_internal) {
-		/* Release internal callback resources. */
-		if (p->cancel_cb)
-			p->cancel_cb(p, p->cb_data, p->finished_cb_data);
-		else if (p->finished_cb_data)
-			free(p->finished_cb_data);
+	if (p->method) {
+		/* Ongoing request, cancel. */
+		pubnub_connection_cancel(p);
+		p->method = NULL;
 	}
+	assert(!p->curl);
 
-	if (p->curl) {
-		curl_multi_remove_handle(p->curlm, p->curl);
-		curl_easy_cleanup(p->curl);
-	}
 	curl_multi_cleanup(p->curlm);
 	curl_slist_free_all(p->curl_headers);
 
@@ -594,14 +599,6 @@ struct pubnub_subscribe_http_cb {
 };
 
 static void
-pubnub_subscribe_cancel_cb(struct pubnub *p, void *ctx_data, void *call_data)
-{
-	struct pubnub_subscribe_http_cb *cb_http_data = call_data;
-	free(cb_http_data->channelset);
-	free(cb_http_data);
-}
-
-static void
 pubnub_subscribe_http_cb(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data)
 {
 	struct pubnub_subscribe_http_cb *cb_http_data = call_data;
@@ -609,7 +606,7 @@ pubnub_subscribe_http_cb(struct pubnub *p, enum pubnub_res result, struct json_o
 	call_data = cb_http_data->call_data;
 	pubnub_subscribe_cb cb = cb_http_data->cb;
 	free(cb_http_data);
-	p->finished_cb = p->finished_cb_data = p->cancel_cb = NULL;
+	p->finished_cb = p->finished_cb_data = NULL;
 
 	if (result != PNR_OK) {
 		/* pubnub_handle_error() has been already called along
@@ -732,7 +729,6 @@ pubnub_subscribe(struct pubnub *p, const char *channel,
 	const char *qparamelems[] = { "uuid", p->uuid, NULL };
 	pubnub_http_setup(p, urlelems, qparamelems, timeout);
 	pubnub_http_request(p, pubnub_subscribe_http_cb, cb_http_data, true, true);
-	p->cancel_cb = pubnub_subscribe_cancel_cb;
 }
 
 PUBNUB_API

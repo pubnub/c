@@ -48,6 +48,9 @@ enum pubnub_res {
 	PNR_HTTP_ERROR,
 	/* Unexpected input in received JSON. */
 	PNR_FORMAT_ERROR,
+	/* Cancellation by user request. A chance to free resources associated
+	 * with an ongoing subscribe. (Will not retry.) */
+	PNR_CANCELLED,
 };
 
 /* ctx_data is callbacks data passed to pubnub_init().
@@ -204,8 +207,8 @@ void pubnub_set_nosignal(struct pubnub *p, bool nosignal);
  * and retry is enabled for that error. This is controlled by
  * @retry_mask; if PNR_xxx-th bit is set, the call is retried in case
  * of the PNR_xxx result; this is the case for recoverable errors,
- * specifically PNR_OK and PNR_OCCUPIED bits are always ignored (this
- * may be further extended in the future). For example,
+ * specifically PNR_OK, PNR_OCCUPIED and PNR_CANCELLED bits are always
+ * ignored (this may be further extended in the future). For example,
  *
  * 	pubnub_error_policy(p, 0, ...);
  * will turn off automatic error retry for all errors,
