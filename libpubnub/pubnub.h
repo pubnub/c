@@ -262,20 +262,33 @@ void pubnub_publish(struct pubnub *p, const char *channel,
 		struct json_object *message,
 		long timeout, pubnub_publish_cb cb, void *cb_data);
 
-/* Subscribe to @channel. The response will be a JSON array with
- * one received message per item.
+/* Subscribe to @channel, in addition to the currently subscribed channels.
  *
- * Messages published on @channel since the last subscribe call
- * are returned.  The first call will typically just establish
- * the context and return immediately with an empty response array.
- * Usually, you would issue the subscribe request in a loop. */
+ * The response will be a JSON array with one received message per item.
+ * Messages published on the currently subscribed channels since the
+ * last subscribe call are returned.  The response will contain
+ * received messages from any of subscribed channels; use the channels
+ * callback parameter (or pubnub_sync_last_channels()) to determine
+ * the originating channel of each message.
+ *
+ * In other words, this function does two things - (i) adds @channel
+ * to the set of subscribed channels, if not already there; (ii) ask for
+ * new messages appearing in the whole set of currently subscribed channels,
+ * calling the callback when some arrive.  If you would like to do just
+ * (ii), you can also pass NULL as @channel.
+ *
+ * The first call will typically just establish the context and return
+ * immediately with an empty response array. Usually, you would issue
+ * the subscribe request in a loop.
+ *
+ * TODO: If a subscribe is already ongoing, the set of subscribed channels
+ * will be modified, but your callback will get PNR_OCCUPIED and ongoing
+ * subscribe will not get restarted. */
 void pubnub_subscribe(struct pubnub *p, const char *channel,
 		long timeout, pubnub_subscribe_cb cb, void *cb_data);
 
-/* Subscribe to a set of @channels. The response will contain
- * received messages from any of these channels; use the channels
- * callback parameter (or pubnub_sync_last_channels()) to determine
- * the originating channel of each message. */
+/* Subscribe to a set of @channels (in addition to already subscribed
+ * channels) all at once. */
 void pubnub_subscribe_multi(struct pubnub *p, const char *channels[], int channels_n,
 		long timeout, pubnub_subscribe_cb cb, void *cb_data);
 
@@ -288,7 +301,10 @@ void pubnub_subscribe_multi(struct pubnub *p, const char *channels[], int channe
  * This cancellation involves an HTTP notification call, which is
  * what the @timeout parameter pertains to.  If no channels remain
  * in the subscription set, the subscribe callback is invokved with
- * PNR_CANCELLED result. */
+ * PNR_CANCELLED result.
+ *
+ * TODO: If a subscribe is already ongoing, it will be cancelled but not
+ * restarted. */
 void pubnub_unsubscribe(struct pubnub *p, const char *channels[], int channels_n,
 		long timeout, pubnub_unsubscribe_cb cb, void *cb_data);
 

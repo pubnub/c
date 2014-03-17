@@ -15,7 +15,10 @@ struct pubnub {
 	char *secret_key, *cipher_key;
 	char *origin;
 	char *uuid;
+
 	char time_token[64];
+	char **channelset;
+	int channelset_n;
 
 	const struct pubnub_callbacks *cb;
 	void *cb_data;

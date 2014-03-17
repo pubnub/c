@@ -350,6 +350,96 @@ pubnub_gen_uuid(void)
 	return strdup(uuidbuf);
 }
 
+
+/* Add all items from |channels| to channelset, unless they are already in it.
+ * Returns the number of channels actually added. */
+static int
+pubnub_channelset_add(struct pubnub *p, const char **channels, int channels_n)
+{
+	bool channels_mask[channels_n];
+	memset(&channels_mask, 0, sizeof(channels_mask));
+	int channels_new_n = channels_n;
+
+	/* We anticipate small |channelset| and small (or singular) |channels|,
+	 * therefore using just a trivial O(MN) algorithm here. */
+	for (int i = 0; i < p->channelset_n; i++) {
+		for (int j = 0; j < channels_n; j++) {
+			if (channels_mask[j])
+				continue;
+			if (!strcmp(p->channelset[i], channels[j])) {
+				channels_mask[j] = true;
+				channels_new_n--;
+				break;
+			}
+		}
+	}
+
+	if (channels_new_n == 0) {
+		/* No new channel to subscribe to. */
+		return 0;
+	}
+
+	int i = p->channelset_n;
+	p->channelset_n += channels_new_n;
+	p->channelset = realloc(p->channelset, p->channelset_n * sizeof(p->channelset[0]));
+	for (int j = 0; j < channels_n; j++) {
+		if (channels_mask[j])
+			continue;
+		p->channelset[i++] = strdup(channels[j]);
+	}
+	return channels_new_n;
+}
+
+/* Remove all items from |channels| from the channelset (if they are listed).
+ * Returns the number of channels actually removed. */
+static int
+pubnub_channelset_rm(struct pubnub *p, const char **channels, int channels_n)
+{
+	bool channels_mask[channels_n];
+	memset(&channels_mask, 0, sizeof(channels_mask));
+	int channels_new_n = channels_n;
+
+	/* We anticipate small |channelset| and small (or singular) |channels|,
+	 * therefore using just a trivial O(MN) algorithm here. */
+	for (int i = 0; i < p->channelset_n; i++) {
+		for (int j = 0; j < channels_n; j++) {
+			if (channels_mask[j])
+				continue;
+			if (!strcmp(p->channelset[i], channels[j])) {
+				channels_mask[j] = true;
+				channels_new_n--;
+
+				free(p->channelset[i]);
+				/* Replace the free spot with the last channel
+				 * and revisit the spot in next iteration. */
+				p->channelset[i] = p->channelset[--p->channelset_n];
+				i--;
+				break;
+			}
+		}
+	}
+
+	if (channels_new_n == channels_n) {
+		/* No channel removed. */
+		return 0;
+	}
+
+	p->channelset = realloc(p->channelset, p->channelset_n * sizeof(p->channelset[0]));
+	return channels_n - channels_new_n;
+}
+
+static void
+pubnub_channelset_done(struct pubnub *p)
+{
+	for (int i = 0; i < p->channelset_n; i++) {
+		free(p->channelset[i]);
+	}
+	p->channelset_n = 0;
+	free(p->channelset);
+	p->channelset = NULL;
+}
+
+
 PUBNUB_API
 struct pubnub *
 pubnub_init(const char *publish_key, const char *subscribe_key,
@@ -403,6 +493,8 @@ pubnub_done(struct pubnub *p)
 
 	if (p->cb->done)
 		p->cb->done(p, p->cb_data);
+
+	pubnub_channelset_done(p);
 
 	printbuf_free(p->body);
 	printbuf_free(p->url);
@@ -704,14 +796,15 @@ error:
 	cb(p, result, channels, msg, ctx_data, call_data);
 }
 
-PUBNUB_API
-void
-pubnub_subscribe(struct pubnub *p, const char *channel,
+/* This is the common backend for pubnub_subscribe() and pubnub_subscribe_multi(). */
+static void
+pubnub_subscribe_do(struct pubnub *p, const char *channelset,
 		long timeout, pubnub_subscribe_cb cb, void *cb_data)
 {
 	if (!cb) cb = p->cb->subscribe;
 
 	if (p->method) {
+		/* TODO if ongoing subscribe, simply restart it with the new channelset. */
 		if (cb)
 			cb(p, pubnub_error_report(p, PNR_OCCUPIED, NULL, "subscribe", false),
 				NULL, NULL, p->cb_data, cb_data);
@@ -723,11 +816,11 @@ pubnub_subscribe(struct pubnub *p, const char *channel,
 		timeout = 310;
 
 	struct pubnub_subscribe_http_cb *cb_http_data = malloc(sizeof(*cb_http_data));
-	cb_http_data->channelset = strdup(channel);
+	cb_http_data->channelset = strdup(channelset);
 	cb_http_data->cb = cb;
 	cb_http_data->call_data = cb_data;
 
-	const char *urlelems[] = { "subscribe", p->subscribe_key, channel, "0", p->time_token, NULL };
+	const char *urlelems[] = { "subscribe", p->subscribe_key, channelset, "0", p->time_token, NULL };
 	const char *qparamelems[] = { "uuid", p->uuid, NULL };
 	pubnub_http_setup(p, urlelems, qparamelems, timeout);
 	pubnub_http_request(p, pubnub_subscribe_http_cb, cb_http_data, true, true);
@@ -735,18 +828,42 @@ pubnub_subscribe(struct pubnub *p, const char *channel,
 
 PUBNUB_API
 void
+pubnub_subscribe(struct pubnub *p, const char *channel,
+		long timeout, pubnub_subscribe_cb cb, void *cb_data)
+{
+	/* Simply defer to _multi(). */
+	if (channel) {
+		pubnub_subscribe_multi(p, &channel, 1, timeout, cb, cb_data);
+	} else {
+		pubnub_subscribe_multi(p, NULL, 0, timeout, cb, cb_data);
+	}
+}
+
+PUBNUB_API
+void
 pubnub_subscribe_multi(struct pubnub *p, const char *channels[], int channels_n,
 		long timeout, pubnub_subscribe_cb cb, void *cb_data)
 {
+	if (channels != NULL)
+		pubnub_channelset_add(p, channels, channels_n);
+
+	if (p->channelset == NULL) {
+		/* No channels to listen to. Straight cancel. */
+		if (cb) cb(p, PNR_CANCELLED, NULL, NULL, p->cb_data, cb_data);
+		return;
+	}
+
 	struct printbuf *channelset = printbuf_new();
-	for (int i = 0; i < channels_n; i++) {
-		printbuf_memappend_fast(channelset, channels[i], strlen(channels[i]));
-		if (i < channels_n - 1)
+	for (int i = 0; i < p->channelset_n; i++) {
+		printbuf_memappend_fast(channelset, p->channelset[i], strlen(p->channelset[i]));
+		if (i < p->channelset_n - 1)
 			printbuf_memappend_fast(channelset, ",", 1);
 		else
 			printbuf_memappend_fast(channelset, "" /* \0 */, 1);
 	}
-	pubnub_subscribe(p, channelset->buf, timeout, cb, cb_data);
+
+	pubnub_subscribe_do(p, channelset->buf, timeout, cb, cb_data);
+
 	printbuf_free(channelset);
 }
 
@@ -756,15 +873,21 @@ void
 pubnub_unsubscribe(struct pubnub *p, const char *channels[], int channels_n,
 		long timeout, pubnub_unsubscribe_cb cb, void *cb_data)
 {
-	/* We must have an ongoing subscribe. */
-	if (!p->method || strcmp(p->method, "subscribe")) {
-		if (cb)
-			cb(p, pubnub_error_report(p, PNR_OCCUPIED, NULL, "!subscribe", false),
-				NULL, p->cb_data, cb_data);
-		return;
+	/* Edit the channelset. */
+	if (p->channelset) {
+		if (channels != NULL) {
+			pubnub_channelset_rm(p, channels, channels_n);
+		} else {
+			/* Unsubscribe from all channels. */
+			pubnub_channelset_done(p);
+		}
 	}
 
-	/* First, break off the existing subscribe connection. */
+	/* If we do not have an ongoing subscribe, that'll be all. */
+	if (!p->method || strcmp(p->method, "subscribe"))
+		return;
+
+	/* Break off the existing subscribe connection. */
 	pubnub_connection_cancel(p);
 
 	/* Next thing, we issue a leave() call. */
@@ -787,6 +910,8 @@ pubnub_unsubscribe(struct pubnub *p, const char *channels[], int channels_n,
 	pubnub_http_setup(p, urlelems, qparamelems, timeout);
 	pubnub_http_request(p, (pubnub_http_cb) cb, cb_data, false, true);
 	printbuf_free(channelset);
+
+	/* TODO: Restart the subscribe automatically if channelset is non-empty. */
 }
 
 
