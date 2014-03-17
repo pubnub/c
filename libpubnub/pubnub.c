@@ -131,7 +131,7 @@ pubnub_handle_error(struct pubnub *p, enum pubnub_res result, json_object *msg, 
 		pubnub_error_report(p, result, msg, method, false);
 		p->cb->stop_wait(p, p->cb_data); // unconditional!
 
-		if (cb)
+		if (cb && p->finished_cb)
 			p->finished_cb(p, result, msg, p->cb_data, p->finished_cb_data);
 
 		return !cb;
@@ -186,7 +186,8 @@ pubnub_connection_finished(struct pubnub *p, CURLcode res, bool stop_wait)
 	/* The regular callback */
 	if (!p->finished_cb_internal)
 		p->cb->stop_wait(p, p->cb_data);
-	p->finished_cb(p, PNR_OK, response, p->cb_data, p->finished_cb_data);
+	if (p->finished_cb)
+		p->finished_cb(p, PNR_OK, response, p->cb_data, p->finished_cb_data);
 	json_object_put(response);
 }
 
@@ -206,7 +207,8 @@ static void
 pubnub_connection_cancel(struct pubnub *p)
 {
 	pubnub_connection_cleanup(p, false);
-	p->finished_cb(p, PNR_CANCELLED, NULL, p->cb_data, p->finished_cb_data);
+	if (p->finished_cb)
+		p->finished_cb(p, PNR_CANCELLED, NULL, p->cb_data, p->finished_cb_data);
 }
 
 /* Let curl take care of the ongoing connections, then check for new events
@@ -611,7 +613,7 @@ pubnub_subscribe_http_cb(struct pubnub *p, enum pubnub_res result, struct json_o
 	if (result != PNR_OK) {
 		/* pubnub_handle_error() has been already called along
 		 * the way to here. */
-		cb(p, result, NULL, response, ctx_data, call_data);
+		if (cb) cb(p, result, NULL, response, ctx_data, call_data);
 		free(channelset);
 		return;
 	}
@@ -620,7 +622,7 @@ pubnub_subscribe_http_cb(struct pubnub *p, enum pubnub_res result, struct json_o
 	if (!json_object_is_type(response, json_type_array)) {
 		result = PNR_FORMAT_ERROR;
 error:
-		if (pubnub_handle_error(p, result, response, "subscribe", false))
+		if (pubnub_handle_error(p, result, response, "subscribe", false) && cb)
 			cb(p, result, NULL, response, ctx_data, call_data);
 		free(channelset);
 		return;
@@ -766,7 +768,7 @@ pubnub_history_http_cb(struct pubnub *p, enum pubnub_res result, struct json_obj
 	if (result != PNR_OK) {
 		/* pubnub_handle_error() has been already called along
 		 * the way to here. */
-		cb(p, result, response, ctx_data, call_data);
+		if (cb) cb(p, result, response, ctx_data, call_data);
 		return;
 	}
 
@@ -774,7 +776,7 @@ pubnub_history_http_cb(struct pubnub *p, enum pubnub_res result, struct json_obj
 	if (!json_object_is_type(response, json_type_array)) {
 		result = PNR_FORMAT_ERROR;
 error:
-		if (pubnub_handle_error(p, result, response, "history", false))
+		if (pubnub_handle_error(p, result, response, "history", false) && cb)
 			cb(p, result, response, ctx_data, call_data);
 		return;
 	}
@@ -793,7 +795,7 @@ error:
 
 	/* Finally call the user callback. */
 	p->cb->stop_wait(p, p->cb_data);
-	cb(p, result, response, ctx_data, call_data);
+	if (cb) cb(p, result, response, ctx_data, call_data);
 
 	if (put_response)
 		json_object_put(response);
@@ -869,14 +871,14 @@ pubnub_time_http_cb(struct pubnub *p, enum pubnub_res result, struct json_object
 	if (result != PNR_OK) {
 		/* pubnub_handle_error() has been already called along
 		 * the way to here. */
-		cb(p, result, response, ctx_data, call_data);
+		if (cb) cb(p, result, response, ctx_data, call_data);
 		return;
 	}
 
 	/* Response must be an array. */
 	if (!json_object_is_type(response, json_type_array)) {
 		result = PNR_FORMAT_ERROR;
-		if (pubnub_handle_error(p, result, response, "time", false))
+		if (pubnub_handle_error(p, result, response, "time", false) && cb)
 			cb(p, result, response, ctx_data, call_data);
 		return;
 	}
@@ -887,7 +889,7 @@ pubnub_time_http_cb(struct pubnub *p, enum pubnub_res result, struct json_object
 
 	/* Finally call the user callback. */
 	p->cb->stop_wait(p, p->cb_data);
-	cb(p, result, ts, ctx_data, call_data);
+	if (cb) cb(p, result, ts, ctx_data, call_data);
 
 	json_object_put(ts);
 }
