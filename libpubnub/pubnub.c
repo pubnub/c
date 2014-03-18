@@ -869,31 +869,17 @@ error:
 	cb(p, result, channels, msg, ctx_data, call_data);
 }
 
-/* This is the common backend for pubnub_subscribe() and pubnub_subscribe_multi(). */
+/* This is the common backend for subscribe HTTP API calls. */
 static void
-pubnub_subscribe_do(struct pubnub *p, const char *channelset,
+pubnub_subscribe_do(struct pubnub *p, const char *channelset, char *time_token,
 		long timeout, pubnub_subscribe_cb cb, void *cb_data)
 {
-	if (!cb) cb = p->cb->subscribe;
-
-	if (p->method) {
-		/* TODO if ongoing subscribe, simply restart it with the new channelset. */
-		if (cb)
-			cb(p, pubnub_error_report(p, PNR_OCCUPIED, NULL, "subscribe", false),
-				NULL, NULL, p->cb_data, cb_data);
-		return;
-	}
-	p->method = "subscribe";
-
-	if (timeout < 0)
-		timeout = 310;
-
 	struct pubnub_subscribe_http_cb *cb_http_data = malloc(sizeof(*cb_http_data));
 	cb_http_data->channelset = strdup(channelset);
 	cb_http_data->cb = cb;
 	cb_http_data->call_data = cb_data;
 
-	const char *urlelems[] = { "subscribe", p->subscribe_key, channelset, "0", p->time_token, NULL };
+	const char *urlelems[] = { "subscribe", p->subscribe_key, channelset, "0", time_token, NULL };
 	const char *qparamelems[] = { "uuid", p->uuid, NULL };
 	pubnub_http_setup(p, urlelems, qparamelems, timeout);
 	pubnub_http_request(p, pubnub_subscribe_http_cb, cb_http_data, true, true);
@@ -917,6 +903,16 @@ void
 pubnub_subscribe_multi(struct pubnub *p, const char *channels[], int channels_n,
 		long timeout, pubnub_subscribe_cb cb, void *cb_data)
 {
+	if (!cb) cb = p->cb->subscribe;
+
+	if (p->method) {
+		/* TODO if ongoing subscribe, simply restart it with the new channelset. */
+		if (cb)
+			cb(p, pubnub_error_report(p, PNR_OCCUPIED, NULL, "subscribe", false),
+				NULL, NULL, p->cb_data, cb_data);
+		return;
+	}
+
 	if (channels != NULL)
 		pubnub_channelset_add(p, channels, channels_n);
 
@@ -926,8 +922,12 @@ pubnub_subscribe_multi(struct pubnub *p, const char *channels[], int channels_n,
 		return;
 	}
 
+	p->method = "subscribe";
+	if (timeout < 0)
+		timeout = 310;
+
 	struct printbuf *channelset = pubnub_channelset_printbuf((const char **) p->channelset, p->channelset_n);
-	pubnub_subscribe_do(p, channelset->buf, timeout, cb, cb_data);
+	pubnub_subscribe_do(p, channelset->buf, p->time_token, timeout, cb, cb_data);
 	printbuf_free(channelset);
 }
 
