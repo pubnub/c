@@ -351,6 +351,20 @@ pubnub_gen_uuid(void)
 }
 
 
+static struct printbuf *
+pubnub_channelset_printbuf(const char **channels, int channels_n)
+{
+	struct printbuf *channelset = printbuf_new();
+	for (int i = 0; i < channels_n; i++) {
+		printbuf_memappend_fast(channelset, channels[i], strlen(channels[i]));
+		if (i < channels_n - 1)
+			printbuf_memappend_fast(channelset, ",", 1);
+		else
+			printbuf_memappend_fast(channelset, "" /* \0 */, 1);
+	}
+	return channelset;
+}
+
 /* Add all items from |channels| to channelset, unless they are already in it.
  * Returns the number of channels actually added. */
 static int
@@ -912,17 +926,8 @@ pubnub_subscribe_multi(struct pubnub *p, const char *channels[], int channels_n,
 		return;
 	}
 
-	struct printbuf *channelset = printbuf_new();
-	for (int i = 0; i < p->channelset_n; i++) {
-		printbuf_memappend_fast(channelset, p->channelset[i], strlen(p->channelset[i]));
-		if (i < p->channelset_n - 1)
-			printbuf_memappend_fast(channelset, ",", 1);
-		else
-			printbuf_memappend_fast(channelset, "" /* \0 */, 1);
-	}
-
+	struct printbuf *channelset = pubnub_channelset_printbuf((const char **) p->channelset, p->channelset_n);
 	pubnub_subscribe_do(p, channelset->buf, timeout, cb, cb_data);
-
 	printbuf_free(channelset);
 }
 
@@ -970,16 +975,6 @@ pubnub_unsubscribe(struct pubnub *p, const char *channels[], int channels_n,
 		}
 	}
 
-	/* Prepare a set of channels for the leave() call. */
-	struct printbuf *channelset = printbuf_new();
-	for (int i = 0; i < channels_n; i++) {
-		printbuf_memappend_fast(channelset, channels[i], strlen(channels[i]));
-		if (i < channels_n - 1)
-			printbuf_memappend_fast(channelset, ",", 1);
-		else
-			printbuf_memappend_fast(channelset, "" /* \0 */, 1);
-	}
-
 	bool cb_internal = false;
 	/* If we have an ongoing subscribe... */
 	if (p->method) {
@@ -1001,8 +996,8 @@ pubnub_unsubscribe(struct pubnub *p, const char *channels[], int channels_n,
 	}
 
 	/* Next thing, we issue the leave() call. */
+	struct printbuf *channelset = pubnub_channelset_printbuf(channels, channels_n);
 	pubnub_leave(p, channelset->buf, timeout, cb, cb_data, cb_internal);
-
 	printbuf_free(channelset);
 }
 
