@@ -868,6 +868,24 @@ pubnub_subscribe_multi(struct pubnub *p, const char *channels[], int channels_n,
 }
 
 
+static void
+pubnub_leave(struct pubnub *p, const char *channelset,
+		long timeout, pubnub_unsubscribe_cb cb, void *cb_data)
+{
+	/* As this is an internal API, we don't bother with
+	 * the full-fledged PNR_OCCUPIED check. */
+	assert(!p->method);
+	p->method = "leave";
+
+	if (timeout < 0)
+		timeout = 5;
+
+	const char *urlelems[] = { "v2", "presence", "sub-key", p->subscribe_key, "channel", channelset, "leave", NULL };
+	const char *qparamelems[] = { "uuid", p->uuid, NULL };
+	pubnub_http_setup(p, urlelems, qparamelems, timeout);
+	pubnub_http_request(p, (pubnub_http_cb) cb, cb_data, false, true);
+}
+
 PUBNUB_API
 void
 pubnub_unsubscribe(struct pubnub *p, const char *channels[], int channels_n,
@@ -885,19 +903,7 @@ pubnub_unsubscribe(struct pubnub *p, const char *channels[], int channels_n,
 		}
 	}
 
-	/* If we do not have an ongoing subscribe, that'll be all. */
-	if (!p->method || strcmp(p->method, "subscribe"))
-		return;
-
-	/* Break off the existing subscribe connection. */
-	pubnub_connection_cancel(p);
-
-	/* Next thing, we issue a leave() call. */
-	p->method = "leave";
-
-	if (timeout < 0)
-		timeout = 5;
-
+	/* Prepare a set of channels for the leave() call. */
 	struct printbuf *channelset = printbuf_new();
 	for (int i = 0; i < channels_n; i++) {
 		printbuf_memappend_fast(channelset, channels[i], strlen(channels[i]));
@@ -907,10 +913,18 @@ pubnub_unsubscribe(struct pubnub *p, const char *channels[], int channels_n,
 			printbuf_memappend_fast(channelset, "" /* \0 */, 1);
 	}
 
-	const char *urlelems[] = { "v2", "presence", "sub-key", p->subscribe_key, "channel", channelset->buf, "leave", NULL };
-	const char *qparamelems[] = { "uuid", p->uuid, NULL };
-	pubnub_http_setup(p, urlelems, qparamelems, timeout);
-	pubnub_http_request(p, (pubnub_http_cb) cb, cb_data, false, true);
+	/* If we do not have an ongoing subscribe, that'll be all. */
+	if (!p->method || strcmp(p->method, "subscribe")) {
+		printbuf_free(channelset);
+		return;
+	}
+
+	/* Break off the existing subscribe connection. */
+	pubnub_connection_cancel(p);
+
+	/* Next thing, we issue the leave() call. */
+	pubnub_leave(p, channelset->buf, timeout, cb, cb_data);
+
 	printbuf_free(channelset);
 
 	/* TODO: Restart the subscribe automatically if channelset is non-empty. */
