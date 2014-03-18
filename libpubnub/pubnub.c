@@ -920,6 +920,23 @@ pubnub_subscribe_do(struct pubnub *p, const char *channelset, char *time_token,
 	pubnub_http_request(p, pubnub_subscribe_http_cb, cb_http_data, true, true);
 }
 
+static void
+pubnub_join(struct pubnub *p, const char *channelset, long timeout,
+		pubnub_subscribe_cb cb, void *cb_data)
+{
+	/* As this is an internal API, we don't bother with
+	 * the full-fledged PNR_OCCUPIED check and assume
+	 * there is internal callback. */
+	assert(!p->method);
+	p->method = "join";
+
+	timeout /= 60;
+	if (timeout <= 0)
+		timeout = 5;
+
+	pubnub_subscribe_do(p, channelset, "0", timeout, cb, cb_data, true);
+}
+
 PUBNUB_API
 void
 pubnub_subscribe(struct pubnub *p, const char *channel,
@@ -984,13 +1001,8 @@ pubnub_subscribe_multi(struct pubnub *p, const char *channels[], int channels_n,
 		cb = resubscribe_sub_http_cb;
 		cb_data = cb_http_data;
 
-		p->method = "join";
-		timeout /= 60;
-		if (timeout <= 0)
-			timeout = 5;
-
 		struct printbuf *channelset = channelset_printbuf(&cs);
-		pubnub_subscribe_do(p, channelset->buf, "0", timeout, cb, cb_data, true);
+		pubnub_join(p, channelset->buf, timeout, cb, cb_data);
 		printbuf_free(channelset);
 
 	} else {
