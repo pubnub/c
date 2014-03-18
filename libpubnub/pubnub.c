@@ -365,106 +365,103 @@ pubnub_channelset_printbuf(const struct channelset *channelset)
 	return pb;
 }
 
-/* Add all items from |channels| to channelset, unless they are already in it.
+/* Add all items from |src| to |dst|, unless they are already in it.
  * Returns the number of channels actually added. */
 static int
-pubnub_channelset_add(struct pubnub *p, const struct channelset *channelset)
+pubnub_channelset_add(struct channelset *dst, const struct channelset *src)
 {
-	bool channels_mask[channelset->n];
-	memset(&channels_mask, 0, sizeof(channels_mask));
-	int channels_new_n = channelset->n;
+	bool src_mask[src->n];
+	memset(&src_mask, 0, sizeof(src_mask));
+	int src_new_n = src->n;
 
 	/* We anticipate small |channelset| and small (or singular) |channels|,
 	 * therefore using just a trivial O(MN) algorithm here. */
-	for (int i = 0; i < p->channelset.n; i++) {
-		for (int j = 0; j < channelset->n; j++) {
-			if (channels_mask[j])
+	for (int i = 0; i < dst->n; i++) {
+		for (int j = 0; j < src->n; j++) {
+			if (src_mask[j])
 				continue;
-			if (!strcmp(p->channelset.set[i], channelset->set[j])) {
-				channels_mask[j] = true;
-				channels_new_n--;
+			if (!strcmp(dst->set[i], src->set[j])) {
+				src_mask[j] = true;
+				src_new_n--;
 				break;
 			}
 		}
 	}
 
-	if (channels_new_n == 0) {
+	if (src_new_n == 0) {
 		/* No new channel to subscribe to. */
 		return 0;
 	}
 
-	int i = p->channelset.n;
-	p->channelset.n += channels_new_n;
-	p->channelset.set = realloc(p->channelset.set, p->channelset.n * sizeof(p->channelset.set[0]));
-	for (int j = 0; j < channelset->n; j++) {
-		if (channels_mask[j])
+	int i = dst->n;
+	dst->n += src_new_n;
+	dst->set = realloc(dst->set, dst->n * sizeof(dst->set[0]));
+	for (int j = 0; j < src->n; j++) {
+		if (src_mask[j])
 			continue;
-		p->channelset.set[i++] = strdup(channelset->set[j]);
+		dst->set[i++] = strdup(src->set[j]);
 	}
-	return channels_new_n;
+	return src_new_n;
 }
 
-static void pubnub_channelset_done(struct pubnub *p);
+static void pubnub_channelset_done(struct channelset *cs);
 
 /* Remove all items from |channels| from the channelset (if they are listed).
  * Returns the number of channels actually removed. */
 static int
-pubnub_channelset_rm(struct pubnub *p, const struct channelset *channelset)
+pubnub_channelset_rm(struct channelset *dst, const struct channelset *src)
 {
-	bool channels_mask[channelset->n];
-	memset(&channels_mask, 0, sizeof(channels_mask));
-	int channels_new_n = channelset->n;
+	bool src_mask[src->n];
+	memset(&src_mask, 0, sizeof(src_mask));
+	int src_new_n = src->n;
 
 	/* We anticipate small |channelset| and small (or singular) |channels|,
 	 * therefore using just a trivial O(MN) algorithm here. */
-	for (int i = 0; i < p->channelset.n; i++) {
-		for (int j = 0; j < channelset->n; j++) {
-			if (channels_mask[j])
+	for (int i = 0; i < dst->n; i++) {
+		for (int j = 0; j < src->n; j++) {
+			if (src_mask[j])
 				continue;
-			if (!strcmp(p->channelset.set[i], channelset->set[j])) {
-				channels_mask[j] = true;
-				channels_new_n--;
+			if (!strcmp(dst->set[i], src->set[j])) {
+				src_mask[j] = true;
+				src_new_n--;
 
-				free((char *) p->channelset.set[i]);
+				free((char *) dst->set[i]);
 				/* Replace the free spot with the last channel
 				 * and revisit the spot in next iteration. */
-				p->channelset.set[i] = p->channelset.set[--p->channelset.n];
+				dst->set[i] = dst->set[--dst->n];
 				i--;
 				break;
 			}
 		}
 	}
 
-	if (channels_new_n == channelset->n) {
+	if (src_new_n == src->n) {
 		/* No channel removed. */
 		return 0;
 	}
-	if (p->channelset.n == 0) {
+	if (dst->n == 0) {
 		/* All channels removed. */
-		pubnub_channelset_done(p);
-		return channelset->n - channels_new_n;
+		pubnub_channelset_done(dst);
+		return src->n - src_new_n;
 	}
 
-	p->channelset.set = realloc(p->channelset.set, p->channelset.n * sizeof(p->channelset.set[0]));
-	return channelset->n - channels_new_n;
+	dst->set = realloc(dst->set, dst->n * sizeof(dst->set[0]));
+	return src->n - src_new_n;
 }
 
 static void
-pubnub_channelset_done(struct pubnub *p)
+pubnub_channelset_done(struct channelset *cs)
 {
-	for (int i = 0; i < p->channelset.n; i++) {
+	for (int i = 0; i < cs->n; i++) {
 		/* XXX: The typecast here is a hack; we are dealing with
 		 * a const char *channels everywhere else and rely on the
 		 * fact that we are calling pubnub_channelset_done() only on
 		 * those channelsets where we strdup()'d all the strings. */
-		free((char *) p->channelset.set[i]);
+		free((char *) cs->set[i]);
 	}
-	p->channelset.n = 0;
-	free(p->channelset.set);
-	p->channelset.set = NULL;
-
-	/* Restart any upcoming subscribes with a fresh plate. */
-	strcpy(p->time_token, "0");
+	cs->n = 0;
+	free(cs->set);
+	cs->set = NULL;
 }
 
 
@@ -522,7 +519,7 @@ pubnub_done(struct pubnub *p)
 	if (p->cb->done)
 		p->cb->done(p, p->cb_data);
 
-	pubnub_channelset_done(p);
+	pubnub_channelset_done(&p->channelset);
 
 	printbuf_free(p->body);
 	printbuf_free(p->url);
@@ -950,10 +947,16 @@ pubnub_subscribe_multi(struct pubnub *p, const char *channels[], int channels_n,
 		return;
 	}
 
+	if (p->channelset.set == NULL) {
+		/* A fresh subscribe, restart fresh (we do not care about
+		 * messages received while we were not subscribed anywhere). */
+		strcpy(p->time_token, "0");
+	}
+
 	const struct channelset channelset_plus = { .set = channels, .n = channels_n };
 	unsigned newchans = 0;
 	if (channels != NULL)
-		newchans = pubnub_channelset_add(p, &channelset_plus);
+		newchans = pubnub_channelset_add(&p->channelset, &channelset_plus);
 
 	if (p->channelset.set == NULL) {
 		/* No channels to listen to. Straight cancel. */
@@ -1039,10 +1042,10 @@ pubnub_unsubscribe(struct pubnub *p, const char *channels[], int channels_n,
 	const struct channelset channelset_minus = { .set = channels, .n = channels_n };
 	if (p->channelset.set) {
 		if (channels != NULL) {
-			pubnub_channelset_rm(p, &channelset_minus);
+			pubnub_channelset_rm(&p->channelset, &channelset_minus);
 		} else {
 			/* Unsubscribe from all channels. */
-			pubnub_channelset_done(p);
+			pubnub_channelset_done(&p->channelset);
 		}
 	}
 
