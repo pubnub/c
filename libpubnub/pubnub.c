@@ -893,6 +893,14 @@ pubnub_unsubscribe(struct pubnub *p, const char *channels[], int channels_n,
 {
 	if (!cb) cb = p->cb->unsubscribe;
 
+	if (p->method && strcmp(p->method, "subscribe")) {
+		if (cb)
+			cb(p, pubnub_error_report(p, PNR_OCCUPIED, NULL, "unsubscribe", false),
+				NULL, p->cb_data, cb_data);
+		return;
+	}
+
+
 	/* Edit the channelset. */
 	if (p->channelset) {
 		if (channels != NULL) {
@@ -913,14 +921,10 @@ pubnub_unsubscribe(struct pubnub *p, const char *channels[], int channels_n,
 			printbuf_memappend_fast(channelset, "" /* \0 */, 1);
 	}
 
-	/* If we do not have an ongoing subscribe, that'll be all. */
-	if (!p->method || strcmp(p->method, "subscribe")) {
-		printbuf_free(channelset);
-		return;
+	/* If we have an ongoing subscribe, cancel it. */
+	if (p->method) {
+		pubnub_connection_cancel(p);
 	}
-
-	/* Break off the existing subscribe connection. */
-	pubnub_connection_cancel(p);
 
 	/* Next thing, we issue the leave() call. */
 	pubnub_leave(p, channelset->buf, timeout, cb, cb_data);
