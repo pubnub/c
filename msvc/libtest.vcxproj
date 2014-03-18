@@ -84,6 +84,7 @@
     <ClCompile Include="..\tests\cryptotest.cpp" />
     <ClCompile Include="..\tests\gtest.cpp" />
     <ClCompile Include="..\tests\libeventtest.cpp" />
+    <ClCompile Include="..\tests\pubnubcpptest.cpp" />
     <ClCompile Include="..\tests\pubnubtest.cpp" />
     <ClCompile Include="..\tests\synctest.cpp" />
   </ItemGroup>
