@@ -10,6 +10,11 @@ struct json_object;
 
 typedef void (*pubnub_http_cb)(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data);
 
+struct channelset {
+	const char **set;
+	int n;
+};
+
 struct pubnub {
 	char *publish_key, *subscribe_key;
 	char *secret_key, *cipher_key;
@@ -17,8 +22,7 @@ struct pubnub {
 	char *uuid;
 
 	char time_token[64];
-	char **channelset;
-	int channelset_n;
+	struct channelset channelset;
 
 	const struct pubnub_callbacks *cb;
 	void *cb_data;
