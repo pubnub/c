@@ -873,6 +873,8 @@ void
 pubnub_unsubscribe(struct pubnub *p, const char *channels[], int channels_n,
 		long timeout, pubnub_unsubscribe_cb cb, void *cb_data)
 {
+	if (!cb) cb = p->cb->unsubscribe;
+
 	/* Edit the channelset. */
 	if (p->channelset) {
 		if (channels != NULL) {
