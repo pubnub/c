@@ -279,11 +279,7 @@ void pubnub_publish(struct pubnub *p, const char *channel,
  *
  * The first call will typically just establish the context and return
  * immediately with an empty response array. Usually, you would issue
- * the subscribe request in a loop.
- *
- * TODO: If a subscribe is already ongoing, the set of subscribed channels
- * will be modified, but your callback will get PNR_OCCUPIED and ongoing
- * subscribe will not get restarted. */
+ * the subscribe request in a loop. */
 void pubnub_subscribe(struct pubnub *p, const char *channel,
 		long timeout, pubnub_subscribe_cb cb, void *cb_data);
 
