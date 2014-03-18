@@ -3,7 +3,7 @@ includedir=@INCDIR@
 
 Name: pubnub
 Description: PubNub Cloud Messaging Library
-Version: 0.1
+Version: 0.2
 Requires: json, libcurl, libcrypto, libevent
 Conflicts:
 Libs: -L${libdir} -lpubnub
