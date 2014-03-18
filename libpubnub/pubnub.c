@@ -390,6 +390,8 @@ pubnub_channelset_add(struct pubnub *p, const char **channels, int channels_n)
 	return channels_new_n;
 }
 
+static void pubnub_channelset_done(struct pubnub *p);
+
 /* Remove all items from |channels| from the channelset (if they are listed).
  * Returns the number of channels actually removed. */
 static int
@@ -423,6 +425,11 @@ pubnub_channelset_rm(struct pubnub *p, const char **channels, int channels_n)
 		/* No channel removed. */
 		return 0;
 	}
+	if (p->channelset_n == 0) {
+		/* All channels removed. */
+		pubnub_channelset_done(p);
+		return channels_n - channels_new_n;
+	}
 
 	p->channelset = realloc(p->channelset, p->channelset_n * sizeof(p->channelset[0]));
 	return channels_n - channels_new_n;
@@ -437,6 +444,9 @@ pubnub_channelset_done(struct pubnub *p)
 	p->channelset_n = 0;
 	free(p->channelset);
 	p->channelset = NULL;
+
+	/* Restart any upcoming subscribes with a fresh plate. */
+	strcpy(p->time_token, "0");
 }
 
 
