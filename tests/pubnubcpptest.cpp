@@ -1,7 +1,5 @@
 #include "gtest.h"
 
-namespace CppTest {
-
 #include "../libpubnub/pubnub.h"
 #include "../libpubnub/pubnub-priv.h"
 
@@ -85,7 +83,7 @@ void test_pubnub_subscribe(struct pubnub *p, const char *channel,
 #define pubnub_publish test_pubnub_publish
 #define pubnub_subscribe test_pubnub_subscribe
 
-#include "../libpubnub-cpp\pubnub.cpp "
+#include "../libpubnub-cpp/pubnub.cpp"
 
 #undef pubnub_init
 #undef pubnub_done
@@ -158,4 +156,3 @@ TEST_F(PubNubCppTest, PubNubSubscribe) {
 	ASSERT_TRUE(cb_funCalled);
 }
 
-}
