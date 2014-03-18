@@ -292,19 +292,17 @@ void pubnub_subscribe(struct pubnub *p, const char *channel,
 void pubnub_subscribe_multi(struct pubnub *p, const char *channels[], int channels_n,
 		long timeout, pubnub_subscribe_cb cb, void *cb_data);
 
-/* Cancel an ongoing subscription.  The @channels parameter must
- * currently match the set of subscribed channels.  In the future,
- * if the subscribe channel set is larger than the unsubscribe
- * channels set, subscribe will be automatically restarted with
- * the remaining channels.
+/* Cancel an ongoing subscription to @channels.  If a subscribe is
+ * currently ongoing, it will be restarted silently (without subscribe
+ * callback invoked) to reflect the reduced set of channels.  You can
+ * use NULL as a shorthand to unsubscribe from all channels.
+ *
+ * If no channels remain in the subscription set, the subscribe callback
+ * is invoked with PNR_CANCELLED result.
  *
  * This cancellation involves an HTTP notification call, which is
- * what the @timeout parameter pertains to.  If no channels remain
- * in the subscription set, the subscribe callback is invokved with
- * PNR_CANCELLED result.
- *
- * TODO: If a subscribe is already ongoing, it will be cancelled but not
- * restarted. */
+ * what the @timeout parameter pertains to.  Then, a resubscription
+ * (if applicable) is issued and @cb called. */
 void pubnub_unsubscribe(struct pubnub *p, const char *channels[], int channels_n,
 		long timeout, pubnub_unsubscribe_cb cb, void *cb_data);
 

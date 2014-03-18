@@ -687,10 +687,59 @@ pubnub_publish(struct pubnub *p, const char *channel, struct json_object *messag
 
 
 struct pubnub_subscribe_http_cb {
+	/* XXX: We peek here from unsubscribe as well! */
 	char *channelset;
 	pubnub_subscribe_cb cb;
 	void *call_data;
 };
+
+
+struct resubscribe_http_cb {
+	pubnub_unsubscribe_cb unsub_cb;
+	void *unsub_call_data;
+
+	pubnub_subscribe_cb sub_cb;
+	void *sub_call_data;
+	long sub_timeout;
+};
+
+static void
+resubscribe_http_cb(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data)
+{
+	struct resubscribe_http_cb *cb_http_data = call_data;
+	p->finished_cb = p->finished_cb_data = NULL;
+
+	/* Restart the subscribe first (to be sure the unsub callback
+	 * cannot disturb it). Do it even in case of failed leave(). */
+	pubnub_subscribe(p, NULL, cb_http_data->sub_timeout, cb_http_data->sub_cb, cb_http_data->sub_call_data);
+
+	/* Now, re-issue the unsubscribe callback. */
+	/* No stop_wait here, another subscribe ongoing. */
+	if (cb_http_data->unsub_cb)
+		cb_http_data->unsub_cb(p, result, response, ctx_data, cb_http_data->unsub_call_data);
+
+	free(cb_http_data);
+}
+
+static struct resubscribe_http_cb *
+resubscribe_http_init(struct pubnub *p)
+{
+	struct resubscribe_http_cb *cb_http_data = malloc(sizeof(*cb_http_data));
+	cb_http_data->unsub_cb = NULL;
+	cb_http_data->unsub_call_data = NULL;
+
+	struct pubnub_subscribe_http_cb *subcb_http_data = p->finished_cb_data;
+	cb_http_data->sub_cb = subcb_http_data->cb;
+	cb_http_data->sub_call_data = subcb_http_data->call_data;
+	cb_http_data->sub_timeout = p->timeout;
+
+	free(subcb_http_data->channelset);
+	free(subcb_http_data);
+	p->finished_cb = p->finished_cb_data = NULL;
+
+	return cb_http_data;
+}
+
 
 static void
 pubnub_subscribe_http_cb(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data)
@@ -869,8 +918,8 @@ pubnub_subscribe_multi(struct pubnub *p, const char *channels[], int channels_n,
 
 
 static void
-pubnub_leave(struct pubnub *p, const char *channelset,
-		long timeout, pubnub_unsubscribe_cb cb, void *cb_data)
+pubnub_leave(struct pubnub *p, const char *channelset, long timeout,
+		pubnub_unsubscribe_cb cb, void *cb_data, bool cb_internal)
 {
 	/* As this is an internal API, we don't bother with
 	 * the full-fledged PNR_OCCUPIED check. */
@@ -883,7 +932,7 @@ pubnub_leave(struct pubnub *p, const char *channelset,
 	const char *urlelems[] = { "v2", "presence", "sub-key", p->subscribe_key, "channel", channelset, "leave", NULL };
 	const char *qparamelems[] = { "uuid", p->uuid, NULL };
 	pubnub_http_setup(p, urlelems, qparamelems, timeout);
-	pubnub_http_request(p, (pubnub_http_cb) cb, cb_data, false, true);
+	pubnub_http_request(p, (pubnub_http_cb) cb, cb_data, cb_internal, true);
 }
 
 PUBNUB_API
@@ -921,17 +970,30 @@ pubnub_unsubscribe(struct pubnub *p, const char *channels[], int channels_n,
 			printbuf_memappend_fast(channelset, "" /* \0 */, 1);
 	}
 
-	/* If we have an ongoing subscribe, cancel it. */
+	bool cb_internal = false;
+	/* If we have an ongoing subscribe... */
 	if (p->method) {
-		pubnub_connection_cancel(p);
+		if (p->channelset) {
+			/* ... we will want to resume it later! */
+			struct resubscribe_http_cb *cb_http_data = resubscribe_http_init(p);
+			cb_http_data->unsub_cb = cb;
+			cb_http_data->unsub_call_data = cb_data;
+
+			cb = resubscribe_http_cb;
+			cb_data = cb_http_data;
+			cb_internal = true;
+
+			pubnub_connection_cleanup(p, false);
+		} else {
+			/* ... cancel it! */
+			pubnub_connection_cancel(p);
+		}
 	}
 
 	/* Next thing, we issue the leave() call. */
-	pubnub_leave(p, channelset->buf, timeout, cb, cb_data);
+	pubnub_leave(p, channelset->buf, timeout, cb, cb_data, cb_internal);
 
 	printbuf_free(channelset);
-
-	/* TODO: Restart the subscribe automatically if channelset is non-empty. */
 }
 
 
