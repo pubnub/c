@@ -352,12 +352,12 @@ pubnub_gen_uuid(void)
 
 
 static struct printbuf *
-channelset_printbuf(const struct channelset *channelset)
+channelset_printbuf(const struct channelset *cs)
 {
 	struct printbuf *pb = printbuf_new();
-	for (int i = 0; i < channelset->n; i++) {
-		printbuf_memappend_fast(pb, channelset->set[i], strlen(channelset->set[i]));
-		if (i < channelset->n - 1)
+	for (int i = 0; i < cs->n; i++) {
+		printbuf_memappend_fast(pb, cs->set[i], strlen(cs->set[i]));
+		if (i < cs->n - 1)
 			printbuf_memappend_fast(pb, ",", 1);
 		else
 			printbuf_memappend_fast(pb, "" /* \0 */, 1);
@@ -953,10 +953,10 @@ pubnub_subscribe_multi(struct pubnub *p, const char *channels[], int channels_n,
 		strcpy(p->time_token, "0");
 	}
 
-	const struct channelset channelset_plus = { .set = channels, .n = channels_n };
+	const struct channelset cs = { .set = channels, .n = channels_n };
 	unsigned newchans = 0;
 	if (channels != NULL)
-		newchans = channelset_add(&p->channelset, &channelset_plus);
+		newchans = channelset_add(&p->channelset, &cs);
 
 	if (p->channelset.set == NULL) {
 		/* No channels to listen to. Straight cancel. */
@@ -989,7 +989,7 @@ pubnub_subscribe_multi(struct pubnub *p, const char *channels[], int channels_n,
 		if (timeout <= 0)
 			timeout = 5;
 
-		struct printbuf *channelset = channelset_printbuf(&channelset_plus);
+		struct printbuf *channelset = channelset_printbuf(&cs);
 		pubnub_subscribe_do(p, channelset->buf, "0", timeout, cb, cb_data, true);
 		printbuf_free(channelset);
 
@@ -1039,10 +1039,10 @@ pubnub_unsubscribe(struct pubnub *p, const char *channels[], int channels_n,
 
 
 	/* Edit the channelset. */
-	const struct channelset channelset_minus = { .set = channels, .n = channels_n };
+	const struct channelset cs = { .set = channels, .n = channels_n };
 	if (p->channelset.set) {
 		if (channels != NULL) {
-			channelset_rm(&p->channelset, &channelset_minus);
+			channelset_rm(&p->channelset, &cs);
 		} else {
 			/* Unsubscribe from all channels. */
 			channelset_done(&p->channelset);
@@ -1070,7 +1070,7 @@ pubnub_unsubscribe(struct pubnub *p, const char *channels[], int channels_n,
 	}
 
 	/* Next thing, we issue the leave() call. */
-	struct printbuf *channelset = channelset_printbuf(&channelset_minus);
+	struct printbuf *channelset = channelset_printbuf(&cs);
 	pubnub_leave(p, channelset->buf, timeout, cb, cb_data, cb_internal);
 	printbuf_free(channelset);
 }
