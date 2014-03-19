@@ -32,7 +32,7 @@ struct timespec {
 };
 #endif
 
-#ifdef _MSC_VER
+#if defined _MSC_VER || defined __cplusplus
 #define SFINIT(f, v) v	
 #else
 #define SFINIT(f, v) f = v
