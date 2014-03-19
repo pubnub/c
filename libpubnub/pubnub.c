@@ -1,3 +1,4 @@
+#include <assert.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -132,7 +133,7 @@ pubnub_handle_error(struct pubnub *p, enum pubnub_res result, json_object *msg, 
 		pubnub_error_report(p, result, msg, method, false);
 		p->cb->stop_wait(p, p->cb_data); // unconditional!
 
-		if (cb)
+		if (cb && p->finished_cb)
 			p->finished_cb(p, result, msg, p->cb_data, p->finished_cb_data);
 
 		return !cb;
@@ -187,7 +188,8 @@ pubnub_connection_finished(struct pubnub *p, CURLcode res, bool stop_wait)
 	/* The regular callback */
 	if (!p->finished_cb_internal)
 		p->cb->stop_wait(p, p->cb_data);
-	p->finished_cb(p, PNR_OK, response, p->cb_data, p->finished_cb_data);
+	if (p->finished_cb)
+		p->finished_cb(p, PNR_OK, response, p->cb_data, p->finished_cb_data);
 	json_object_put(response);
 }
 
@@ -199,6 +201,16 @@ pubnub_connection_cleanup(struct pubnub *p, bool stop_wait)
 	curl_multi_remove_handle(p->curlm, p->curl);
 	curl_easy_cleanup(p->curl);
 	p->curl = NULL;
+}
+
+/* Cancel ongoing HTTP connection, freeing all request resources and
+ * invoking the relevant callbacks. */
+static void
+pubnub_connection_cancel(struct pubnub *p)
+{
+	pubnub_connection_cleanup(p, false);
+	if (p->finished_cb)
+		p->finished_cb(p, PNR_CANCELLED, NULL, p->cb_data, p->finished_cb_data);
 }
 
 /* Let curl take care of the ongoing connections, then check for new events
@@ -340,6 +352,129 @@ pubnub_gen_uuid(void)
 	return strdup(uuidbuf);
 }
 
+
+static struct printbuf *
+channelset_printbuf(const struct channelset *cs)
+{
+	struct printbuf *pb = printbuf_new();
+	for (int i = 0; i < cs->n; i++) {
+		printbuf_memappend_fast(pb, cs->set[i], strlen(cs->set[i]));
+		if (i < cs->n - 1)
+			printbuf_memappend_fast(pb, ",", 1);
+		else
+			printbuf_memappend_fast(pb, "" /* \0 */, 1);
+	}
+	return pb;
+}
+
+/* Add all items from |src| to |dst|, unless they are already in it.
+ * Returns the number of channels actually added. */
+static int
+channelset_add(struct channelset *dst, const struct channelset *src)
+{
+#ifdef _MSC_VER
+	bool *src_mask = (bool*)calloc(src->n , sizeof(bool));
+#else
+	bool src_mask[src->n];
+	memset(&src_mask, 0, sizeof(src_mask));
+#endif
+	int src_new_n = src->n;
+
+	/* We anticipate small |channelset| and small (or singular) |channels|,
+	 * therefore using just a trivial O(MN) algorithm here. */
+	for (int i = 0; i < dst->n; i++) {
+		for (int j = 0; j < src->n; j++) {
+			if (src_mask[j])
+				continue;
+			if (!strcmp(dst->set[i], src->set[j])) {
+				src_mask[j] = true;
+				src_new_n--;
+				break;
+			}
+		}
+	}
+
+	if (src_new_n != 0) {
+		int i = dst->n;
+		dst->n += src_new_n;
+		dst->set = (const char**)realloc(dst->set, dst->n * sizeof(dst->set[0]));
+		for (int j = 0; j < src->n; j++) {
+			if (src_mask[j])
+				continue;
+			dst->set[i++] = strdup(src->set[j]);
+		}
+	}
+#ifdef _MSC_VER
+	free(src_mask);
+#endif
+	return src_new_n;
+}
+
+static void channelset_done(struct channelset *cs);
+
+/* Remove all items from |channels| from the channelset (if they are listed).
+ * Returns the number of channels actually removed. */
+static int
+channelset_rm(struct channelset *dst, const struct channelset *src)
+{
+#ifdef _MSC_VER
+	bool *src_mask = (bool*)calloc(src->n , sizeof(bool));
+#else
+	bool src_mask[src->n];
+	memset(&src_mask, 0, sizeof(src_mask));
+#endif
+	int src_new_n = src->n;
+
+	/* We anticipate small |channelset| and small (or singular) |channels|,
+	 * therefore using just a trivial O(MN) algorithm here. */
+	for (int i = 0; i < dst->n; i++) {
+		for (int j = 0; j < src->n; j++) {
+			if (src_mask[j])
+				continue;
+			if (!strcmp(dst->set[i], src->set[j])) {
+				src_mask[j] = true;
+				src_new_n--;
+
+				free((char *) dst->set[i]);
+				/* Replace the free spot with the last channel
+				 * and revisit the spot in next iteration. */
+				dst->set[i] = dst->set[--dst->n];
+				i--;
+				break;
+			}
+		}
+	}
+
+	if (src_new_n != src->n) {
+		if (dst->n == 0) {
+			/* All channels removed. */
+			channelset_done(dst);
+		} else {
+			dst->set = (const char**)realloc(dst->set, dst->n * sizeof(dst->set[0]));
+		}
+	}
+#ifdef _MSC_VER
+	free(src_mask);
+#endif
+	return src->n - src_new_n;
+}
+
+static void
+channelset_done(struct channelset *cs)
+{
+	for (int i = 0; i < cs->n; i++) {
+		/* XXX: The typecast here is a hack; we are dealing with
+		 * a const char *channels everywhere else and rely on the
+		 * fact that we are calling channelset_done() only on
+		 * those channelsets where we strdup()'d all the strings. */
+		free((char *) cs->set[i]);
+	}
+	cs->n = 0;
+	free(cs->set);
+	cs->set = NULL;
+}
+
+
 PUBNUB_API
 struct pubnub *
 pubnub_init(const char *publish_key, const char *subscribe_key,
@@ -381,23 +516,20 @@ PUBNUB_API
 void
 pubnub_done(struct pubnub *p)
 {
-	if (p->finished_cb && p->finished_cb_internal) {
-		/* Release internal callback resources. */
-		if (p->cancel_cb)
-			p->cancel_cb(p, p->cb_data, p->finished_cb_data);
-		else if (p->finished_cb_data)
-			free(p->finished_cb_data);
+	if (p->method) {
+		/* Ongoing request, cancel. */
+		pubnub_connection_cancel(p);
+		p->method = NULL;
 	}
+	//assert(!p->curl); TODO: Fix it!!! finished_cb called after pubnub_connection_cleanup can reinitialize p->curl
 
-	if (p->curl) {
-		curl_multi_remove_handle(p->curlm, p->curl);
-		curl_easy_cleanup(p->curl);
-	}
 	curl_multi_cleanup(p->curlm);
 	curl_slist_free_all(p->curl_headers);
 
 	if (p->cb->done)
 		p->cb->done(p, p->cb_data);
+
+	channelset_done(&p->channelset);
 
 	printbuf_free(p->body);
 	printbuf_free(p->url);
@@ -589,36 +721,110 @@ pubnub_publish(struct pubnub *p, const char *channel, struct json_object *messag
 }
 
 
+/* Subscribe/resubscribe/unsubscribe flow is super-tricky because we
+ * have some intermediate spliced-in calls here - join (subscribe with
+ * timetoken "0") and leave.
+ *
+ * On subscribe, if channelset changes, we issue a join call with
+ * a resubscribe callback that will re-issue subscribe and this time,
+ * it really means subscribe. (Also, it will use the original time
+ * token if we have any, not the one from the join call.)
+ *
+ * On unsubscribe, if channelset changes, we issue a leave call.
+ * If a subscribe was ongoing, it is cancelled and if anything remains
+ * in the channelset, we use a resubscribe callback that will re-issue
+ * subscribe with the original callback.
+ *
+ * TODO: Allow subscribe/unsubscribe during join/leave, queuing
+ * the changes up (new callback wins, previous callbacks gets
+ * PNR_CANCELLED). */
+
 struct pubnub_subscribe_http_cb {
+	/* XXX: We peek here from unsubscribe as well! */
 	char *channelset;
 	pubnub_subscribe_cb cb;
 	void *call_data;
+	bool cb_internal;
+};
+
+
+struct resubscribe_http_cb {
+	pubnub_unsubscribe_cb unsub_cb;
+	void *unsub_call_data;
+
+	pubnub_subscribe_cb sub_cb;
+	void *sub_call_data;
+	long sub_timeout;
+	char sub_time_token[64];
 };
 
 static void
-pubnub_subscribe_cancel_cb(struct pubnub *p, void *ctx_data, void *call_data)
+resubscribe_http_cb(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data)
 {
-	struct pubnub_subscribe_http_cb *cb_http_data = (struct pubnub_subscribe_http_cb *)call_data;
-	free(cb_http_data->channelset);
+	struct resubscribe_http_cb *cb_http_data = (struct resubscribe_http_cb *)call_data;
+	p->finished_cb = NULL;
+	p->finished_cb_data = NULL;
+
+	/* Restart the subscribe first (to be sure the unsub callback
+	 * cannot disturb it). Do it even in case of failed leave()/join(). */
+	if (strcmp(cb_http_data->sub_time_token, "0"))
+		strcpy(p->time_token, cb_http_data->sub_time_token);
+	pubnub_subscribe(p, NULL, cb_http_data->sub_timeout, cb_http_data->sub_cb, cb_http_data->sub_call_data);
+
+	/* Now, re-issue the unsubscribe callback. */
+	/* No stop_wait here, another subscribe ongoing. */
+	if (cb_http_data->unsub_cb)
+		cb_http_data->unsub_cb(p, result, response, ctx_data, cb_http_data->unsub_call_data);
+
 	free(cb_http_data);
 }
+
+static void
+resubscribe_sub_http_cb(struct pubnub *p, enum pubnub_res result, char **channels, struct json_object *response, void *ctx_data, void *call_data)
+{
+	assert(!(channels != NULL && channels[0] != NULL));
+	free(channels);
+	resubscribe_http_cb(p, result, response, ctx_data, call_data);
+}
+
+static struct resubscribe_http_cb *
+resubscribe_http_init(struct pubnub *p)
+{
+	struct resubscribe_http_cb *cb_http_data = (struct resubscribe_http_cb *)calloc(1, sizeof(*cb_http_data));
+
+	struct pubnub_subscribe_http_cb *subcb_http_data = (struct pubnub_subscribe_http_cb *)p->finished_cb_data;
+	if (subcb_http_data) {
+		cb_http_data->sub_cb = subcb_http_data->cb;
+		cb_http_data->sub_call_data = subcb_http_data->call_data;
+
+		free(subcb_http_data->channelset);
+		free(subcb_http_data);
+		p->finished_cb = NULL;
+		p->finished_cb_data = NULL;
+	}
+	cb_http_data->sub_timeout = p->timeout;
+	strcpy(cb_http_data->sub_time_token, p->time_token);
+
+	return cb_http_data;
+}
+
 
 static void
 pubnub_subscribe_http_cb(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data)
 {
 	struct pubnub_subscribe_http_cb *cb_http_data = (struct pubnub_subscribe_http_cb *)call_data;
 	char *channelset = cb_http_data->channelset;
+	bool cb_internal = cb_http_data->cb_internal;
 	call_data = cb_http_data->call_data;
 	pubnub_subscribe_cb cb = cb_http_data->cb;
 	free(cb_http_data);
 	p->finished_cb = NULL;
 	p->finished_cb_data = NULL;
-	p->cancel_cb = NULL;
 
 	if (result != PNR_OK) {
 		/* pubnub_handle_error() has been already called along
 		 * the way to here. */
-		cb(p, result, NULL, response, ctx_data, call_data);
+		if (cb) cb(p, result, NULL, response, ctx_data, call_data);
 		free(channelset);
 		return;
 	}
@@ -627,7 +833,7 @@ pubnub_subscribe_http_cb(struct pubnub *p, enum pubnub_res result, struct json_o
 	if (!json_object_is_type(response, json_type_array)) {
 		result = PNR_FORMAT_ERROR;
 error:
-		if (pubnub_handle_error(p, result, response, "subscribe", false))
+		if (pubnub_handle_error(p, result, response, "subscribe", false) && cb)
 			cb(p, result, NULL, response, ctx_data, call_data);
 		free(channelset);
 		return;
@@ -705,8 +911,43 @@ error:
 	free(channelset);
 
 	/* Finally call the user callback. */
-	p->cb->stop_wait(p, p->cb_data);
+	if (!cb_internal)
+		p->cb->stop_wait(p, p->cb_data);
 	cb(p, result, channels, msg, ctx_data, call_data);
+}
+
+/* This is the common backend for subscribe HTTP API calls. */
+static void
+pubnub_subscribe_do(struct pubnub *p, const char *channelset, char *time_token,
+		long timeout, pubnub_subscribe_cb cb, void *cb_data, bool cb_internal)
+{
+	struct pubnub_subscribe_http_cb *cb_http_data = (struct pubnub_subscribe_http_cb *)malloc(sizeof(*cb_http_data));
+	cb_http_data->channelset = strdup(channelset);
+	cb_http_data->cb = cb;
+	cb_http_data->call_data = cb_data;
+	cb_http_data->cb_internal = cb_internal;
+
+	const char *urlelems[] = { "subscribe", p->subscribe_key, channelset, "0", time_token, NULL };
+	const char *qparamelems[] = { "uuid", p->uuid, NULL };
+	pubnub_http_setup(p, urlelems, qparamelems, timeout);
+	pubnub_http_request(p, pubnub_subscribe_http_cb, cb_http_data, true, true);
+}
+
+static void
+pubnub_join(struct pubnub *p, const char *channelset, long timeout,
+		pubnub_subscribe_cb cb, void *cb_data)
+{
+	/* As this is an internal API, we don't bother with
+	 * the full-fledged PNR_OCCUPIED check and assume
+	 * there is internal callback. */
+	assert(!p->method);
+	p->method = "join";
+
+	timeout /= 60;
+	if (timeout <= 0)
+		timeout = 5;
+
+	pubnub_subscribe_do(p, channelset, "0", timeout, cb, cb_data, true);
 }
 
 PUBNUB_API
@@ -714,29 +955,12 @@ void
 pubnub_subscribe(struct pubnub *p, const char *channel,
 		long timeout, pubnub_subscribe_cb cb, void *cb_data)
 {
-	if (!cb) cb = p->cb->subscribe;
-
-	if (p->method) {
-		if (cb)
-			cb(p, pubnub_error_report(p, PNR_OCCUPIED, NULL, "subscribe", false),
-				NULL, NULL, p->cb_data, cb_data);
-		return;
+	/* Simply defer to _multi(). */
+	if (channel) {
+		pubnub_subscribe_multi(p, &channel, 1, timeout, cb, cb_data);
+	} else {
+		pubnub_subscribe_multi(p, NULL, 0, timeout, cb, cb_data);
 	}
-	p->method = "subscribe";
-
-	if (timeout < 0)
-		timeout = 310;
-
-	struct pubnub_subscribe_http_cb *cb_http_data = (struct pubnub_subscribe_http_cb *)malloc(sizeof(*cb_http_data));
-	cb_http_data->channelset = strdup(channel);
-	cb_http_data->cb = cb;
-	cb_http_data->call_data = cb_data;
-
-	const char *urlelems[] = { "subscribe", p->subscribe_key, channel, "0", p->time_token, NULL };
-	const char *qparamelems[] = { "uuid", p->uuid, NULL };
-	pubnub_http_setup(p, urlelems, qparamelems, timeout);
-	pubnub_http_request(p, pubnub_subscribe_http_cb, cb_http_data, true, true);
-	p->cancel_cb = pubnub_subscribe_cancel_cb;
 }
 
 PUBNUB_API
@@ -744,15 +968,135 @@ void
 pubnub_subscribe_multi(struct pubnub *p, const char *channels[], int channels_n,
 		long timeout, pubnub_subscribe_cb cb, void *cb_data)
 {
-	struct printbuf *channelset = printbuf_new();
-	for (int i = 0; i < channels_n; i++) {
-		printbuf_memappend_fast(channelset, channels[i], strlen(channels[i]));
-		if (i < channels_n - 1)
-			printbuf_memappend_fast(channelset, ",", 1);
-		else
-			printbuf_memappend_fast(channelset, "" /* \0 */, 1);
+	if (!cb) cb = p->cb->subscribe;
+
+	if (p->method && strcmp(p->method, "subscribe")) {
+		if (cb)
+			cb(p, pubnub_error_report(p, PNR_OCCUPIED, NULL, "subscribe", false),
+				NULL, NULL, p->cb_data, cb_data);
+		return;
 	}
-	pubnub_subscribe(p, channelset->buf, timeout, cb, cb_data);
+
+	if (p->channelset.set == NULL) {
+		/* A fresh subscribe, restart fresh (we do not care about
+		 * messages received while we were not subscribed anywhere). */
+		strcpy(p->time_token, "0");
+	}
+
+	const struct channelset cs = { SFINIT(.set,channels), SFINIT(.n, channels_n) };
+	unsigned newchans = 0;
+	if (channels != NULL)
+		newchans = channelset_add(&p->channelset, &cs);
+
+	if (p->channelset.set == NULL) {
+		/* No channels to listen to. Straight cancel. */
+		if (cb) cb(p, PNR_CANCELLED, NULL, NULL, p->cb_data, cb_data);
+		return;
+	}
+
+	if (newchans > 0) {
+		/* New channels. Issue a join(), that is subscribe with
+		 * time token "0".  The callback will be resubscribe()
+		 * which will call subscribe() again, typically with
+		 * newchans==0 and we will proceed with a regular
+		 * subscribe. */
+		if (p->method) {
+			/* Already ongoing subscribe - cancel that one now.
+			 * Loud is ok, the new callback wins over the old. */
+			pubnub_connection_cancel(p);
+		}
+
+		struct resubscribe_http_cb *cb_http_data = resubscribe_http_init(p);
+		cb_http_data->sub_cb = cb;
+		cb_http_data->sub_call_data = cb_data;
+		cb_http_data->sub_timeout = timeout;
+
+		cb = resubscribe_sub_http_cb;
+		cb_data = cb_http_data;
+
+		struct printbuf *channelset = channelset_printbuf(&cs);
+		pubnub_join(p, channelset->buf, timeout, cb, cb_data);
+		printbuf_free(channelset);
+
+	} else {
+		p->method = "subscribe";
+		if (timeout < 0)
+			timeout = 310;
+
+		struct printbuf *channelset = channelset_printbuf(&p->channelset);
+		pubnub_subscribe_do(p, channelset->buf, p->time_token, timeout, cb, cb_data, false);
+		printbuf_free(channelset);
+	}
+}
+
+
+static void
+pubnub_leave(struct pubnub *p, const char *channelset, long timeout,
+		pubnub_unsubscribe_cb cb, void *cb_data, bool cb_internal)
+{
+	/* As this is an internal API, we don't bother with
+	 * the full-fledged PNR_OCCUPIED check. */
+	assert(!p->method);
+	p->method = "leave";
+
+	if (timeout < 0)
+		timeout = 5;
+
+	const char *urlelems[] = { "v2", "presence", "sub-key", p->subscribe_key, "channel", channelset, "leave", NULL };
+	const char *qparamelems[] = { "uuid", p->uuid, NULL };
+	pubnub_http_setup(p, urlelems, qparamelems, timeout);
+	pubnub_http_request(p, (pubnub_http_cb) cb, cb_data, cb_internal, true);
+}
+
+PUBNUB_API
+void
+pubnub_unsubscribe(struct pubnub *p, const char *channels[], int channels_n,
+		long timeout, pubnub_unsubscribe_cb cb, void *cb_data)
+{
+	if (!cb) cb = p->cb->unsubscribe;
+
+	if (p->method && strcmp(p->method, "subscribe")) {
+		if (cb)
+			cb(p, pubnub_error_report(p, PNR_OCCUPIED, NULL, "unsubscribe", false),
+				NULL, p->cb_data, cb_data);
+		return;
+	}
+
+
+	/* Edit the channelset. */
+	const struct channelset cs = { SFINIT(.set, channels), SFINIT(.n, channels_n) };
+	if (p->channelset.set) {
+		if (channels != NULL) {
+			channelset_rm(&p->channelset, &cs);
+		} else {
+			/* Unsubscribe from all channels. */
+			channelset_done(&p->channelset);
+		}
+	}
+
+	bool cb_internal = false;
+	/* If we have an ongoing subscribe... */
+	if (p->method) {
+		if (p->channelset.set) {
+			/* ... we will want to resume it later! */
+			struct resubscribe_http_cb *cb_http_data = resubscribe_http_init(p);
+			cb_http_data->unsub_cb = cb;
+			cb_http_data->unsub_call_data = cb_data;
+
+			cb = resubscribe_http_cb;
+			cb_data = cb_http_data;
+			cb_internal = true;
+
+			pubnub_connection_cleanup(p, false);
+		} else {
+			/* ... cancel it! */
+			pubnub_connection_cancel(p);
+		}
+	}
+
+	/* Next thing, we issue the leave() call. */
+	struct printbuf *channelset = channelset_printbuf(&cs);
+	pubnub_leave(p, channelset->buf, timeout, cb, cb_data, cb_internal);
 	printbuf_free(channelset);
 }
 
@@ -775,7 +1119,7 @@ pubnub_history_http_cb(struct pubnub *p, enum pubnub_res result, struct json_obj
 	if (result != PNR_OK) {
 		/* pubnub_handle_error() has been already called along
 		 * the way to here. */
-		cb(p, result, response, ctx_data, call_data);
+		if (cb) cb(p, result, response, ctx_data, call_data);
 		return;
 	}
 
@@ -783,7 +1127,7 @@ pubnub_history_http_cb(struct pubnub *p, enum pubnub_res result, struct json_obj
 	if (!json_object_is_type(response, json_type_array)) {
 		result = PNR_FORMAT_ERROR;
 error:
-		if (pubnub_handle_error(p, result, response, "history", false))
+		if (pubnub_handle_error(p, result, response, "history", false) && cb)
 			cb(p, result, response, ctx_data, call_data);
 		return;
 	}
@@ -802,7 +1146,7 @@ error:
 
 	/* Finally call the user callback. */
 	p->cb->stop_wait(p, p->cb_data);
-	cb(p, result, response, ctx_data, call_data);
+	if (cb) cb(p, result, response, ctx_data, call_data);
 
 	if (put_response)
 		json_object_put(response);
@@ -879,14 +1223,14 @@ pubnub_time_http_cb(struct pubnub *p, enum pubnub_res result, struct json_object
 	if (result != PNR_OK) {
 		/* pubnub_handle_error() has been already called along
 		 * the way to here. */
-		cb(p, result, response, ctx_data, call_data);
+		if (cb) cb(p, result, response, ctx_data, call_data);
 		return;
 	}
 
 	/* Response must be an array. */
 	if (!json_object_is_type(response, json_type_array)) {
 		result = PNR_FORMAT_ERROR;
-		if (pubnub_handle_error(p, result, response, "time", false))
+		if (pubnub_handle_error(p, result, response, "time", false) && cb)
 			cb(p, result, response, ctx_data, call_data);
 		return;
 	}
@@ -897,7 +1241,7 @@ pubnub_time_http_cb(struct pubnub *p, enum pubnub_res result, struct json_object
 
 	/* Finally call the user callback. */
 	p->cb->stop_wait(p, p->cb_data);
-	cb(p, result, ts, ctx_data, call_data);
+	if (cb) cb(p, result, ts, ctx_data, call_data);
 
 	json_object_put(ts);
 }

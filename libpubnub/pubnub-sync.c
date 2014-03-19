@@ -288,6 +288,7 @@ const struct pubnub_callbacks pubnub_sync_callbacks = {
 
 	SFINIT(.publish, pubnub_sync_generic_cb),
 	SFINIT(.subscribe, pubnub_sync_subscribe_cb),
+	SFINIT(.unsubscribe, pubnub_sync_generic_cb),
 	SFINIT(.history, pubnub_sync_generic_cb),
 	SFINIT(.here_now, pubnub_sync_generic_cb),
 	SFINIT(.time, pubnub_sync_generic_cb),

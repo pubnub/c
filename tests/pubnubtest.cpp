@@ -153,4 +153,23 @@ TEST_F(PubnubTest, Time) {
 	EXPECT_STREQ("http://pubsub.pubnub.com/time/0", url);
 }
 
+TEST(ChannelSetTest, AddRemove) {
+	struct channelset cs = {NULL, 0};
+	EXPECT_EQ(0, channelset_add(&cs, &cs));
+	const char *ch1[] = {"abc", "cde"};
+	struct channelset cs1 = {ch1, 2};
+	EXPECT_EQ(0, channelset_add(&cs1, &cs1));
+	const char *ch2[] = {"abc", "fgh", "cde"};
+	struct channelset cs2 = {ch2, 3};
+	struct channelset *cs3 = (struct channelset*)calloc(1, sizeof(struct channelset));
+	EXPECT_EQ(2, channelset_add(cs3, &cs1));
+	EXPECT_EQ(1, channelset_add(cs3, &cs2));
+	EXPECT_EQ(2, channelset_rm(cs3, &cs1));
+	EXPECT_EQ(0, channelset_rm(cs3, &cs1));
+	EXPECT_STREQ(ch2[1], cs3->set[0]);
+	EXPECT_EQ(1, channelset_rm(cs3, &cs2));
+	free(cs3);
 }
+
+}
+

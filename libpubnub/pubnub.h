@@ -53,6 +53,9 @@ enum pubnub_res {
 	PNR_HTTP_ERROR,
 	/* Unexpected input in received JSON. */
 	PNR_FORMAT_ERROR,
+	/* Cancellation by user request. A chance to free resources associated
+	 * with an ongoing subscribe. (Will not retry.) */
+	PNR_CANCELLED,
 };
 
 /* ctx_data is callbacks data passed to pubnub_init().
@@ -68,6 +71,7 @@ enum pubnub_res {
  * an extra NULL pointer at the end of the array. */
 typedef void (*pubnub_publish_cb)(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data);
 typedef void (*pubnub_subscribe_cb)(struct pubnub *p, enum pubnub_res result, char **channels, struct json_object *response, void *ctx_data, void *call_data);
+typedef void (*pubnub_unsubscribe_cb)(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data);
 typedef void (*pubnub_history_cb)(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data);
 typedef void (*pubnub_here_now_cb)(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data);
 typedef void (*pubnub_time_cb)(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data);
@@ -120,6 +124,7 @@ struct pubnub_callbacks {
 
 	pubnub_publish_cb publish;
 	pubnub_subscribe_cb subscribe;
+	pubnub_unsubscribe_cb unsubscribe;
 	pubnub_history_cb history;
 	pubnub_here_now_cb here_now;
 	pubnub_time_cb time;
@@ -209,8 +214,8 @@ void pubnub_set_nosignal(struct pubnub *p, bool nosignal);
  * and retry is enabled for that error. This is controlled by
  * @retry_mask; if PNR_xxx-th bit is set, the call is retried in case
  * of the PNR_xxx result; this is the case for recoverable errors,
- * specifically PNR_OK and PNR_OCCUPIED bits are always ignored (this
- * may be further extended in the future). For example,
+ * specifically PNR_OK, PNR_OCCUPIED and PNR_CANCELLED bits are always
+ * ignored (this may be further extended in the future). For example,
  *
  * 	pubnub_error_policy(p, 0, ...);
  * will turn off automatic error retry for all errors,
@@ -262,22 +267,45 @@ void pubnub_publish(struct pubnub *p, const char *channel,
 		struct json_object *message,
 		long timeout, pubnub_publish_cb cb, void *cb_data);
 
-/* Subscribe to @channel. The response will be a JSON array with
- * one received message per item.
+/* Subscribe to @channel, in addition to the currently subscribed channels.
  *
- * Messages published on @channel since the last subscribe call
- * are returned.  The first call will typically just establish
- * the context and return immediately with an empty response array.
- * Usually, you would issue the subscribe request in a loop. */
+ * The response will be a JSON array with one received message per item.
+ * Messages published on the currently subscribed channels since the
+ * last subscribe call are returned.  The response will contain
+ * received messages from any of subscribed channels; use the channels
+ * callback parameter (or pubnub_sync_last_channels()) to determine
+ * the originating channel of each message.
+ *
+ * In other words, this function does two things - (i) adds @channel
+ * to the set of subscribed channels, if not already there; (ii) ask for
+ * new messages appearing in the whole set of currently subscribed channels,
+ * calling the callback when some arrive.  If you would like to do just
+ * (ii), you can also pass NULL as @channel.
+ *
+ * The first call will typically just establish the context and return
+ * immediately with an empty response array. Usually, you would issue
+ * the subscribe request in a loop. */
 void pubnub_subscribe(struct pubnub *p, const char *channel,
 		long timeout, pubnub_subscribe_cb cb, void *cb_data);
 
-/* Subscribe to a set of @channels. The response will contain
- * received messages from any of these channels; use the channels
- * callback parameter (or pubnub_sync_last_channels()) to determine
- * the originating channel of each message. */
+/* Subscribe to a set of @channels (in addition to already subscribed
+ * channels) all at once. */
 void pubnub_subscribe_multi(struct pubnub *p, const char *channels[], int channels_n,
 		long timeout, pubnub_subscribe_cb cb, void *cb_data);
+
+/* Cancel an ongoing subscription to @channels.  If a subscribe is
+ * currently ongoing, it will be restarted silently (without subscribe
+ * callback invoked) to reflect the reduced set of channels.  You can
+ * use NULL as a shorthand to unsubscribe from all channels.
+ *
+ * If no channels remain in the subscription set, the subscribe callback
+ * is invoked with PNR_CANCELLED result.
+ *
+ * This cancellation involves an HTTP notification call, which is
+ * what the @timeout parameter pertains to.  Then, a resubscription
+ * (if applicable) is issued and @cb called. */
+void pubnub_unsubscribe(struct pubnub *p, const char *channels[], int channels_n,
+		long timeout, pubnub_unsubscribe_cb cb, void *cb_data);
 
 /* List the last @limit messages that appeared on a @channel.
  * You do not need to be subscribed to the channel. The response
