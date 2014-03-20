@@ -15,7 +15,13 @@ public:
 	static bool doneCalled;
 	static bool publishCalled;
 	static bool subscribeCalled;
+	static bool subscribeMultiCalled;
+	static bool historyCalled;
+	static bool herenowCalled;
+	static bool timeCalled;
 	static bool cb_funCalled;
+	static PubNub *_pn;
+	static void *_data;
 protected:
 	pubnub_callbacks cb;
 	virtual void SetUp() {
@@ -23,15 +29,22 @@ protected:
 		doneCalled = false;
 		publishCalled = false;
 		subscribeCalled = false;
+		subscribeMultiCalled = false;
+		historyCalled = false;
+		herenowCalled = false;
+		timeCalled = false;
 		cb_funCalled = false;
 		memset(&cb, 0, sizeof(cb));
 	}
 	static void cb_fun(PubNub &p, enum pubnub_res result, json_object *response, void *ctx_data, void *call_data)
 	{
+		_pn = &p;
+		_data = call_data;
 		cb_funCalled = true;
 	}
 	static void cb_fun2(PubNub &p, enum pubnub_res result, std::vector<std::string> &channels, json_object *response, void *ctx_data, void *call_data)
 	{
+		_pn = &p;
 		cb_funCalled = true;
 	}
 };
@@ -40,7 +53,13 @@ bool PubNubCppTest::initCalled;
 bool PubNubCppTest::doneCalled;
 bool PubNubCppTest::publishCalled;
 bool PubNubCppTest::subscribeCalled;
+bool PubNubCppTest::subscribeMultiCalled;
+bool PubNubCppTest::historyCalled;
+bool PubNubCppTest::herenowCalled;
+bool PubNubCppTest::timeCalled;
 bool PubNubCppTest::cb_funCalled;
+PubNub *PubNubCppTest::_pn;
+void *PubNubCppTest::_data;
 
 struct pubnub *test_pubnub_init(const char *publish_key, const char *subscribe_key,
 			const struct pubnub_callbacks *cb, void *cb_data)
@@ -77,11 +96,55 @@ void test_pubnub_subscribe(struct pubnub *p, const char *channel,
 	}
 }
 
+void test_pubnub_subscribe_multi(struct pubnub *p, const char *channels[], int channels_n,
+		long timeout, pubnub_subscribe_cb cb, void *cb_data)
+{
+	PubNubCppTest::subscribeMultiCalled = true;
+	if (cb) {
+		int n = 0;
+		for (;channels[n];n++);
+		char **_channels = (char**)malloc(sizeof(char*)*(n+1));
+		for (int i = 0; i < n; i++) {
+			_channels[i] = strdup(channels[i]);
+		}
+		cb(NULL, PNR_OK, _channels, NULL, NULL, cb_data);
+	}
+}
+
+void test_pubnub_history(struct pubnub *p, const char *channel, int limit,
+		long timeout, pubnub_history_cb cb, void *cb_data)
+{
+	PubNubCppTest::historyCalled = true;
+	if (cb) {
+		cb(NULL, PNR_OK, NULL, NULL, cb_data);
+	}
+}
+
+void test_pubnub_here_now(struct pubnub *p, const char *channel,
+		long timeout, pubnub_here_now_cb cb, void *cb_data)
+{
+	PubNubCppTest::herenowCalled = true;
+	if (cb) {
+		cb(NULL, PNR_OK, NULL, NULL, cb_data);
+	}
+}
+
+void test_pubnub_time(struct pubnub *p, long timeout, pubnub_time_cb cb, void *cb_data)
+{
+	PubNubCppTest::timeCalled = true;
+	if (cb) {
+		cb(NULL, PNR_OK, NULL, NULL, cb_data);
+	}
+}
 
 #define pubnub_init test_pubnub_init
 #define pubnub_done test_pubnub_done
 #define pubnub_publish test_pubnub_publish
 #define pubnub_subscribe test_pubnub_subscribe
+#define pubnub_subscribe_multi test_pubnub_subscribe_multi
+#define pubnub_history test_pubnub_history
+#define pubnub_here_now test_pubnub_here_now
+#define pubnub_time test_pubnub_time
 
 #include "../libpubnub-cpp/pubnub.cpp"
 
@@ -89,6 +152,10 @@ void test_pubnub_subscribe(struct pubnub *p, const char *channel,
 #undef pubnub_done
 #undef pubnub_publish
 #undef pubnub_subscribe
+#undef pubnub_subscribe_multi
+#undef pubnub_history
+#undef pubnub_here_now
+#undef pubnub_time
 
 TEST_F(PubNubCppTest, PubNubInitDone) {
 	{
@@ -142,8 +209,10 @@ TEST_F(PubNubCppTest, PubNubPublish) {
 	pn.publish("channel", *msg, -1, NULL, NULL);
 	ASSERT_TRUE(publishCalled);
 	ASSERT_FALSE(cb_funCalled);
-	pn.publish("channel", *msg, -1, cb_fun, msg);
+	pn.publish("channel", *msg, -1, cb_fun, this);
 	ASSERT_TRUE(cb_funCalled);
+	ASSERT_TRUE(&pn == _pn);
+	ASSERT_TRUE(this == _data);
 	json_object_put(msg);
 }
 
@@ -152,7 +221,54 @@ TEST_F(PubNubCppTest, PubNubSubscribe) {
 	pn.subscribe("channel", -1);
 	ASSERT_TRUE(subscribeCalled);
 	ASSERT_FALSE(cb_funCalled);
-	pn.subscribe("channel", -1, cb_fun2, NULL);
+	pn.subscribe("channel", -1, cb_fun2, this);
 	ASSERT_TRUE(cb_funCalled);
+	ASSERT_TRUE(&pn == _pn);
+	ASSERT_TRUE(this == _data);
 }
 
+
+TEST_F(PubNubCppTest, PubNubSubscribeMulti) {
+	PubNub pn("demo", "demo", &cb, NULL);
+	std::vector<std::string> channels;
+	pn.subscribe_multi(channels, -1);
+	ASSERT_TRUE(subscribeMultiCalled);
+	ASSERT_FALSE(cb_funCalled);
+	pn.subscribe("channel", -1, cb_fun2, this);
+	ASSERT_TRUE(cb_funCalled);
+	ASSERT_TRUE(&pn == _pn);
+	ASSERT_TRUE(this == _data);
+}
+
+TEST_F(PubNubCppTest, PubNubHistory) {
+	PubNub pn("demo", "demo", &cb, NULL);
+	pn.history("channel", 10, -1);
+	ASSERT_TRUE(historyCalled);
+	ASSERT_FALSE(cb_funCalled);
+	pn.history("channel", 10, -1, cb_fun, this);
+	ASSERT_TRUE(cb_funCalled);
+	ASSERT_TRUE(&pn == _pn);
+	ASSERT_TRUE(this == _data);
+}
+
+TEST_F(PubNubCppTest, PubNubHereNow) {
+	PubNub pn("demo", "demo", &cb, NULL);
+	pn.here_now("channel", -1);
+	ASSERT_TRUE(herenowCalled);
+	ASSERT_FALSE(cb_funCalled);
+	pn.here_now("channel", -1, cb_fun, this);
+	ASSERT_TRUE(cb_funCalled);
+	ASSERT_TRUE(&pn == _pn);
+	ASSERT_TRUE(this == _data);
+}
+
+TEST_F(PubNubCppTest, PubNubTime) {
+	PubNub pn("demo", "demo", &cb, NULL);
+	pn.time(-1);
+	ASSERT_TRUE(timeCalled);
+	ASSERT_FALSE(cb_funCalled);
+	pn.time(-1, cb_fun, this);
+	ASSERT_TRUE(cb_funCalled);
+	ASSERT_TRUE(&pn == _pn);
+	ASSERT_TRUE(this == _data);
+}
