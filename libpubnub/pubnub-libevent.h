@@ -1,7 +1,7 @@
 #ifndef PUBNUB__PubNub_libevent_h
 #define PUBNUB__PubNub_libevent_h
 
-#include <pubnub.h>
+#include "pubnub.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -15,7 +15,7 @@ struct json_object;
 extern const struct pubnub_callbacks pubnub_libevent_callbacks;
 
 /* Callback data to pass pubnub_init(). */
-struct pubnub_libevent *pubnub_libevent_init(void);
+struct pubnub_libevent *pubnub_libevent_init(struct event_base *evbase);
 
 #ifdef __cplusplus
 }

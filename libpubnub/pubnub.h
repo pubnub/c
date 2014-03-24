@@ -1,7 +1,14 @@
 #ifndef PUBNUB__PubNub_h
 #define PUBNUB__PubNub_h
 
-#include <stdbool.h>
+#if !defined(_MSC_VER)
+# include <stdbool.h>
+#elif !defined(__cplusplus)
+typedef int bool;
+# define false 0
+# define true 1
+#endif
+
 #include <time.h>
 
 #include <json.h>
@@ -25,10 +32,10 @@ extern "C" {
  * prevent improper concurrent access. */
 struct pubnub;
 
-#ifdef __MINGW32__
+#if defined(__MINGW32__) || defined(_MSC_VER)
 struct timespec {
-	int tv_sec;
-	int tv_nsec;
+	time_t tv_sec;
+	long tv_nsec;
 };
 #endif
 
@@ -162,6 +169,9 @@ struct pubnub *pubnub_init(const char *publish_key, const char *subscribe_key,
  * will not be called (this may change in the future). */
 void pubnub_done(struct pubnub *p);
 
+/* Set the authentication key that is used to determine user-level Access
+ * Manager permissions. */
+void pubnub_set_auth_key(struct pubnub *p, const char *auth_key);
 
 /* Set the secret key that is used for signing published messages
  * to confirm they are genuine. Using the secret key is optional. */
@@ -227,6 +237,19 @@ void pubnub_set_nosignal(struct pubnub *p, bool nosignal);
  * retry for whatever reason. */
 void pubnub_error_policy(struct pubnub *p, unsigned int retry_mask, bool print);
 
+/* Set CA certificate data (PEM format) used for SSL certificate validation
+ * (multiple certificates are ok)
+ */
+void pubnub_set_ssl_cacerts(struct pubnub *p, const char *cacerts, size_t len);
+
+/* Set application-specific data for this PubNub context.  PubNub does not use
+ * this value at all except to return it back through pubnub_get_user_data().
+ */
+void pubnub_set_user_data(struct pubnub *p, void *user_data);
+
+/* Get the application-specific data set earlier with pubnub_set_user_data().
+ */
+void *pubnub_get_user_data(struct pubnub *p);
 
 /** PubNub API requests */
 
