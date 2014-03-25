@@ -372,8 +372,12 @@ channelset_printbuf(const struct channelset *cs)
 static int
 channelset_add(struct channelset *dst, const struct channelset *src)
 {
+#ifdef _MSC_VER
+	bool *src_mask = (bool*)calloc(src->n , sizeof(bool));
+#else
 	bool src_mask[src->n];
 	memset(&src_mask, 0, sizeof(src_mask));
+#endif
 	int src_new_n = src->n;
 
 	/* We anticipate small |channelset| and small (or singular) |channels|,
@@ -390,19 +394,19 @@ channelset_add(struct channelset *dst, const struct channelset *src)
 		}
 	}
 
-	if (src_new_n == 0) {
-		/* No new channel to subscribe to. */
-		return 0;
+	if (src_new_n != 0) {
+		int i = dst->n;
+		dst->n += src_new_n;
+		dst->set = (const char**)realloc(dst->set, dst->n * sizeof(dst->set[0]));
+		for (int j = 0; j < src->n; j++) {
+			if (src_mask[j])
+				continue;
+			dst->set[i++] = strdup(src->set[j]);
+		}
 	}
-
-	int i = dst->n;
-	dst->n += src_new_n;
-	dst->set = realloc(dst->set, dst->n * sizeof(dst->set[0]));
-	for (int j = 0; j < src->n; j++) {
-		if (src_mask[j])
-			continue;
-		dst->set[i++] = strdup(src->set[j]);
-	}
+#ifdef _MSC_VER
+	free(src_mask);
+#endif
 	return src_new_n;
 }
 
@@ -413,8 +417,12 @@ static void channelset_done(struct channelset *cs);
 static int
 channelset_rm(struct channelset *dst, const struct channelset *src)
 {
+#ifdef _MSC_VER
+	bool *src_mask = (bool*)calloc(src->n , sizeof(bool));
+#else
 	bool src_mask[src->n];
 	memset(&src_mask, 0, sizeof(src_mask));
+#endif
 	int src_new_n = src->n;
 
 	/* We anticipate small |channelset| and small (or singular) |channels|,
@@ -437,17 +445,17 @@ channelset_rm(struct channelset *dst, const struct channelset *src)
 		}
 	}
 
-	if (src_new_n == src->n) {
-		/* No channel removed. */
-		return 0;
+	if (src_new_n != src->n) {
+		if (dst->n == 0) {
+			/* All channels removed. */
+			channelset_done(dst);
+		} else {
+			dst->set = (const char**)realloc(dst->set, dst->n * sizeof(dst->set[0]));
+		}
 	}
-	if (dst->n == 0) {
-		/* All channels removed. */
-		channelset_done(dst);
-		return src->n - src_new_n;
-	}
-
-	dst->set = realloc(dst->set, dst->n * sizeof(dst->set[0]));
+#ifdef _MSC_VER
+	free(src_mask);
+#endif
 	return src->n - src_new_n;
 }
 
