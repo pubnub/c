@@ -60,7 +60,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>..\..\googletest\msvc\gtest-md\Debug\gtestd.lib;..\..\json-c\Debug\jsonD.lib;..\..\openssl\lib\libeay32.lib;..\..\curl\lib\libcurl.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>..\..\googletest\msvc\gtest-md\Debug\gtestd.lib;..\..\json-c\Debug\jsonD.lib;..\..\openssl\lib\ssleay32.lib;..\..\openssl\lib\libeay32.lib;..\..\curl\lib\libcurl.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">

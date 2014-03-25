@@ -55,6 +55,8 @@ struct pubnub {
 	struct printbuf *url;
 	struct printbuf *body;
 	long timeout;
+
+	struct stack_st_X509_INFO *ssl_cacerts;
 };
 
 #ifdef DEBUG
