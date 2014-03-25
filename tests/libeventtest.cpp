@@ -6,18 +6,10 @@ namespace Test {
 #include "../libpubnub/pubnub.h"
 #include "../libpubnub/pubnub-priv.h"
 
+#include "event2/event.h"
+
 #undef PUBNUB_API
 #define PUBNUB_API
-
-
-struct event {
-	int unused;
-};
-
-#define EV_READ 1
-#define EV_WRITE 2
-#define EV_PERSIST 4
-
 
 struct pubnub_libevent;
 
@@ -37,6 +29,16 @@ struct pubnub_libevent *LibEventTest::libevent;
 int LibEventTest::addEventCnt;
 int LibEventTest::delEventCnt;
 bool LibEventTest::isPendingCalled;
+
+struct event *event_new(struct event_base *, int, short, void *, void *)
+{
+	return (struct event *)malloc(sizeof(struct event));
+}
+
+void event_free(struct event *ev)
+{
+	free(ev);
+}
 
 int event_add(struct event *, const struct timeval *)
 {
