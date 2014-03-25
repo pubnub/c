@@ -782,7 +782,7 @@ resubscribe_http_cb(struct pubnub *p, enum pubnub_res result, struct json_object
 static void
 resubscribe_sub_http_cb(struct pubnub *p, enum pubnub_res result, char **channels, struct json_object *response, void *ctx_data, void *call_data)
 {
-	assert(channels[0] == NULL);
+	assert(!(channels != NULL && channels[0] != NULL));
 	free(channels);
 	resubscribe_http_cb(p, result, response, ctx_data, call_data);
 }
