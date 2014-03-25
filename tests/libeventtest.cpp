@@ -30,7 +30,7 @@ int LibEventTest::addEventCnt;
 int LibEventTest::delEventCnt;
 bool LibEventTest::isPendingCalled;
 
-struct event *event_new(struct event_base *, int, short, void *, void *)
+struct event *event_new(struct event_base *, int, short, void (*)(int, short int, void*), void *)
 {
 	return (struct event *)malloc(sizeof(struct event));
 }
