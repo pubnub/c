@@ -21,6 +21,7 @@ struct pubnub_cb_info {
 struct pubnub_libevent {
 	int n;
 	int *fdset;
+	struct event_base *evbase;
 	struct event **evset;
 	struct pubnub_cb_info *cbset;
 
@@ -64,10 +65,11 @@ pubnub_libevent_eventcb(int fd, short kind, void *userp)
 
 PUBNUB_API
 struct pubnub_libevent *
-pubnub_libevent_init(void)
+pubnub_libevent_init(struct event_base *evbase)
 {
 	struct pubnub_libevent *libevent = (struct pubnub_libevent *)calloc(1, sizeof(*libevent));
-	evtimer_set(libevent->timer_event, pubnub_libevent_timercb, libevent);
+	libevent->evbase = evbase;
+	libevent->timer_event = evtimer_new(evbase, pubnub_libevent_timercb, libevent);
 	return libevent;
 }
 
@@ -94,7 +96,7 @@ pubnub_libevent_add_socket(struct pubnub *p, void *ctx_data, int fd, int mode,
 
 	libevent->evset = (struct event **)realloc(libevent->evset, sizeof(*libevent->evset) * libevent->n);
 	int kind = (mode & 1 ? EV_READ : 0) | (mode & 2 ? EV_WRITE : 0) | EV_PERSIST;
-	libevent->evset[i] = event_new(NULL, fd, kind, pubnub_libevent_eventcb, libevent);
+	libevent->evset[i] = event_new(libevent->evbase, fd, kind, pubnub_libevent_eventcb, libevent);
 	event_add(libevent->evset[i], NULL);
 
 	DBGMSG("watching %d sockets\n", libevent->n);

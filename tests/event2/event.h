@@ -9,4 +9,6 @@ struct event {
 #define EV_WRITE 2
 #define EV_PERSIST 4
 
+#define evtimer_new(b, cb, arg)	       event_new((b), -1, 0, (cb), (arg))
+
 #endif // EVENT2_H
