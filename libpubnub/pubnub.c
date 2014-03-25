@@ -73,12 +73,12 @@ pubnub_error_report(struct pubnub *p, enum pubnub_res result, json_object *msg, 
 {
 	if (p->error_print) {
 		static const char *pubnub_res_str[] = {
-			[PNR_OK] = "Success",
-			[PNR_OCCUPIED] = "Another method already in progress",
-			[PNR_TIMEOUT] = "Timeout",
-			[PNR_IO_ERROR] = "Communication error",
-			[PNR_HTTP_ERROR] = "HTTP error",
-			[PNR_FORMAT_ERROR] = "Unexpected input in received JSON",
+			SFINIT( [PNR_OK] ,           "Success"),
+			SFINIT( [PNR_OCCUPIED] ,     "Another method already in progress"),
+			SFINIT( [PNR_TIMEOUT] ,      "Timeout"),
+			SFINIT( [PNR_IO_ERROR] ,     "Communication error"),
+			SFINIT( [PNR_HTTP_ERROR] ,   "HTTP error"),
+			SFINIT( [PNR_FORMAT_ERROR] , "Unexpected input in received JSON"),
 		};
 		if (msg) {
 			fprintf(stderr, "pubnub %s result: %s [%s]%s\n",
@@ -120,7 +120,9 @@ pubnub_handle_error(struct pubnub *p, enum pubnub_res result, json_object *msg, 
 
 		/* ... after a 250ms delay; this avoids hammering
 		 * the PubNub service in case of a bug. */
-		struct timespec timeout_ts = { .tv_nsec = 250*1000*1000 };
+		struct timespec timeout_ts;
+		timeout_ts.tv_nsec = 250*1000*1000;
+		timeout_ts.tv_sec = 0;
 		p->cb->timeout(p, p->cb_data, &timeout_ts, pubnub_error_retry, p);
 
 		return false;
@@ -973,7 +975,7 @@ pubnub_subscribe_multi(struct pubnub *p, const char *channels[], int channels_n,
 		strcpy(p->time_token, "0");
 	}
 
-	const struct channelset cs = { .set = channels, .n = channels_n };
+	const struct channelset cs = { SFINIT(.set,channels), SFINIT(.n, channels_n) };
 	unsigned newchans = 0;
 	if (channels != NULL)
 		newchans = channelset_add(&p->channelset, &cs);
@@ -1054,7 +1056,7 @@ pubnub_unsubscribe(struct pubnub *p, const char *channels[], int channels_n,
 
 
 	/* Edit the channelset. */
-	const struct channelset cs = { .set = channels, .n = channels_n };
+	const struct channelset cs = { SFINIT(.set, channels), SFINIT(.n, channels_n) };
 	if (p->channelset.set) {
 		if (channels != NULL) {
 			channelset_rm(&p->channelset, &cs);

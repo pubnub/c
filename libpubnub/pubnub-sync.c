@@ -270,17 +270,17 @@ pubnub_sync_subscribe_cb(struct pubnub *p, enum pubnub_res result, char **channe
 
 PUBNUB_API
 const struct pubnub_callbacks pubnub_sync_callbacks = {
-	.add_socket = pubnub_sync_add_socket,
-	.rem_socket = pubnub_sync_rem_socket,
-	.timeout = pubnub_sync_timeout,
-	.wait = pubnub_sync_wait,
-	.stop_wait = pubnub_sync_stop_wait,
-	.done = pubnub_sync_done,
+	SFINIT(.add_socket, pubnub_sync_add_socket),
+	SFINIT(.rem_socket, pubnub_sync_rem_socket),
+	SFINIT(.timeout, pubnub_sync_timeout),
+	SFINIT(.wait, pubnub_sync_wait),
+	SFINIT(.stop_wait, pubnub_sync_stop_wait),
+	SFINIT(.done, pubnub_sync_done),
 
-	.publish = pubnub_sync_generic_cb,
-	.subscribe = pubnub_sync_subscribe_cb,
-	.unsubscribe = pubnub_sync_generic_cb,
-	.history = pubnub_sync_generic_cb,
-	.here_now = pubnub_sync_generic_cb,
-	.time = pubnub_sync_generic_cb,
+	SFINIT(.publish, pubnub_sync_generic_cb),
+	SFINIT(.subscribe, pubnub_sync_subscribe_cb),
+	SFINIT(.unsubscribe, pubnub_sync_generic_cb),
+	SFINIT(.history, pubnub_sync_generic_cb),
+	SFINIT(.here_now, pubnub_sync_generic_cb),
+	SFINIT(.time, pubnub_sync_generic_cb),
 };

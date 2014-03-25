@@ -32,6 +32,11 @@ struct timespec {
 };
 #endif
 
+#if defined _MSC_VER || defined __cplusplus
+#define SFINIT(f, v) v	
+#else
+#define SFINIT(f, v) f = v
+#endif
 
 
 /* Result codes for PubNub methods. */

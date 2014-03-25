@@ -134,7 +134,7 @@ pubnub_libevent_timeout(struct pubnub *p, void *ctx_data, const struct timespec 
 	libevent->timer_cb_data = cb_data;
 
 	if (libevent->timer_cb) {
-		struct timeval timeout = { .tv_sec = ts->tv_sec, .tv_usec = ts->tv_nsec / 1000 };
+		struct timeval timeout = { SFINIT(.tv_sec, ts->tv_sec), SFINIT(.tv_usec, ts->tv_nsec / 1000) };
 		evtimer_add(&libevent->timer_event, &timeout);
 	}
 }
@@ -177,10 +177,10 @@ pubnub_libevent_done(struct pubnub *p, void *ctx_data)
 
 PUBNUB_API
 const struct pubnub_callbacks pubnub_libevent_callbacks = {
-	.add_socket = pubnub_libevent_add_socket,
-	.rem_socket = pubnub_libevent_rem_socket,
-	.timeout = pubnub_libevent_timeout,
-	.wait = pubnub_libevent_wait,
-	.stop_wait = pubnub_libevent_stop_wait,
-	.done = pubnub_libevent_done,
+	SFINIT(.add_socket, pubnub_libevent_add_socket),
+	SFINIT(.rem_socket, pubnub_libevent_rem_socket),
+	SFINIT(.timeout, pubnub_libevent_timeout),
+	SFINIT(.wait, pubnub_libevent_wait),
+	SFINIT(.stop_wait, pubnub_libevent_stop_wait),
+	SFINIT(.done, pubnub_libevent_done),
 };
