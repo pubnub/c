@@ -58,10 +58,10 @@ struct pubnub {
 };
 
 #ifdef DEBUG
-#define DBGMSG(x...) do { fprintf(stderr, "[%d] ", __LINE__); fprintf(stderr, x); } while (0)
+#define DBGMSG(x, ...) do { fprintf(stderr, "[%d] ", __LINE__); fprintf(stderr, x, ##__VA_ARGS__); } while (0)
 #define VERBOSE_VAL 1L
 #else
-#define DBGMSG(x...) do { } while (0)
+#define DBGMSG(x, ...) do { } while (0)
 #define VERBOSE_VAL 0L
 #endif
 
