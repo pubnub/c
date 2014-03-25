@@ -1,5 +1,4 @@
 #include <assert.h>
-#include <stdbool.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -328,7 +327,7 @@ pubnub_gen_uuid(void)
 	char uuidbuf[] = "xxxxxxxx-xxxx-4xxx-9xxx-xxxxxxxxxxxx";
 
 	unsigned int seed;
-#if defined(__MINGW32__) || defined(__MACH__)
+#if defined(__MINGW32__) || defined(_MSC_VER) || defined(__MACH__)
 	seed = time(NULL);
 	srand(seed);
 #else
@@ -337,12 +336,15 @@ pubnub_gen_uuid(void)
 	struct timespec ts;
 	clock_gettime(CLOCK_MONOTONIC, &ts);
 	seed = ts.tv_nsec;
+#if defined(__ANDROID__)
+	srand(seed);
+#endif // ANDROID
 #endif
 	char hex[] = "0123456789abcdef";
 	for (int i = 0; i < strlen(uuidbuf); i++) {
 		if (uuidbuf[i] != 'x')
 			continue;
-#if defined(__MINGW32__) || defined(__MACH__)
+#if defined(__MINGW32__) || defined(_MSC_VER) || defined(__MACH__) || defined(__ANDROID__)
 		uuidbuf[i] = hex[rand() % 16];
 #else
 		uuidbuf[i] = hex[rand_r(&seed) % 16];
@@ -887,7 +889,7 @@ error:
 		char *channelsettok = NULL;
 #endif
 		for (int i = 0; i < msg_n; channelsetp = NULL, i++) {
-#ifdef __MINGW32__			
+#if defined(__MINGW32__) || defined(_MSC_VER)
 			char *channelset1 = strtok(channelsetp, ",");
 #else			
 			char *channelset1 = strtok_r(channelsetp, ",", &channelsettok);
