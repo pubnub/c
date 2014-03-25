@@ -16,7 +16,16 @@
 	now.tv_sec = mts.tv_sec; \
 	now.tv_nsec = mts.tv_nsec;
 #else
+#ifdef _WIN32
+#include <Windows.h>
+#define GET_CLOCK_NOW __int64 t,li; \
+	 QueryPerformanceCounter((LARGE_INTEGER*)&t); \
+	 QueryPerformanceFrequency((LARGE_INTEGER*)&li); \
+	 now.tv_sec = t/li; \
+	 now.tv_nsec = (t - now.tv_sec * li) * 1000000000 / li;
+#else
 #define GET_CLOCK_NOW clock_gettime(CLOCK_REALTIME, &now); 
+#endif
 #endif
 
 #include "pubnub.h"
