@@ -31,7 +31,7 @@ pubnub_signature(struct pubnub *p, const char *channel, const char *message_str)
 	unsigned char digest[16];
 	MD5_Final(digest, &md5);
 
-	char *signature = malloc(33);
+	char *signature = (char*)malloc(33);
 	for (int i = 0; i < 16; i++) {
 		snprintf(&signature[i * 2], 3, "%02x", digest[i]);
 	}
@@ -80,7 +80,7 @@ pubnub_encrypt(const char *cipher_key, const char *message_str)
 	}
 
 	int message_len = strlen(message_str);
-	unsigned char *cipher_data = malloc(message_len + EVP_CIPHER_block_size(EVP_aes_256_cbc()));
+	unsigned char *cipher_data = (unsigned char*)malloc(message_len + EVP_CIPHER_block_size(EVP_aes_256_cbc()));
 	int cipher_len = 0;
 
 	if (!EVP_EncryptUpdate(&aes256, cipher_data, &cipher_len, (unsigned char *) message_str, message_len)) {
@@ -142,7 +142,7 @@ pubnub_decrypt(const char *cipher_key, const char *b64_str)
 	BIO *bmem = BIO_new_mem_buf((unsigned char *) b64_str, b64_len);
 	BIO *b64 = BIO_push(b64f, bmem);
 	/* b64_len is fine upper bound for raw data length... */
-	unsigned char *cipher_data = malloc(b64_len);
+	unsigned char *cipher_data = (unsigned char*)malloc(b64_len);
 	int cipher_len = BIO_read(b64, cipher_data, b64_len);
 	BIO_free_all(b64);
 
@@ -155,7 +155,7 @@ pubnub_decrypt(const char *cipher_key, const char *b64_str)
 		return NULL;
 	}
 
-	char *message_str = malloc(cipher_len + EVP_CIPHER_block_size(EVP_aes_256_cbc()) + 1);
+	char *message_str = (char*)malloc(cipher_len + EVP_CIPHER_block_size(EVP_aes_256_cbc()) + 1);
 	int message_len = 0;
 	if (!EVP_DecryptUpdate(&aes256, (unsigned char *) message_str, &message_len, cipher_data, cipher_len)) {
 		DBGMSG("DecryptUpdate error\n");

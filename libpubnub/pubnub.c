@@ -269,7 +269,7 @@ pubnub_event_timeoutcb(struct pubnub *p, void *cb_data)
 static int
 pubnub_http_sockcb(CURL *easy, curl_socket_t s, int action, void *userp, void *socketp)
 {
-	struct pubnub *p = userp;
+	struct pubnub *p = (struct pubnub *)userp;
 
 	DBGMSG("http_sockcb: fd %d action %d sockdata %p\n", s, action, socketp);
 
@@ -298,7 +298,7 @@ pubnub_http_sockcb(CURL *easy, curl_socket_t s, int action, void *userp, void *s
 static int
 pubnub_http_timercb(CURLM *multi, long timeout_ms, void *userp)
 {
-	struct pubnub *p = userp;
+	struct pubnub *p = (struct pubnub *)userp;
 
 	DBGMSG("http_timercb: %ld ms\n", timeout_ms);
 
@@ -470,7 +470,7 @@ struct pubnub *
 pubnub_init(const char *publish_key, const char *subscribe_key,
 		const struct pubnub_callbacks *cb, void *cb_data)
 {
-	struct pubnub *p = calloc(1, sizeof(*p));
+	struct pubnub *p = (struct pubnub *)calloc(1, sizeof(*p));
 	if (!p) return NULL;
 
 	p->publish_key = strdup(publish_key);
@@ -590,7 +590,7 @@ pubnub_error_policy(struct pubnub *p, unsigned int retry_mask, bool print)
 static size_t
 pubnub_http_inputcb(char *ptr, size_t size, size_t nmemb, void *userdata)
 {
-	struct pubnub *p = userdata;
+	struct pubnub *p = (struct pubnub *)userdata;
 	DBGMSG("http input: %zd bytes\n", size * nmemb);
 	printbuf_memappend_fast(p->body, ptr, size * nmemb);
 	return size * nmemb;
@@ -751,8 +751,9 @@ struct resubscribe_http_cb {
 static void
 resubscribe_http_cb(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data)
 {
-	struct resubscribe_http_cb *cb_http_data = call_data;
-	p->finished_cb = p->finished_cb_data = NULL;
+	struct resubscribe_http_cb *cb_http_data = (struct resubscribe_http_cb *)call_data;
+	p->finished_cb = NULL;
+	p->finished_cb_data = NULL;
 
 	/* Restart the subscribe first (to be sure the unsub callback
 	 * cannot disturb it). Do it even in case of failed leave()/join(). */
@@ -779,16 +780,17 @@ resubscribe_sub_http_cb(struct pubnub *p, enum pubnub_res result, char **channel
 static struct resubscribe_http_cb *
 resubscribe_http_init(struct pubnub *p)
 {
-	struct resubscribe_http_cb *cb_http_data = calloc(1, sizeof(*cb_http_data));
+	struct resubscribe_http_cb *cb_http_data = (struct resubscribe_http_cb *)calloc(1, sizeof(*cb_http_data));
 
-	struct pubnub_subscribe_http_cb *subcb_http_data = p->finished_cb_data;
+	struct pubnub_subscribe_http_cb *subcb_http_data = (struct pubnub_subscribe_http_cb *)p->finished_cb_data;
 	if (subcb_http_data) {
 		cb_http_data->sub_cb = subcb_http_data->cb;
 		cb_http_data->sub_call_data = subcb_http_data->call_data;
 
 		free(subcb_http_data->channelset);
 		free(subcb_http_data);
-		p->finished_cb = p->finished_cb_data = NULL;
+		p->finished_cb = NULL;
+		p->finished_cb_data = NULL;
 	}
 	cb_http_data->sub_timeout = p->timeout;
 	strcpy(cb_http_data->sub_time_token, p->time_token);
@@ -800,13 +802,14 @@ resubscribe_http_init(struct pubnub *p)
 static void
 pubnub_subscribe_http_cb(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data)
 {
-	struct pubnub_subscribe_http_cb *cb_http_data = call_data;
+	struct pubnub_subscribe_http_cb *cb_http_data = (struct pubnub_subscribe_http_cb *)call_data;
 	char *channelset = cb_http_data->channelset;
 	bool cb_internal = cb_http_data->cb_internal;
 	call_data = cb_http_data->call_data;
 	pubnub_subscribe_cb cb = cb_http_data->cb;
 	free(cb_http_data);
-	p->finished_cb = p->finished_cb_data = NULL;
+	p->finished_cb = NULL;
+	p->finished_cb_data = NULL;
 
 	if (result != PNR_OK) {
 		/* pubnub_handle_error() has been already called along
@@ -858,7 +861,7 @@ error:
 	 * when multiplexing). */
 	json_object *channelset_json = json_object_array_get_idx(response, 2);
 	int msg_n = json_object_array_length(msg);
-	char **channels = malloc((msg_n + 1) * sizeof(channels[0]));
+	char **channels = (char**)malloc((msg_n + 1) * sizeof(channels[0]));
 	if (channelset_json) {
 		if (!json_object_is_type(channelset_json, json_type_string)) {
 			free(channels);
@@ -908,7 +911,7 @@ static void
 pubnub_subscribe_do(struct pubnub *p, const char *channelset, char *time_token,
 		long timeout, pubnub_subscribe_cb cb, void *cb_data, bool cb_internal)
 {
-	struct pubnub_subscribe_http_cb *cb_http_data = malloc(sizeof(*cb_http_data));
+	struct pubnub_subscribe_http_cb *cb_http_data = (struct pubnub_subscribe_http_cb *)malloc(sizeof(*cb_http_data));
 	cb_http_data->channelset = strdup(channelset);
 	cb_http_data->cb = cb;
 	cb_http_data->call_data = cb_data;
@@ -1096,11 +1099,12 @@ struct pubnub_history_http_cb {
 static void
 pubnub_history_http_cb(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data)
 {
-	struct pubnub_history_http_cb *cb_http_data = call_data;
+	struct pubnub_history_http_cb *cb_http_data = (struct pubnub_history_http_cb *)call_data;
 	call_data = cb_http_data->call_data;
 	pubnub_history_cb cb = cb_http_data->cb;
 	free(cb_http_data);
-	p->finished_cb = p->finished_cb_data = NULL;
+	p->finished_cb = NULL;
+	p->finished_cb_data = NULL;
 
 	if (result != PNR_OK) {
 		/* pubnub_handle_error() has been already called along
@@ -1156,7 +1160,7 @@ pubnub_history(struct pubnub *p, const char *channel, int limit,
 	if (timeout < 0)
 		timeout = 5;
 
-	struct pubnub_history_http_cb *cb_http_data = malloc(sizeof(*cb_http_data));
+	struct pubnub_history_http_cb *cb_http_data = (struct pubnub_history_http_cb *)malloc(sizeof(*cb_http_data));
 	cb_http_data->cb = cb;
 	cb_http_data->call_data = cb_data;
 
@@ -1199,11 +1203,12 @@ struct pubnub_time_http_cb {
 static void
 pubnub_time_http_cb(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data)
 {
-	struct pubnub_time_http_cb *cb_http_data = call_data;
+	struct pubnub_time_http_cb *cb_http_data = (struct pubnub_time_http_cb *)call_data;
 	call_data = cb_http_data->call_data;
 	pubnub_history_cb cb = cb_http_data->cb;
 	free(cb_http_data);
-	p->finished_cb = p->finished_cb_data = NULL;
+	p->finished_cb = NULL;
+	p->finished_cb_data = NULL;
 
 	if (result != PNR_OK) {
 		/* pubnub_handle_error() has been already called along
@@ -1248,7 +1253,7 @@ pubnub_time(struct pubnub *p, long timeout, pubnub_time_cb cb, void *cb_data)
 	if (timeout < 0)
 		timeout = 5;
 
-	struct pubnub_time_http_cb *cb_http_data = malloc(sizeof(*cb_http_data));
+	struct pubnub_time_http_cb *cb_http_data = (struct pubnub_time_http_cb *)malloc(sizeof(*cb_http_data));
 	cb_http_data->cb = cb;
 	cb_http_data->call_data = cb_data;
 
