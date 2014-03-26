@@ -2,6 +2,7 @@
 #include "gtest.h"
 
 #include <curl/curl.h>
+#include <fcntl.h>
 
 
 namespace Test {
@@ -44,6 +45,10 @@ protected:
 	pubnub *p;
 	char *url;
 
+	int _err_pipe[2];
+	int _old_err;
+	std::string _err;
+
 	static int addSock;
 	static int addSockMode;
 
@@ -74,8 +79,29 @@ protected:
 	{
 	}
 
-	virtual void SetUp() {
+	void GetErr() {
+        fflush(stderr);
+        std::string buf;
+        const int bufSize = 1024;
+        buf.resize(bufSize);
+        int bytesRead = 0;
+        if (!eof(_err_pipe[0])) {
+            bytesRead = read(_err_pipe[0], &(*buf.begin()), bufSize);
+        }
+        while(bytesRead == bufSize) {
+            _err += buf;
+            bytesRead = 0;
+            if (!eof(_err_pipe[0])) {
+                bytesRead = read(_err_pipe[0], &(*buf.begin()), bufSize);
+            }
+        }
+        if (bytesRead > 0) {
+            buf.resize(bytesRead);
+            _err += buf;
+        }
+	}
 
+	virtual void SetUp() {
 		memset(&cb, 0, sizeof(cb));
 		cb.add_socket = pubnub_test_add_socket;
 		cb.rem_socket = pubnub_test_rem_socket;
@@ -84,12 +110,34 @@ protected:
 
 		curlInit = false;
 
+        _err_pipe[0] = 0;
+        _err_pipe[1] = 0;
+		_old_err = 0;
+
+		_err.clear();
+        if (_pipe(_err_pipe, 65536, O_BINARY) != -1) {
+			_old_err = dup(fileno(stderr));
+			fflush(stderr);
+			dup2(_err_pipe[1], fileno(stderr));
+		}
+
 		p = pubnub_init("demo", "demo", &cb, NULL);
 
 		addSock = remSock = 0;
 		addSockMode = 0;
 	}
+
 	virtual void TearDown() {
+        if (_old_err > 0) {
+			dup2(_old_err, fileno(stderr));
+            close(_old_err);
+		}
+        if (_err_pipe[0] > 0) {
+            close(_err_pipe[0]);
+		}
+        if (_err_pipe[1] > 0) {
+            close(_err_pipe[1]);
+		}
 		pubnub_done(p);
 	}
 };
@@ -111,7 +159,7 @@ TEST_F(PubnubTest, Subscribe) {
 	ASSERT_TRUE(curlInit);
 	pubnub_subscribe(p, "channel", -1, NULL, NULL);
 	curl_easy_getinfo(p->curl, CURLINFO_EFFECTIVE_URL, &url);
-	char *t = strchr(url,'=');
+	char *t = strchr(url, '=');
 	ASSERT_TRUE(t != NULL);
 	char *s = strdup(url);
 	s[t - url] = 0;
@@ -119,6 +167,19 @@ TEST_F(PubnubTest, Subscribe) {
 	free(s);
 	pubnub_connection_cancel(p);
 }
+
+TEST_F(PubnubTest, Unsubscribe) {
+	ASSERT_TRUE(curlInit);
+	const char *channel = "channel";
+	pubnub_subscribe(p, channel, -1, NULL, NULL);
+	pubnub_unsubscribe(p, &channel, 1, -1, NULL, NULL);
+	EXPECT_EQ(1, p->channelset.n);
+	pubnub_connection_cancel(p);
+	pubnub_subscribe(p, channel, -1, NULL, NULL);
+	pubnub_unsubscribe(p, &channel, 1, -1, NULL, NULL);
+	EXPECT_EQ(0, p->channelset.n);
+}
+
 
 TEST_F(PubnubTest, SubscribeMulti) {
 	ASSERT_TRUE(curlInit);
@@ -160,17 +221,20 @@ TEST(ChannelSetTest, AddRemove) {
 	EXPECT_EQ(0, channelset_add(&cs, &cs));
 	const char *ch1[] = {"abc", "cde"};
 	struct channelset cs1 = {ch1, 2};
+	EXPECT_EQ(2, channelset_add(&cs, &cs1));
+	EXPECT_STREQ(ch1[1], cs.set[1]);
+	channelset_done(&cs);
 	EXPECT_EQ(0, channelset_add(&cs1, &cs1));
 	const char *ch2[] = {"abc", "fgh", "cde"};
 	struct channelset cs2 = {ch2, 3};
-	struct channelset *cs3 = (struct channelset*)calloc(1, sizeof(struct channelset));
-	EXPECT_EQ(2, channelset_add(cs3, &cs1));
-	EXPECT_EQ(1, channelset_add(cs3, &cs2));
-	EXPECT_EQ(2, channelset_rm(cs3, &cs1));
-	EXPECT_EQ(0, channelset_rm(cs3, &cs1));
-	EXPECT_STREQ(ch2[1], cs3->set[0]);
-	EXPECT_EQ(1, channelset_rm(cs3, &cs2));
-	free(cs3);
+	struct channelset cs3 = {NULL, 0};
+	EXPECT_EQ(2, channelset_add(&cs3, &cs1));
+	EXPECT_EQ(1, channelset_add(&cs3, &cs2));
+	EXPECT_EQ(2, channelset_rm(&cs3, &cs1));
+	EXPECT_EQ(0, channelset_rm(&cs3, &cs1));
+	EXPECT_STREQ(ch2[1], cs3.set[0]);
+	EXPECT_EQ(1, channelset_rm(&cs3, &cs2));
+	channelset_done(&cs3);
 }
 
 }
