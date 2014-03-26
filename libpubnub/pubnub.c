@@ -739,7 +739,7 @@ pubnub_publish(struct pubnub *p, const char *channel, struct json_object *messag
  * the changes up (new callback wins, previous callbacks gets
  * PNR_CANCELLED). */
 
-struct pubnub_subscribe_http_cb {
+struct pubnub_subscribe_cb_http_data {
 	/* XXX: We peek here from unsubscribe as well! */
 	char *channelset;
 	pubnub_subscribe_cb cb;
@@ -748,7 +748,7 @@ struct pubnub_subscribe_http_cb {
 };
 
 
-struct resubscribe_http_cb {
+struct resubscribe_cb_http_data {
 	pubnub_unsubscribe_cb unsub_cb;
 	void *unsub_call_data;
 
@@ -761,7 +761,7 @@ struct resubscribe_http_cb {
 static void
 resubscribe_http_cb(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data)
 {
-	struct resubscribe_http_cb *cb_http_data = (struct resubscribe_http_cb *)call_data;
+	struct resubscribe_cb_http_data *cb_http_data = (struct resubscribe_cb_http_data *)call_data;
 	p->finished_cb = NULL;
 	p->finished_cb_data = NULL;
 
@@ -787,12 +787,12 @@ resubscribe_sub_http_cb(struct pubnub *p, enum pubnub_res result, char **channel
 	resubscribe_http_cb(p, result, response, ctx_data, call_data);
 }
 
-static struct resubscribe_http_cb *
+static struct resubscribe_cb_http_data *
 resubscribe_http_init(struct pubnub *p)
 {
-	struct resubscribe_http_cb *cb_http_data = (struct resubscribe_http_cb *)calloc(1, sizeof(*cb_http_data));
+	struct resubscribe_cb_http_data *cb_http_data = (struct resubscribe_cb_http_data *)calloc(1, sizeof(*cb_http_data));
 
-	struct pubnub_subscribe_http_cb *subcb_http_data = (struct pubnub_subscribe_http_cb *)p->finished_cb_data;
+	struct pubnub_subscribe_cb_http_data *subcb_http_data = (struct pubnub_subscribe_cb_http_data *)p->finished_cb_data;
 	if (subcb_http_data) {
 		cb_http_data->sub_cb = subcb_http_data->cb;
 		cb_http_data->sub_call_data = subcb_http_data->call_data;
@@ -812,7 +812,7 @@ resubscribe_http_init(struct pubnub *p)
 static void
 pubnub_subscribe_http_cb(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data)
 {
-	struct pubnub_subscribe_http_cb *cb_http_data = (struct pubnub_subscribe_http_cb *)call_data;
+	struct pubnub_subscribe_cb_http_data *cb_http_data = (struct pubnub_subscribe_cb_http_data *)call_data;
 	char *channelset = cb_http_data->channelset;
 	bool cb_internal = cb_http_data->cb_internal;
 	call_data = cb_http_data->call_data;
@@ -921,7 +921,7 @@ static void
 pubnub_subscribe_do(struct pubnub *p, const char *channelset, char *time_token,
 		long timeout, pubnub_subscribe_cb cb, void *cb_data, bool cb_internal)
 {
-	struct pubnub_subscribe_http_cb *cb_http_data = (struct pubnub_subscribe_http_cb *)malloc(sizeof(*cb_http_data));
+	struct pubnub_subscribe_cb_http_data *cb_http_data = (struct pubnub_subscribe_cb_http_data *)malloc(sizeof(*cb_http_data));
 	cb_http_data->channelset = strdup(channelset);
 	cb_http_data->cb = cb;
 	cb_http_data->call_data = cb_data;
@@ -1006,7 +1006,7 @@ pubnub_subscribe_multi(struct pubnub *p, const char *channels[], int channels_n,
 			pubnub_connection_cancel(p);
 		}
 
-		struct resubscribe_http_cb *cb_http_data = resubscribe_http_init(p);
+		struct resubscribe_cb_http_data *cb_http_data = resubscribe_http_init(p);
 		cb_http_data->sub_cb = cb;
 		cb_http_data->sub_call_data = cb_data;
 		cb_http_data->sub_timeout = timeout;
@@ -1079,7 +1079,7 @@ pubnub_unsubscribe(struct pubnub *p, const char *channels[], int channels_n,
 	if (p->method) {
 		if (p->channelset.set) {
 			/* ... we will want to resume it later! */
-			struct resubscribe_http_cb *cb_http_data = resubscribe_http_init(p);
+			struct resubscribe_cb_http_data *cb_http_data = resubscribe_http_init(p);
 			cb_http_data->unsub_cb = cb;
 			cb_http_data->unsub_call_data = cb_data;
 
