@@ -111,12 +111,13 @@ TEST_F(PubnubTest, Subscribe) {
 	ASSERT_TRUE(curlInit);
 	pubnub_subscribe(p, "channel", -1, NULL, NULL);
 	curl_easy_getinfo(p->curl, CURLINFO_EFFECTIVE_URL, &url);
-	char *p = strchr(url,'=');
-	ASSERT_TRUE(p);
+	char *t = strchr(url,'=');
+	ASSERT_TRUE(t != NULL);
 	char *s = strdup(url);
-	s[p - url] = 0;
+	s[t - url] = 0;
 	EXPECT_STREQ("http://pubsub.pubnub.com/subscribe/demo/channel/0/0?uuid", s);
 	free(s);
+	pubnub_connection_cancel(p);
 }
 
 TEST_F(PubnubTest, SubscribeMulti) {
@@ -124,12 +125,13 @@ TEST_F(PubnubTest, SubscribeMulti) {
 	const char *channels[] = {"channel1", "channel2"};
 	pubnub_subscribe_multi(p, channels, 2, -1, NULL, NULL);
 	curl_easy_getinfo(p->curl, CURLINFO_EFFECTIVE_URL, &url);
-	char *p = strchr(url,'=');
-	ASSERT_TRUE(p);
+	char *t = strchr(url,'=');
+	ASSERT_TRUE(t != NULL);
 	char *s = strdup(url);
-	s[p - url] = 0;
+	s[t - url] = 0;
 	EXPECT_STREQ("http://pubsub.pubnub.com/subscribe/demo/channel1%2Cchannel2/0/0?uuid", s);
 	free(s);
+	pubnub_connection_cancel(p);
 }
 
 TEST_F(PubnubTest, History) {
