@@ -808,6 +808,70 @@ resubscribe_http_init(struct pubnub *p)
 	return cb_http_data;
 }
 
+static pubnub_res 
+check_subscribe_response(struct pubnub *p, struct json_object *response)
+{
+	/* Response must be an array, and its first element also an array. */
+	if (!json_object_is_type(response, json_type_array)) {
+		return PNR_FORMAT_ERROR;
+	}
+	json_object *msg = json_object_array_get_idx(response, 0);
+	if (!json_object_is_type(msg, json_type_array)) {
+		return PNR_FORMAT_ERROR;
+	}
+	if (p->cipher_key) {
+		/* Decrypt array elements, which must be strings. */
+		struct json_object *msg_new = pubnub_decrypt_array(p->cipher_key, msg);
+		if (!msg_new) {
+			return PNR_FORMAT_ERROR;
+		}
+		/* Replacing msg in the response[] array will make sure
+		 * the refcounting is correct; this drops old msg and
+		 * will drop msg_new when we drop the whole response. */
+		json_object_array_put_idx(response, 0, msg_new);
+	}
+
+	/* Extract and save time token (mandatory). */
+	json_object *time_token = json_object_array_get_idx(response, 1);
+	if (!json_object_is_type(time_token, json_type_string)) {
+		return PNR_FORMAT_ERROR;
+	}
+	strncpy(p->time_token, json_object_get_string(time_token), sizeof(p->time_token));
+	p->time_token[sizeof(p->time_token) - 1] = 0;
+
+	json_object *channelset_json = json_object_array_get_idx(response, 2);
+	if (channelset_json && !json_object_is_type(channelset_json, json_type_string)) {
+		return PNR_FORMAT_ERROR;
+	}
+
+	return PNR_OK;
+}
+
+static void
+parse_channels(char *channelset, int msg_n, char **channels)
+{
+	/* Comma-split the channelset to channels[] array. */
+	char *channelsetp = channelset;
+#ifndef __MINGW32__
+	char *channelsettok = NULL;
+#endif
+	for (int i = 0; i < msg_n; channelsetp = NULL, i++) {
+#ifdef __MINGW32__			
+		char *channelset1 = strtok(channelsetp, ",");
+#else			
+		char *channelset1 = strtok_r(channelsetp, ",", &channelsettok);
+#endif
+		if (!channelset1) {
+			for (; i < msg_n; i++) {
+				/* Fill the rest of the array with
+					* empty strings. */
+				channels[i] = strdup("");
+			}
+			break;
+		}
+		channels[i] = strdup(channelset1);
+	}
+}
 
 static void
 pubnub_subscribe_http_cb(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data)
@@ -821,99 +885,43 @@ pubnub_subscribe_http_cb(struct pubnub *p, enum pubnub_res result, struct json_o
 	p->finished_cb = NULL;
 	p->finished_cb_data = NULL;
 
-	if (result != PNR_OK) {
-		/* pubnub_handle_error() has been already called along
-		 * the way to here. */
-		if (cb) cb(p, result, NULL, response, ctx_data, call_data);
-		free(channelset);
-		return;
-	}
+	pubnub_res res = (result != PNR_OK ? result : check_subscribe_response(p, response));
+	struct json_object *msg;
+	char **channels = NULL;
+	if (res == PNR_OK) {
+		msg = json_object_array_get_idx(response, 0);
 
-	/* Response must be an array, and its first element also an array. */
-	if (!json_object_is_type(response, json_type_array)) {
-		result = PNR_FORMAT_ERROR;
-error:
-		if (pubnub_handle_error(p, result, response, "subscribe", false) && cb)
-			cb(p, result, NULL, response, ctx_data, call_data);
-		free(channelset);
-		return;
-	}
-	json_object *msg = json_object_array_get_idx(response, 0);
-	if (!json_object_is_type(msg, json_type_array)) {
-		result = PNR_FORMAT_ERROR;
-		goto error;
-	}
-
-	if (p->cipher_key) {
-		/* Decrypt array elements, which must be strings. */
-		struct json_object *msg_new = pubnub_decrypt_array(p->cipher_key, msg);
-		if (!msg_new) {
-			result = PNR_FORMAT_ERROR;
-			goto error;
-		}
-		/* Replacing msg in the response[] array will make sure
-		 * the refcounting is correct; this drops old msg and
-		 * will drop msg_new when we drop the whole response. */
-		json_object_array_put_idx(response, 0, msg_new);
-		msg = msg_new;
-	}
-
-	/* Extract and save time token (mandatory). */
-	json_object *time_token = json_object_array_get_idx(response, 1);
-	if (!time_token || !json_object_is_type(time_token, json_type_string)) {
-		result = PNR_FORMAT_ERROR;
-		goto error;
-	}
-	strncpy(p->time_token, json_object_get_string(time_token), sizeof(p->time_token));
-	p->time_token[sizeof(p->time_token) - 1] = 0;
-
-	/* Extract and update channel name (not mandatory, present only
-	 * when multiplexing). */
-	json_object *channelset_json = json_object_array_get_idx(response, 2);
-	int msg_n = json_object_array_length(msg);
-	char **channels = (char**)malloc((msg_n + 1) * sizeof(channels[0]));
-	if (channelset_json) {
-		if (!json_object_is_type(channelset_json, json_type_string)) {
-			free(channels);
-			result = PNR_FORMAT_ERROR;
-			goto error;
-		}
-		free(channelset);
-		channelset = strdup(json_object_get_string(channelset_json));
-
-		/* Comma-split the channelset to channels[] array. */
-		char *channelsetp = channelset;
-#ifndef __MINGW32__
-		char *channelsettok = NULL;
-#endif
-		for (int i = 0; i < msg_n; channelsetp = NULL, i++) {
-#ifdef __MINGW32__			
-			char *channelset1 = strtok(channelsetp, ",");
-#else			
-			char *channelset1 = strtok_r(channelsetp, ",", &channelsettok);
-#endif
-			if (!channelset1) {
-				for (; i < msg_n; i++) {
-					/* Fill the rest of the array with
-					 * empty strings. */
-					channels[i] = strdup("");
-				}
-				break;
+		/* Extract and update channel name (not mandatory, present only
+		 * when multiplexing). */
+		json_object *channelset_json = json_object_array_get_idx(response, 2);
+		int msg_n = json_object_array_length(msg);
+		channels = (char**)malloc((msg_n + 1) * sizeof(channels[0]));
+		if (channelset_json) {
+			free(channelset);
+			channelset = strdup(json_object_get_string(channelset_json));
+			parse_channels(channelset, msg_n, channels);
+		} else {
+			for (int i = 0; i < msg_n; i++) {
+				channels[i] = strdup(channelset);
 			}
-			channels[i] = strdup(channelset1);
 		}
+		channels[msg_n] = NULL;
+
+		if (!cb_internal)
+			p->cb->stop_wait(p, p->cb_data);
+
 	} else {
-		for (int i = 0; i < msg_n; i++) {
-			channels[i] = strdup(channelset);
+		msg = response;
+		if (result == PNR_OK /* pubnub_handle_error() has not been already called */
+			&& !pubnub_handle_error(p, res, response, "subscribe", false)) {
+			cb = NULL;
 		}
 	}
-	channels[msg_n] = NULL;
 	free(channelset);
-
 	/* Finally call the user callback. */
-	if (!cb_internal)
-		p->cb->stop_wait(p, p->cb_data);
-	cb(p, result, channels, msg, ctx_data, call_data);
+	if (cb) {
+		cb(p, res, channels, msg, ctx_data, call_data);
+	}
 }
 
 /* This is the common backend for subscribe HTTP API calls. */
