@@ -79,6 +79,22 @@ protected:
 	{
 	}
 
+	static void 
+	pubnub_test_stop_wait(struct pubnub *p, void *ctx_data)
+	{
+	}
+
+	static bool cbCalled;
+	static pubnub_res cbResult;
+	static char **cbChannels;
+
+	static void subCb(struct pubnub *p, enum pubnub_res result, char **channels, struct json_object *response, void *ctx_data, void *call_data)
+	{
+		cbCalled = true;
+		cbResult = result;
+		cbChannels = channels;
+	}
+
 	void GetErr() {
         fflush(stderr);
         std::string buf;
@@ -107,6 +123,7 @@ protected:
 		cb.rem_socket = pubnub_test_rem_socket;
 		cb.timeout = pubnub_test_timeout;
 		cb.wait = pubnub_test_wait;
+		cb.stop_wait = pubnub_test_stop_wait;
 
 		curlInit = false;
 
@@ -125,6 +142,8 @@ protected:
 
 		addSock = remSock = 0;
 		addSockMode = 0;
+
+		cbCalled = false;
 	}
 
 	virtual void TearDown() {
@@ -143,6 +162,9 @@ protected:
 };
 
 int PubnubTest::addSock, PubnubTest::addSockMode, PubnubTest::remSock;
+bool PubnubTest::cbCalled;
+pubnub_res PubnubTest::cbResult;
+char **PubnubTest::cbChannels;
 
 TEST_F(PubnubTest, Publish) {
 	ASSERT_TRUE(curlInit);
@@ -235,6 +257,136 @@ TEST(ChannelSetTest, AddRemove) {
 	EXPECT_STREQ(ch2[1], cs3.set[0]);
 	EXPECT_EQ(1, channelset_rm(&cs3, &cs2));
 	channelset_done(&cs3);
+}
+
+TEST_F(PubnubTest, SubscribeHttpCbWithError) {
+	struct pubnub_subscribe_cb_http_data *http_data = (struct pubnub_subscribe_cb_http_data *)calloc(1, sizeof(*http_data));
+	http_data->cb = subCb;
+	pubnub_subscribe_http_cb(p, PNR_TIMEOUT, NULL, NULL, http_data);
+	EXPECT_TRUE(cbCalled && cbResult == PNR_TIMEOUT);
+	GetErr();
+	EXPECT_TRUE(_err.empty());
+}
+
+TEST_F(PubnubTest, SubscribeHttpCbWithObject) {
+	json_object *response = json_object_new_object();
+	struct pubnub_subscribe_cb_http_data *http_data = (struct pubnub_subscribe_cb_http_data *)calloc(1, sizeof(*http_data));
+	http_data->cb = subCb;
+	pubnub_subscribe_http_cb(p, PNR_OK, response, NULL, http_data);
+	EXPECT_FALSE(cbCalled);
+	GetErr();
+	EXPECT_TRUE(strstr(_err.c_str(), "Unexpected"));
+	EXPECT_TRUE(strstr(_err.c_str(), "reissuing"));
+	json_object_put(response);
+}
+
+TEST_F(PubnubTest, SubscribeHttpCbWithObjectNoRetry) {
+	json_object *response = json_object_new_object();
+	struct pubnub_subscribe_cb_http_data *http_data = (struct pubnub_subscribe_cb_http_data *)calloc(1, sizeof(*http_data));
+	http_data->cb = subCb;
+	p->error_retry_mask = 0;
+	pubnub_subscribe_http_cb(p, PNR_OK, response, NULL, http_data);
+	EXPECT_TRUE(cbCalled && cbResult == PNR_FORMAT_ERROR);
+	GetErr();
+	EXPECT_TRUE(strstr(_err.c_str(), "Unexpected"));
+	EXPECT_FALSE(strstr(_err.c_str(), "reissuing"));
+	json_object_put(response);
+}
+
+TEST_F(PubnubTest, SubscribeHttpCbWithArray) {
+	json_object *response = json_object_new_array();
+	struct pubnub_subscribe_cb_http_data *http_data = (struct pubnub_subscribe_cb_http_data *)calloc(1, sizeof(*http_data));
+	http_data->cb = subCb;
+	pubnub_subscribe_http_cb(p, PNR_OK, response, NULL, http_data);
+	EXPECT_FALSE(cbCalled);
+	GetErr();
+	EXPECT_TRUE(strstr(_err.c_str(), "Unexpected"));
+	EXPECT_TRUE(strstr(_err.c_str(), "reissuing"));
+	json_object_put(response);
+}
+
+TEST_F(PubnubTest, SubscribeHttpCbWithArrayArray) {
+	json_object *response = json_object_new_array();
+	json_object_array_add(response, json_object_new_array());
+	struct pubnub_subscribe_cb_http_data *http_data = (struct pubnub_subscribe_cb_http_data *)calloc(1, sizeof(*http_data));
+	http_data->cb = subCb;
+	pubnub_subscribe_http_cb(p, PNR_OK, response, NULL, http_data);
+	EXPECT_FALSE(cbCalled);
+	GetErr();
+	EXPECT_TRUE(strstr(_err.c_str(), "Unexpected"));
+	EXPECT_TRUE(strstr(_err.c_str(), "reissuing"));
+	json_object_put(response);
+}
+
+TEST_F(PubnubTest, SubscribeHttpCbWithArrayArrayTimeToken) {
+	json_object *response = json_object_new_array();
+	json_object_array_add(response, json_object_new_array());
+	char *time_token = "time_token";
+	json_object_array_add(response, json_object_new_string(time_token));
+	struct pubnub_subscribe_cb_http_data *http_data = (struct pubnub_subscribe_cb_http_data *)calloc(1, sizeof(*http_data));
+	http_data->cb = subCb;
+	pubnub_subscribe_http_cb(p, PNR_OK, response, NULL, http_data);
+	EXPECT_STREQ(time_token, p->time_token);
+	EXPECT_TRUE(cbCalled && cbResult == PNR_OK);
+	json_object_put(response);
+}
+
+TEST_F(PubnubTest, SubscribeHttpCbWithEncryptedArray) {
+	json_object *response = json_object_new_array();
+	json_object *msg = json_object_new_array();
+	char *msg_str = "42";
+	pubnub_set_cipher_key(p, "cipher key");
+	json_object_array_add(msg, pubnub_encrypt(p->cipher_key, msg_str));
+	json_object_array_add(response, msg);
+	json_object_array_add(response, json_object_new_string(""));
+	struct pubnub_subscribe_cb_http_data *http_data = (struct pubnub_subscribe_cb_http_data *)calloc(1, sizeof(*http_data));
+	http_data->cb = subCb;
+	pubnub_subscribe_http_cb(p, PNR_OK, response, NULL, http_data);
+	EXPECT_TRUE(cbCalled && cbResult == PNR_OK);
+	json_object *o = json_object_array_get_idx(response, 0);
+	const char *s = json_object_get_string(json_object_array_get_idx(o, 0));
+	EXPECT_STREQ(msg_str, s);
+	json_object_put(response);
+}
+
+TEST_F(PubnubTest, SubscribeHttpCbWithChannelsetObject) {
+	json_object *response = json_object_new_array();
+	json_object_array_add(response, json_object_new_array());
+	json_object_array_add(response, json_object_new_string(""));
+	json_object_array_add(response, json_object_new_object());
+	struct pubnub_subscribe_cb_http_data *http_data = (struct pubnub_subscribe_cb_http_data *)calloc(1, sizeof(*http_data));
+	http_data->cb = subCb;
+	pubnub_subscribe_http_cb(p, PNR_OK, response, NULL, http_data);
+	EXPECT_FALSE(cbCalled);
+	GetErr();
+	EXPECT_TRUE(strstr(_err.c_str(), "Unexpected"));
+	EXPECT_TRUE(strstr(_err.c_str(), "reissuing"));
+	json_object_put(response);
+}
+
+TEST_F(PubnubTest, SubscribeHttpCbWithChannelset) {
+	json_object *response = json_object_new_array();
+	json_object *msg = json_object_new_array();
+	json_object_array_add(msg, json_object_new_string(""));
+	json_object_array_add(msg, json_object_new_string(""));
+	json_object_array_add(msg, json_object_new_string(""));
+	json_object_array_add(response, msg);
+	json_object_array_add(response, json_object_new_string(""));
+	json_object_array_add(response, json_object_new_string("abc,def"));
+	struct pubnub_subscribe_cb_http_data *http_data = (struct pubnub_subscribe_cb_http_data *)calloc(1, sizeof(*http_data));
+	http_data->cb = subCb;
+	pubnub_subscribe_http_cb(p, PNR_OK, response, NULL, http_data);
+	EXPECT_TRUE(cbCalled && cbResult == PNR_OK);
+	ASSERT_TRUE(cbChannels != NULL);
+	EXPECT_STREQ("abc", cbChannels[0]);
+	EXPECT_STREQ("def", cbChannels[1]);
+	EXPECT_STREQ("", cbChannels[2]);
+	EXPECT_TRUE(cbChannels[3] == NULL);
+	for(char **p = cbChannels; *p; p++) {
+		free(*p);
+	}
+	free(cbChannels);
+	json_object_put(response);
 }
 
 }
