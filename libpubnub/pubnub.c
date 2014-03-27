@@ -198,9 +198,11 @@ pubnub_connection_cleanup(struct pubnub *p, bool stop_wait)
 {
 	p->method = NULL;
 
-	curl_multi_remove_handle(p->curlm, p->curl);
-	curl_easy_cleanup(p->curl);
-	p->curl = NULL;
+	if (p->curl) {
+		curl_multi_remove_handle(p->curlm, p->curl);
+		curl_easy_cleanup(p->curl);
+		p->curl = NULL;
+	}
 }
 
 /* Cancel ongoing HTTP connection, freeing all request resources and
@@ -808,15 +810,15 @@ resubscribe_http_init(struct pubnub *p)
 	return cb_http_data;
 }
 
-static pubnub_res 
+static enum pubnub_res
 check_subscribe_response(struct pubnub *p, struct json_object *response)
 {
 	/* Response must be an array, and its first element also an array. */
-	if (!json_object_is_type(response, json_type_array)) {
+	if (!response || !json_object_is_type(response, json_type_array)) {
 		return PNR_FORMAT_ERROR;
 	}
 	json_object *msg = json_object_array_get_idx(response, 0);
-	if (!json_object_is_type(msg, json_type_array)) {
+	if (!msg || !json_object_is_type(msg, json_type_array)) {
 		return PNR_FORMAT_ERROR;
 	}
 	if (p->cipher_key) {
@@ -833,7 +835,7 @@ check_subscribe_response(struct pubnub *p, struct json_object *response)
 
 	/* Extract and save time token (mandatory). */
 	json_object *time_token = json_object_array_get_idx(response, 1);
-	if (!json_object_is_type(time_token, json_type_string)) {
+	if (!time_token || !json_object_is_type(time_token, json_type_string)) {
 		return PNR_FORMAT_ERROR;
 	}
 	strncpy(p->time_token, json_object_get_string(time_token), sizeof(p->time_token));
@@ -885,7 +887,7 @@ pubnub_subscribe_http_cb(struct pubnub *p, enum pubnub_res result, struct json_o
 	p->finished_cb = NULL;
 	p->finished_cb_data = NULL;
 
-	pubnub_res res = (result != PNR_OK ? result : check_subscribe_response(p, response));
+	enum pubnub_res res = (result != PNR_OK ? result : check_subscribe_response(p, response));
 	struct json_object *msg;
 	char **channels = NULL;
 	if (res == PNR_OK) {
@@ -955,7 +957,7 @@ pubnub_join(struct pubnub *p, const char *channelset, long timeout,
 	if (timeout <= 0)
 		timeout = 5;
 
-	pubnub_subscribe_do(p, channelset, "0", timeout, cb, cb_data, true);
+	pubnub_subscribe_do(p, channelset, (char*)"0", timeout, cb, cb_data, true);
 }
 
 PUBNUB_API
@@ -1132,7 +1134,7 @@ pubnub_history_http_cb(struct pubnub *p, enum pubnub_res result, struct json_obj
 	}
 
 	/* Response must be an array. */
-	if (!json_object_is_type(response, json_type_array)) {
+	if (!response || !json_object_is_type(response, json_type_array)) {
 		result = PNR_FORMAT_ERROR;
 error:
 		if (pubnub_handle_error(p, result, response, "history", false) && cb)
@@ -1236,7 +1238,7 @@ pubnub_time_http_cb(struct pubnub *p, enum pubnub_res result, struct json_object
 	}
 
 	/* Response must be an array. */
-	if (!json_object_is_type(response, json_type_array)) {
+	if (!response || !json_object_is_type(response, json_type_array)) {
 		result = PNR_FORMAT_ERROR;
 		if (pubnub_handle_error(p, result, response, "time", false) && cb)
 			cb(p, result, response, ctx_data, call_data);

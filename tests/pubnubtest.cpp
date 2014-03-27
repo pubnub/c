@@ -3,7 +3,7 @@
 
 #include <curl/curl.h>
 #include <fcntl.h>
-
+#include <unistd.h>
 
 namespace Test {
 
@@ -96,25 +96,25 @@ protected:
 	}
 
 	void GetErr() {
-        fflush(stderr);
-        std::string buf;
-        const int bufSize = 1024;
-        buf.resize(bufSize);
-        int bytesRead = 0;
-        if (!eof(_err_pipe[0])) {
-            bytesRead = read(_err_pipe[0], &(*buf.begin()), bufSize);
-        }
-        while(bytesRead == bufSize) {
-            _err += buf;
-            bytesRead = 0;
-            if (!eof(_err_pipe[0])) {
-                bytesRead = read(_err_pipe[0], &(*buf.begin()), bufSize);
-            }
-        }
-        if (bytesRead > 0) {
-            buf.resize(bytesRead);
-            _err += buf;
-        }
+		fflush(stderr);
+		if (_old_err > 0) {
+			dup2(_old_err, fileno(stderr));
+			close(_old_err);
+			_old_err = 0;
+		}
+		std::string buf;
+		const int bufSize = 1024;
+		buf.resize(bufSize);
+		int bytesRead = 0;
+		bytesRead = read(_err_pipe[0], &(*buf.begin()), bufSize);
+		while(bytesRead == bufSize) {
+			_err += buf;
+			bytesRead = read(_err_pipe[0], &(*buf.begin()), bufSize);
+		}
+		if (bytesRead > 0) {
+			buf.resize(bytesRead);
+			_err += buf;
+		}
 	}
 
 	virtual void SetUp() {
@@ -127,12 +127,16 @@ protected:
 
 		curlInit = false;
 
-        _err_pipe[0] = 0;
-        _err_pipe[1] = 0;
+		_err_pipe[0] = 0;
+		_err_pipe[1] = 0;
 		_old_err = 0;
 
 		_err.clear();
-        if (_pipe(_err_pipe, 65536, O_BINARY) != -1) {
+#ifdef _MSC_VER
+		if (_pipe(_err_pipe, 65536, O_BINARY) != -1) {
+#else		
+		if (pipe2(_err_pipe, O_NONBLOCK) != -1) {
+#endif		
 			_old_err = dup(fileno(stderr));
 			fflush(stderr);
 			dup2(_err_pipe[1], fileno(stderr));
@@ -147,15 +151,15 @@ protected:
 	}
 
 	virtual void TearDown() {
-        if (_old_err > 0) {
+		if (_old_err > 0) {
 			dup2(_old_err, fileno(stderr));
-            close(_old_err);
+			close(_old_err);
 		}
-        if (_err_pipe[0] > 0) {
-            close(_err_pipe[0]);
+		if (_err_pipe[0] > 0) {
+			close(_err_pipe[0]);
 		}
-        if (_err_pipe[1] > 0) {
-            close(_err_pipe[1]);
+		if (_err_pipe[1] > 0) {
+			close(_err_pipe[1]);
 		}
 		pubnub_done(p);
 	}
@@ -321,7 +325,7 @@ TEST_F(PubnubTest, SubscribeHttpCbWithArrayArray) {
 TEST_F(PubnubTest, SubscribeHttpCbWithArrayArrayTimeToken) {
 	json_object *response = json_object_new_array();
 	json_object_array_add(response, json_object_new_array());
-	char *time_token = "time_token";
+	const char *time_token = "time_token";
 	json_object_array_add(response, json_object_new_string(time_token));
 	struct pubnub_subscribe_cb_http_data *http_data = (struct pubnub_subscribe_cb_http_data *)calloc(1, sizeof(*http_data));
 	http_data->cb = subCb;
@@ -334,13 +338,14 @@ TEST_F(PubnubTest, SubscribeHttpCbWithArrayArrayTimeToken) {
 TEST_F(PubnubTest, SubscribeHttpCbWithEncryptedArray) {
 	json_object *response = json_object_new_array();
 	json_object *msg = json_object_new_array();
-	char *msg_str = "42";
+	const char *msg_str = "42";
 	pubnub_set_cipher_key(p, "cipher key");
 	json_object_array_add(msg, pubnub_encrypt(p->cipher_key, msg_str));
 	json_object_array_add(response, msg);
 	json_object_array_add(response, json_object_new_string(""));
 	struct pubnub_subscribe_cb_http_data *http_data = (struct pubnub_subscribe_cb_http_data *)calloc(1, sizeof(*http_data));
 	http_data->cb = subCb;
+	http_data->channelset = strdup("channel");
 	pubnub_subscribe_http_cb(p, PNR_OK, response, NULL, http_data);
 	EXPECT_TRUE(cbCalled && cbResult == PNR_OK);
 	json_object *o = json_object_array_get_idx(response, 0);
