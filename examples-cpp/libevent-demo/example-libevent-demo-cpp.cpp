@@ -2,7 +2,9 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#ifndef _MSC_VER
 #include <unistd.h>
+#endif
 
 #include <event.h>
 
@@ -53,7 +55,7 @@ clock_update(int fd, short kind, void *userp)
 	/* Next clock update in one second. */
 	/* (A more prudent timer strategy would be to update clock
 	 * on the next second _boundary_.) */
-	struct timeval timeout = { .tv_sec = 1, .tv_usec = 0 };
+	struct timeval timeout = { SFINIT(.tv_sec, 1), SFINIT(.tv_usec, 0) };
 	evtimer_add(&clock_update_timer, &timeout);
 }
 

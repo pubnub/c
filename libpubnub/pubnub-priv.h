@@ -65,6 +65,10 @@ struct pubnub {
 #define VERBOSE_VAL 0L
 #endif
 
+#ifdef _MSC_VER
+#define PUBNUB_API
+#else
 #define PUBNUB_API __attribute__ ((visibility("default")))
+#endif
 
 #endif

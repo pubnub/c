@@ -3,13 +3,9 @@
 
 #include <stdio.h>
 
-#ifdef _WIN32
-
+#ifdef _MSC_VER
 #include <tchar.h>
 #define _VARIADIC_MAX 10
-#define snprintf _snprintf
-#define __MINGW32__
-
 #endif // _WIN32
 
 #include "gtest/gtest.h"

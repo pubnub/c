@@ -1,6 +1,4 @@
 #include <errno.h>
-#include <poll.h>
-#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
