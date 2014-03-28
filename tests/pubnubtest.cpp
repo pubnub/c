@@ -3,7 +3,9 @@
 
 #include <curl/curl.h>
 #include <fcntl.h>
+#ifndef _MSC_VER
 #include <unistd.h>
+#endif
 
 namespace Test {
 
@@ -95,28 +97,6 @@ protected:
 		cbChannels = channels;
 	}
 
-	void GetErr() {
-		fflush(stderr);
-		if (_old_err > 0) {
-			dup2(_old_err, fileno(stderr));
-			close(_old_err);
-			_old_err = 0;
-		}
-		std::string buf;
-		const int bufSize = 1024;
-		buf.resize(bufSize);
-		int bytesRead = 0;
-		bytesRead = read(_err_pipe[0], &(*buf.begin()), bufSize);
-		while(bytesRead == bufSize) {
-			_err += buf;
-			bytesRead = read(_err_pipe[0], &(*buf.begin()), bufSize);
-		}
-		if (bytesRead > 0) {
-			buf.resize(bytesRead);
-			_err += buf;
-		}
-	}
-
 	virtual void SetUp() {
 		memset(&cb, 0, sizeof(cb));
 		cb.add_socket = pubnub_test_add_socket;
@@ -134,8 +114,10 @@ protected:
 		_err.clear();
 #ifdef _MSC_VER
 		if (_pipe(_err_pipe, 65536, O_BINARY) != -1) {
+#define READ_PIPE(hnd, buf, size) (eof(hnd) ? 0 : read(hnd, buf, size))
 #else		
 		if (pipe2(_err_pipe, O_NONBLOCK) != -1) {
+#define READ_PIPE(hnd, buf, size) read(hnd, buf, size)
 #endif		
 			_old_err = dup(fileno(stderr));
 			fflush(stderr);
@@ -162,6 +144,27 @@ protected:
 			close(_err_pipe[1]);
 		}
 		pubnub_done(p);
+	}
+
+	void GetErr() {
+		fflush(stderr);
+		if (_old_err > 0) {
+			dup2(_old_err, fileno(stderr));
+			close(_old_err);
+			_old_err = 0;
+		}
+		std::string buf;
+		const int bufSize = 1024;
+		buf.resize(bufSize);
+		int bytesRead = READ_PIPE(_err_pipe[0], &(*buf.begin()), bufSize);
+		while(bytesRead == bufSize) {
+			_err += buf;
+			bytesRead = READ_PIPE(_err_pipe[0], &(*buf.begin()), bufSize);
+		}
+		if (bytesRead > 0) {
+			buf.resize(bytesRead);
+			_err += buf;
+		}
 	}
 };
 
