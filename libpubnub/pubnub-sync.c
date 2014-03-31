@@ -3,6 +3,10 @@
 #include <string.h>
 #include <time.h>
 
+#ifndef _MSC_VER
+#include <poll.h>
+#endif
+
 #ifdef __MACH__ 
 #include <mach/clock.h>
 #include <mach/mach.h>
