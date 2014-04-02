@@ -17,7 +17,7 @@ struct event {
 #define EV_READ 1
 #define EV_WRITE 2
 #define EV_PERSIST 4
-
+#define evtimer_new(b, cb, arg)	event_new((b), -1, 0, (cb), (arg))
 
 struct pubnub_libevent;
 
@@ -72,6 +72,17 @@ int	evtimer_pending(struct event *, struct timeval *)
 {
 	LibEventTest::isPendingCalled = true;
 	return 1;
+}
+
+struct event *event_new(struct event_base *, int, short, void *, void *)
+{
+	return (struct event *)malloc(sizeof(struct event));
+}
+
+void event_free(struct event *ev)
+{
+	LibEventTest::delEventCnt++;
+	free(ev);
 }
 
 #include "../libpubnub/pubnub-libevent.c"

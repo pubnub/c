@@ -3,7 +3,7 @@
 #include <string.h>
 #include <time.h>
 
-#include <event.h>
+#include <event2/event.h>
 
 #include "pubnub.h"
 #include "pubnub-libevent.h"
@@ -20,10 +20,10 @@ struct pubnub_cb_info {
 struct pubnub_libevent {
 	int n;
 	int *fdset;
-	struct event *evset;
+	struct event **evset;
 	struct pubnub_cb_info *cbset;
 
-	struct event timer_event;
+	struct event *timer_event;
 	void (*timer_cb)(struct pubnub *p, void *cb_data);
 	void *timer_cb_data;
 
@@ -66,7 +66,7 @@ struct pubnub_libevent *
 pubnub_libevent_init(void)
 {
 	struct pubnub_libevent *libevent = (struct pubnub_libevent *)calloc(1, sizeof(*libevent));
-	evtimer_set(&libevent->timer_event, pubnub_libevent_timercb, libevent);
+	libevent->timer_event = evtimer_new(NULL, pubnub_libevent_timercb, libevent);
 	return libevent;
 }
 
@@ -91,10 +91,10 @@ pubnub_libevent_add_socket(struct pubnub *p, void *ctx_data, int fd, int mode,
 	libevent->cbset[i].cb = cb;
 	libevent->cbset[i].cb_data = cb_data;
 
-	libevent->evset = (struct event *)realloc(libevent->evset, sizeof(*libevent->evset) * libevent->n);
+	libevent->evset = (struct event **)realloc(libevent->evset, sizeof(*libevent->evset) * libevent->n);
 	int kind = (mode & 1 ? EV_READ : 0) | (mode & 2 ? EV_WRITE : 0) | EV_PERSIST;
-	event_set(&libevent->evset[i], fd, kind, pubnub_libevent_eventcb, libevent);
-	event_add(&libevent->evset[i], NULL);
+	libevent->evset[i] = event_new(NULL, fd, kind, pubnub_libevent_eventcb, libevent);
+	event_add(libevent->evset[i], NULL);
 
 	DBGMSG("watching %d sockets\n", libevent->n);
 }
@@ -108,10 +108,10 @@ pubnub_libevent_rem_socket(struct pubnub *p, void *ctx_data, int fd)
 	for (int i = 0; i < libevent->n; i++) {
 		if (libevent->fdset[i] != fd)
 			continue;
-		event_del(&libevent->evset[i]);
+		event_free(libevent->evset[i]);
 		memmove(&libevent->fdset[i], &libevent->fdset[i + 1], (libevent->n - i - 1) * sizeof(*libevent->fdset));
 		memmove(&libevent->cbset[i], &libevent->cbset[i + 1], (libevent->n - i - 1) * sizeof(*libevent->cbset));
-		memmove(&libevent->evset[i], &libevent->evset[i + 1], (libevent->n - i - 1) * sizeof(*libevent->evset));
+		memmove(libevent->evset + i, libevent->evset + i + 1, (libevent->n - i - 1) * sizeof(*libevent->evset));
 		libevent->n--;
 		return;
 	}
@@ -123,8 +123,8 @@ pubnub_libevent_timeout(struct pubnub *p, void *ctx_data, const struct timespec 
 		void (*cb)(struct pubnub *p, void *cb_data), void *cb_data)
 {
 	struct pubnub_libevent *libevent = (struct pubnub_libevent *)ctx_data;
-	if (evtimer_pending(&libevent->timer_event, NULL))
-		evtimer_del(&libevent->timer_event);
+	if (evtimer_pending(libevent->timer_event, NULL))
+		evtimer_del(libevent->timer_event);
 
 	libevent->p = p;
 
@@ -133,7 +133,7 @@ pubnub_libevent_timeout(struct pubnub *p, void *ctx_data, const struct timespec 
 
 	if (libevent->timer_cb) {
 		struct timeval timeout = { SFINIT(.tv_sec, ts->tv_sec), SFINIT(.tv_usec, ts->tv_nsec / 1000) };
-		evtimer_add(&libevent->timer_event, &timeout);
+		evtimer_add(libevent->timer_event, &timeout);
 	}
 }
 
@@ -150,8 +150,8 @@ pubnub_libevent_stop_wait(struct pubnub *p, void *ctx_data)
 	struct pubnub_libevent *libevent = (struct pubnub_libevent *)ctx_data;
 	if (libevent->n > 0)
 		DBGMSG("warning: stop_wait with %d sockets still registered\n", libevent->n);
-	if (evtimer_pending(&libevent->timer_event, NULL))
-		evtimer_del(&libevent->timer_event);
+	if (evtimer_pending(libevent->timer_event, NULL))
+		evtimer_del(libevent->timer_event);
 }
 
 void
@@ -160,9 +160,8 @@ pubnub_libevent_done(struct pubnub *p, void *ctx_data)
 	struct pubnub_libevent *libevent = (struct pubnub_libevent *)ctx_data;
 
 	for (int i = 0; i < libevent->n; i++)
-		event_del(&libevent->evset[i]);
-	if (evtimer_pending(&libevent->timer_event, NULL))
-		evtimer_del(&libevent->timer_event);
+		event_free(libevent->evset[i]);
+	event_free(libevent->timer_event);
 
 	if (libevent->fdset) free(libevent->fdset);
 	if (libevent->evset) free(libevent->evset);
