@@ -89,7 +89,7 @@ void event_free(struct event *ev)
 
 
 void LibEventTest::SetUp() {
-	libevent = pubnub_libevent_init();
+	libevent = pubnub_libevent_init(NULL);
 	p = pubnub_init("demo", "demo", &pubnub_libevent_callbacks, libevent);
 	addEventCnt = 0;
 	delEventCnt = 0;
