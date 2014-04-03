@@ -17,6 +17,7 @@ namespace Test {
 #define PUBNUB_API
 
 static bool curlInit = false;
+static std::vector<std::string> curlRequests;
 
 
 CURLM *curl_multi_init(void)
@@ -34,6 +35,14 @@ CURLMcode curl_multi_socket_action(CURLM * multi_handle,
                                     curl_socket_t sockfd, int ev_bitmask,
                                     int *running_handles)
 {
+	return CURLM_OK;
+}
+
+CURLMcode curl_multi_add_handle(CURLM *multi_handle, CURL *easy_handle)
+{
+	char *url;
+	curl_easy_getinfo(easy_handle, CURLINFO_EFFECTIVE_URL, &url);
+	curlRequests.push_back(std::string(url));
 	return CURLM_OK;
 }
 
@@ -115,6 +124,7 @@ protected:
 		cb.stop_wait = pubnub_test_stop_wait;
 
 		curlInit = false;
+		curlRequests.clear();
 
 		_err_pipe[0] = 0;
 		_err_pipe[1] = 0;
@@ -177,14 +187,14 @@ protected:
 	}
 	
 	char *GetSubUrl() {
-		curl_easy_getinfo(p->curl, CURLINFO_EFFECTIVE_URL, &url);
-		char *t = strchr(url, '=');
+		const char *url = curlRequests.back().c_str();
+		const char *t = strchr(url, '=');
+		char *r = NULL;
 		if (t) {
-			char *s = strdup(url);
-			s[t - url] = 0;
-			t = s;
+			r = strdup(url);
+			r[t - url] = 0;
 		}
-		return t;
+		return r;
 	}
 };
 
@@ -200,8 +210,7 @@ TEST_F(PubnubTest, Publish) {
 	json_object_object_add(msg, "str", json_object_new_string("test"));
 	pubnub_publish(p, "channel", msg, -1, NULL, NULL);
 	json_object_put(msg);
-	curl_easy_getinfo(p->curl, CURLINFO_EFFECTIVE_URL, &url);
-	EXPECT_STREQ("http://pubsub.pubnub.com/publish/demo/demo/0/channel/0/%7B%20%22str%22%3A%20%22test%22%20%7D", url);
+	EXPECT_STREQ("http://pubsub.pubnub.com/publish/demo/demo/0/channel/0/%7B%20%22str%22%3A%20%22test%22%20%7D", curlRequests.back().c_str());
 }
 
 TEST_F(PubnubTest, Subscribe) {
@@ -239,7 +248,7 @@ TEST_F(PubnubTest, SubscribeMulti) {
 TEST_F(PubnubTest, SubscribeMultiSubUnsubLeaveFlow) {
 	// https://github.com/pubnub/pubnub-docs/blob/master/internal/sdk/tests/multiplexed_sub_unsub_leave_flow.asciidoc
 	ASSERT_TRUE(curlInit);
-
+	EXPECT_EQ(0, curlRequests.size());
 	// 1. First Step
 	pubnub_subscribe(p, "CH_A", -1, NULL, NULL);
 	char *s = GetSubUrl();
@@ -296,22 +305,19 @@ TEST_F(PubnubTest, SubscribeMultiSubUnsubLeaveFlow) {
 TEST_F(PubnubTest, History) {
 	ASSERT_TRUE(curlInit);
 	pubnub_history(p, "channel", 10, -1, NULL, NULL);
-	curl_easy_getinfo(p->curl, CURLINFO_EFFECTIVE_URL, &url);
-	EXPECT_STREQ("http://pubsub.pubnub.com/history/demo/channel/0/10", url);
+	EXPECT_STREQ("http://pubsub.pubnub.com/history/demo/channel/0/10", curlRequests.back().c_str());
 }
 
 TEST_F(PubnubTest, HereNow) {
 	ASSERT_TRUE(curlInit);
 	pubnub_here_now(p, "channel", -1, NULL, NULL);
-	curl_easy_getinfo(p->curl, CURLINFO_EFFECTIVE_URL, &url);
-	EXPECT_STREQ("http://pubsub.pubnub.com/v2/presence/sub-key/demo/channel/channel", url);
+	EXPECT_STREQ("http://pubsub.pubnub.com/v2/presence/sub-key/demo/channel/channel", curlRequests.back().c_str());
 }
 
 TEST_F(PubnubTest, Time) {
 	ASSERT_TRUE(curlInit);
 	pubnub_time(p, -1, NULL, NULL);
-	curl_easy_getinfo(p->curl, CURLINFO_EFFECTIVE_URL, &url);
-	EXPECT_STREQ("http://pubsub.pubnub.com/time/0", url);
+	EXPECT_STREQ("http://pubsub.pubnub.com/time/0", curlRequests.back().c_str());
 }
 
 TEST(ChannelSetTest, AddRemove) {
