@@ -17,10 +17,14 @@ Installation google testing framework
 		./configure
 		make
 
-3. "Install" the headers and libs on your system.
+3. "Install" the headers and libs on your system
 
 		sudo cp -a include/gtest /usr/include
 		sudo cp -a lib/.libs/* /usr/lib/
+
+## MS Windows
+
+See [msvc](../msvc)
 
 Building and running tests
 --------------------------
@@ -30,3 +34,6 @@ Building and running tests
 	make
 	./libtest
 
+## MS Windows
+
+See [msvc](../msvc)

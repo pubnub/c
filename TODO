@@ -2,5 +2,4 @@
 - factor out libpubnub-event.so so that libevent is not hard dep for libpubnub
 - more demo's?
 - executable wrapper for PubNub integration in shell scripts?
-- some unit tests?
 - SSL support?
