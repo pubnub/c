@@ -114,6 +114,8 @@ pubnub_handle_error(struct pubnub *p, enum pubnub_res result, json_object *msg, 
 	if (p->error_retry_mask & (1 << result)) {
 		/* Retry ... */
 
+		DBGMSG("error retry (%d %s)\n", result, method);
+
 		pubnub_error_report(p, result, msg, method, true);
 		p->method = method; // restore after cleanup
 
@@ -128,6 +130,8 @@ pubnub_handle_error(struct pubnub *p, enum pubnub_res result, json_object *msg, 
 
 	} else {
 		/* No auto-retry, somehow notify the user. */
+
+		DBGMSG("error terminal fail (%d %s)\n", result, method);
 
 		pubnub_error_report(p, result, msg, method, false);
 		p->cb->stop_wait(p, p->cb_data); // unconditional!
@@ -223,8 +227,9 @@ static bool
 pubnub_connection_check(struct pubnub *p, int fd, int bitmask, bool stop_wait)
 {
 	int running_handles = 0;
+	DBGMSG("event_sockcb fd %d bitmask %d rh %d...\n", fd, bitmask, running_handles);
 	CURLMcode rc = curl_multi_socket_action(p->curlm, fd, bitmask, &running_handles);
-	DBGMSG("event_sockcb fd %d bitmask %d rc %d rh %d\n", fd, bitmask, rc, running_handles);
+	DBGMSG("event_sockcb ...rc %d\n", rc);
 	if (rc != CURLM_OK) {
 		const char *method = p->method;
 		pubnub_connection_cleanup(p, stop_wait);
