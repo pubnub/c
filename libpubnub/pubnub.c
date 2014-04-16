@@ -316,13 +316,14 @@ pubnub_http_timercb(CURLM *multi, long timeout_ms, void *userp)
 		timeout_ts.tv_nsec = (timeout_ms%1000)*1000000L;
 		p->cb->timeout(p, p->cb_data, &timeout_ts, pubnub_event_timeoutcb, p);
 	} else {
+		timeout_ts.tv_sec = 0;
+		timeout_ts.tv_nsec = 0;
+		p->cb->timeout(p, p->cb_data, &timeout_ts, NULL, NULL);
+
 		if (timeout_ms == 0) {
 			/* Timeout already reached. Call cb directly. */
 			pubnub_event_timeoutcb(p, p);
 		} /* else no timeout at all. */
-		timeout_ts.tv_sec = 0;
-		timeout_ts.tv_nsec = 0;
-		p->cb->timeout(p, p->cb_data, &timeout_ts, NULL, NULL);
 	}
 	return 0;
 }
