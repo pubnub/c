@@ -755,6 +755,9 @@ struct pubnub_subscribe_cb_http_data {
 };
 
 
+static void pubnub_subscribe_internal(struct pubnub *p, long timeout,
+		pubnub_subscribe_cb cb, void *cb_data, bool is_retry);
+
 struct resubscribe_cb_http_data {
 	pubnub_unsubscribe_cb unsub_cb;
 	void *unsub_call_data;
@@ -776,7 +779,9 @@ resubscribe_http_cb(struct pubnub *p, enum pubnub_res result, struct json_object
 	 * cannot disturb it). Do it even in case of failed leave()/join(). */
 	if (strcmp(cb_http_data->sub_time_token, "0"))
 		strcpy(p->time_token, cb_http_data->sub_time_token);
-	pubnub_subscribe(p, NULL, cb_http_data->sub_timeout, cb_http_data->sub_cb, cb_http_data->sub_call_data);
+	pubnub_subscribe_internal(p, cb_http_data->sub_timeout,
+			cb_http_data->sub_cb, cb_http_data->sub_call_data,
+			true);
 
 	/* Now, re-issue the unsubscribe callback. */
 	/* No stop_wait here, another subscribe ongoing. */
@@ -934,7 +939,8 @@ pubnub_subscribe_http_cb(struct pubnub *p, enum pubnub_res result, struct json_o
 /* This is the common backend for subscribe HTTP API calls. */
 static void
 pubnub_subscribe_do(struct pubnub *p, const char *channelset, char *time_token,
-		long timeout, pubnub_subscribe_cb cb, void *cb_data, bool cb_internal)
+		long timeout, pubnub_subscribe_cb cb, void *cb_data, bool cb_internal,
+		bool is_retry)
 {
 	struct pubnub_subscribe_cb_http_data *cb_http_data = (struct pubnub_subscribe_cb_http_data *)malloc(sizeof(*cb_http_data));
 	cb_http_data->channelset = strdup(channelset);
@@ -945,7 +951,7 @@ pubnub_subscribe_do(struct pubnub *p, const char *channelset, char *time_token,
 	const char *urlelems[] = { "subscribe", p->subscribe_key, channelset, "0", time_token, NULL };
 	const char *qparamelems[] = { "uuid", p->uuid, NULL };
 	pubnub_http_setup(p, urlelems, qparamelems, timeout);
-	pubnub_http_request(p, pubnub_subscribe_http_cb, cb_http_data, true, true);
+	pubnub_http_request(p, pubnub_subscribe_http_cb, cb_http_data, true, !is_retry);
 }
 
 static void
@@ -962,7 +968,20 @@ pubnub_join(struct pubnub *p, const char *channelset, long timeout,
 	if (timeout <= 0)
 		timeout = 5;
 
-	pubnub_subscribe_do(p, channelset, (char*)"0", timeout, cb, cb_data, true);
+	pubnub_subscribe_do(p, channelset, (char*)"0", timeout, cb, cb_data, true, false);
+}
+
+static void
+pubnub_subscribe_internal(struct pubnub *p, long timeout,
+		pubnub_subscribe_cb cb, void *cb_data, bool is_retry)
+{
+	p->method = "subscribe";
+	if (timeout < 0)
+		timeout = 310;
+
+	struct printbuf *channelset = channelset_printbuf(&p->channelset);
+	pubnub_subscribe_do(p, channelset->buf, p->time_token, timeout, cb, cb_data, false, is_retry);
+	printbuf_free(channelset);
 }
 
 PUBNUB_API
@@ -1034,13 +1053,7 @@ pubnub_subscribe_multi(struct pubnub *p, const char *channels[], int channels_n,
 		printbuf_free(channelset);
 
 	} else {
-		p->method = "subscribe";
-		if (timeout < 0)
-			timeout = 310;
-
-		struct printbuf *channelset = channelset_printbuf(&p->channelset);
-		pubnub_subscribe_do(p, channelset->buf, p->time_token, timeout, cb, cb_data, false);
-		printbuf_free(channelset);
+		pubnub_subscribe_internal(p, timeout, cb, cb_data, false);
 	}
 }
 
