@@ -252,6 +252,16 @@ void pubnub_error_policy(struct pubnub *p, unsigned int retry_mask, bool print);
  */
 void pubnub_set_ssl_cacerts(struct pubnub *p, const char *cacerts, size_t len);
 
+/* Set RESUME_ON_RECONNECT of this PubNub context
+ * If RESUME_ON_RECONNECT == TRUE, then upon reconnecting or switching channels, 
+ * the client will use the last received time token it was subscribed on before
+ * the subscribe cycle was interrupted.
+ * If RESUME_ON_RECONNECT == FALSE, then upon reconnecting, the client will use
+ * time token received on current subscribe cycle.
+ * DEFAULT is RESUME_ON_RECONNECT == TRUE
+ */
+void pubnub_set_resume_on_reconnect(struct pubnub *p, bool resume_on_reconnect);
+
 /** PubNub API requests */
 
 /* All the API request functions accept the @timeout [s] parameter

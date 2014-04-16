@@ -498,6 +498,7 @@ pubnub_init(const char *publish_key, const char *subscribe_key,
 	p->origin = strdup("http://pubsub.pubnub.com");
 	p->uuid = pubnub_gen_uuid();
 	strcpy(p->time_token, "0");
+	p->resume_on_reconnect = true;
 
 	p->cb = cb;
 	p->cb_data = cb_data;
@@ -618,6 +619,13 @@ pubnub_set_ssl_cacerts(struct pubnub *p, const char *cacerts, size_t len)
 	bio = BIO_new_mem_buf((char *)cacerts, len);
 	p->ssl_cacerts = PEM_X509_INFO_read_bio(bio, NULL, NULL, NULL);
 	BIO_free(bio);
+}
+
+PUBNUB_API
+void
+pubnub_set_resume_on_reconnect(struct pubnub *p, bool resume_on_reconnect)
+{
+	p->resume_on_reconnect = resume_on_reconnect;
 }
 
 static size_t
@@ -816,7 +824,7 @@ resubscribe_http_cb(struct pubnub *p, enum pubnub_res result, struct json_object
 
 	/* Restart the subscribe first (to be sure the unsub callback
 	 * cannot disturb it). Do it even in case of failed leave()/join(). */
-	if (strcmp(cb_http_data->sub_time_token, "0"))
+	if (p->resume_on_reconnect && strcmp(cb_http_data->sub_time_token, "0"))
 		strcpy(p->time_token, cb_http_data->sub_time_token);
 	pubnub_subscribe(p, NULL, cb_http_data->sub_timeout, cb_http_data->sub_cb, cb_http_data->sub_call_data);
 

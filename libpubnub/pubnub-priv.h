@@ -23,6 +23,7 @@ struct pubnub {
 
 	char time_token[64];
 	struct channelset channelset;
+	bool resume_on_reconnect;
 
 	const struct pubnub_callbacks *cb;
 	void *cb_data;
