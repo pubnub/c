@@ -4,6 +4,7 @@
 #include <time.h>
 
 #include <event2/event.h>
+#include <curl/curl.h>
 
 #include "pubnub.h"
 #include "pubnub-libevent.h"

@@ -20,7 +20,7 @@ INCLUDE_PATHS =	-I ../../win32-dev/curl-7.30.0-devel-mingw32/include/ \
 ##
 ##  SOURCES, OBJECTS
 ##
-C_SRC =	pubnub.c crypto.c
+C_SRC =	pubnub.c crypto.c pubnub-http-libcurl.c
 
 OBJECTS = $(C_SRC:%.c=%.o)
 

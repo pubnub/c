@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <curl/curl.h>
 
 #ifndef _MSC_VER
 #include <poll.h>

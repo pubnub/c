@@ -20,6 +20,17 @@ static bool curlInit = false;
 static std::vector<std::string> curlRequests;
 
 
+const struct pubnub_http_callbacks pubnub_http_libcurl_callbacks = {
+	SFINIT(.init, NULL),
+	SFINIT(.cleanup, NULL),
+	SFINIT(.set_ssl_cacerts, NULL),
+	SFINIT(.escape, NULL),
+	SFINIT(.escape_free, NULL),
+	SFINIT(.request, NULL),
+	SFINIT(.done, NULL),
+};
+
+
 CURLM *curl_multi_init(void)
 {
 	curlInit = true;
@@ -266,7 +277,7 @@ void PubnubTest::SubUnsubLeaveFlow(bool resume_on_reconnect)
 	free(s);
 	char *resp = "[[],'LAST_RECEIVED_TIMETOKEN']";
 	pubnub_http_inputcb(resp, strlen(resp), 1, p);
-	pubnub_connection_finished(p, CURLE_OK, false);
+	pubnub_connection_finished(p, "subscribe");
 	s = GetSubUrl();
 	EXPECT_STREQ("http://pubsub.pubnub.com/subscribe/demo/CH_A/0/LAST_RECEIVED_TIMETOKEN?uuid", s);
 	free(s);
@@ -277,7 +288,7 @@ void PubnubTest::SubUnsubLeaveFlow(bool resume_on_reconnect)
 	pubnub_subscribe_multi(p, channels2, 2, -1, NULL, NULL);
 	char *resp1 = "[[],'LAST1_RECEIVED_TIMETOKEN']";
 	pubnub_http_inputcb(resp1, strlen(resp1), 1, p);
-	pubnub_connection_finished(p, CURLE_OK, false);
+	pubnub_connection_finished(p, "subscribe");
 	EXPECT_EQ(2, p->channelset.n);
 	s = GetSubUrl();
 	if (resume_on_reconnect)
@@ -294,7 +305,7 @@ void PubnubTest::SubUnsubLeaveFlow(bool resume_on_reconnect)
 	pubnub_subscribe_multi(p, channels3, 3, -1, NULL, NULL);
 	char *resp2 = "[[],'LAST2_RECEIVED_TIMETOKEN']";
 	pubnub_http_inputcb(resp2, strlen(resp2), 1, p);
-	pubnub_connection_finished(p, CURLE_OK, false);
+	pubnub_connection_finished(p, "subscribe");
 	EXPECT_EQ(3, p->channelset.n);
 	s = GetSubUrl();
 	if (resume_on_reconnect)

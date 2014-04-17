@@ -14,7 +14,7 @@ LIBS=`pkg-config --libs json libcurl libcrypto libevent`
 SYS_CFLAGS=-std=gnu99 $(SOFLAGS) -I. `pkg-config --cflags json libcurl libcrypto libevent`
 
 
-OBJS=pubnub.o pubnub-sync.o pubnub-libevent.o crypto.o
+OBJS=pubnub.o pubnub-sync.o pubnub-libevent.o crypto.o pubnub-http-libcurl.c
 
 all: libpubnub.0.dylib libpubnub.pc
 

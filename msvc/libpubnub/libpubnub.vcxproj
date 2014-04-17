@@ -86,12 +86,14 @@
       <ObjectFileName Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(IntDir)pubnub_cpp.obj</ObjectFileName>
     </ClCompile>
     <ClCompile Include="..\..\libpubnub\crypto.c" />
+    <ClCompile Include="..\..\libpubnub\pubnub-http-libcurl.c" />
     <ClCompile Include="..\..\libpubnub\pubnub-libevent.c" />
     <ClCompile Include="..\..\libpubnub\pubnub.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\libpubnub-cpp\pubnub.hpp" />
     <ClInclude Include="..\..\libpubnub\crypto.h" />
+    <ClInclude Include="..\..\libpubnub\pubnub-http-libcurl.h" />
     <ClInclude Include="..\..\libpubnub\pubnub-libevent.h" />
     <ClInclude Include="..\..\libpubnub\pubnub-priv.h" />
     <ClInclude Include="..\..\libpubnub\pubnub.h" />

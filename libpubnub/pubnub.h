@@ -146,6 +146,15 @@ struct pubnub_callbacks {
 	void *unused;
 };
 
+struct pubnub_http_callbacks {
+	void *(*init)(void *ctx_data, struct pubnub *p, void *extra);
+	void (*cleanup)(void *ctx_data);
+	void (*set_ssl_cacerts)(void *ctx_data, const char *cacerts, size_t len);
+	char *(*escape)(void *ctx_data, const char *str, int n);
+	void (*escape_free)(void *ctx_data, char *str);
+	bool (*request)(void *ctx_data, char *url);
+	void (*done)(void *ctx_data);
+};
 
 /** PubNub context methods */
 

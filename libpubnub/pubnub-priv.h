@@ -2,7 +2,6 @@
 #define PUBNUB__PubNub_priv_h
 
 #include <printbuf.h>
-#include <curl/curl.h>
 
 #include "pubnub.h"
 
@@ -27,6 +26,8 @@ struct pubnub {
 
 	const struct pubnub_callbacks *cb;
 	void *cb_data;
+	const struct pubnub_http_callbacks *http_cb;
+	void *http_data;
 
 	/* Name of method currently in progress; NULL if there is no
 	 * method in progress currently. */
@@ -49,15 +50,15 @@ struct pubnub {
 
 	bool nosignal;
 
-	CURL *curl;
-	CURLM *curlm;
-	struct curl_slist *curl_headers;
-	char curl_error[CURL_ERROR_SIZE];
 	struct printbuf *url;
 	struct printbuf *body;
 	long timeout;
-	struct stack_st_X509_INFO *ssl_cacerts;
 };
+
+bool pubnub_handle_error_cb(struct pubnub *p, enum pubnub_res result, const char *msg, int num, bool is_num, bool stop_wait);
+void pubnub_connection_cleanup(struct pubnub *p, bool stop_wait);
+void pubnub_connection_finished(struct pubnub *p, const char *method);
+size_t pubnub_http_inputcb(char *ptr, size_t size, size_t nmemb, void *userdata);
 
 #ifdef DEBUG
 #define DBGMSG(x, ...) do { fprintf(stderr, "[%d] ", __LINE__); fprintf(stderr, x, ##__VA_ARGS__); } while (0)
