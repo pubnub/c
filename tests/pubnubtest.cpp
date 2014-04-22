@@ -71,6 +71,7 @@ protected:
 
 	static int addSock;
 	static int addSockMode;
+	static int waitCalled;
 
 	static void
 	pubnub_test_add_socket(struct pubnub *p, void *ctx_data, int fd, int mode,
@@ -97,6 +98,7 @@ protected:
 	static void
 	pubnub_test_wait(struct pubnub *p, void *ctx_data)
 	{
+		waitCalled++;
 	}
 
 	static void 
@@ -122,6 +124,8 @@ protected:
 		cb.timeout = pubnub_test_timeout;
 		cb.wait = pubnub_test_wait;
 		cb.stop_wait = pubnub_test_stop_wait;
+
+		waitCalled = 0;
 
 		curlInit = false;
 		curlRequests.clear();
@@ -203,7 +207,7 @@ protected:
 	void SubUnsubLeaveFlow(bool resume_on_reconnect);
 };
 
-int PubnubTest::addSock, PubnubTest::addSockMode, PubnubTest::remSock;
+int PubnubTest::addSock, PubnubTest::addSockMode, PubnubTest::remSock, PubnubTest::waitCalled;
 bool PubnubTest::cbCalled;
 pubnub_res PubnubTest::cbResult;
 char **PubnubTest::cbChannels;
@@ -225,6 +229,18 @@ TEST_F(PubnubTest, Subscribe) {
 	EXPECT_STREQ("http://pubsub.pubnub.com/subscribe/demo/channel/0/0?uuid", s);
 	free(s);
 	pubnub_connection_cancel(p);
+}
+
+TEST_F(PubnubTest, SubscribeWait) {
+	ASSERT_TRUE(curlInit);
+	pubnub_subscribe(p, "channel", -1, NULL, NULL);
+	char *resp = "[[],'LAST_RECEIVED_TIMETOKEN']";
+	pubnub_http_inputcb(resp, strlen(resp), 1, p);
+	pubnub_connection_finished(p, CURLE_OK, false);
+	char *s = GetSubUrl();
+	EXPECT_STREQ("http://pubsub.pubnub.com/subscribe/demo/channel/0/LAST_RECEIVED_TIMETOKEN?uuid", s);
+	free(s);
+	EXPECT_EQ(1, waitCalled);
 }
 
 TEST_F(PubnubTest, Unsubscribe) {
