@@ -10,6 +10,11 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "libevent-demo", "libevent-d
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "libtest", "libtest\libtest.vcxproj", "{941490D4-DA91-4C65-AB4B-2F41277B6636}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "sync-demo", "sync-demo\sync-demo.vcxproj", "{F32CF7AB-D826-4C42-BAED-3E5315D47922}"
+	ProjectSection(ProjectDependencies) = postProject
+		{6C88E3EF-A6DA-4BF8-859F-C473DF553157} = {6C88E3EF-A6DA-4BF8-859F-C473DF553157}
+	EndProjectSection
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Win32 = Debug|Win32
@@ -28,6 +33,10 @@ Global
 		{941490D4-DA91-4C65-AB4B-2F41277B6636}.Debug|Win32.Build.0 = Debug|Win32
 		{941490D4-DA91-4C65-AB4B-2F41277B6636}.Release|Win32.ActiveCfg = Release|Win32
 		{941490D4-DA91-4C65-AB4B-2F41277B6636}.Release|Win32.Build.0 = Release|Win32
+		{F32CF7AB-D826-4C42-BAED-3E5315D47922}.Debug|Win32.ActiveCfg = Debug|Win32
+		{F32CF7AB-D826-4C42-BAED-3E5315D47922}.Debug|Win32.Build.0 = Debug|Win32
+		{F32CF7AB-D826-4C42-BAED-3E5315D47922}.Release|Win32.ActiveCfg = Release|Win32
+		{F32CF7AB-D826-4C42-BAED-3E5315D47922}.Release|Win32.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

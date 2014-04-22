@@ -11,19 +11,19 @@
     </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
-    <ProjectGuid>{6C88E3EF-A6DA-4BF8-859F-C473DF553157}</ProjectGuid>
+    <ProjectGuid>{F32CF7AB-D826-4C42-BAED-3E5315D47922}</ProjectGuid>
     <Keyword>Win32Proj</Keyword>
-    <RootNamespace>libpubnub</RootNamespace>
+    <RootNamespace>syncdemo</RootNamespace>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
-    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>true</UseDebugLibraries>
     <PlatformToolset>v110</PlatformToolset>
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
-    <ConfigurationType>StaticLibrary</ConfigurationType>
+    <ConfigurationType>Application</ConfigurationType>
     <UseDebugLibraries>false</UseDebugLibraries>
     <PlatformToolset>v110</PlatformToolset>
     <WholeProgramOptimization>true</WholeProgramOptimization>
@@ -40,10 +40,12 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
-    <IncludePath>..\..\..\json-c;..\..\..\openssl\include;..\..\..\curl\include;..\..\libpubnub;..\..\..\libevent;..\..\..\libevent\WIN32-Code;..\..\..\libevent\include;..\..\libpubnub-cpp;$(IncludePath)</IncludePath>
+    <LinkIncremental>true</LinkIncremental>
+    <IncludePath>..\..\..\json-c;..\..\libpubnub;..\..\libpubnub-cpp;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
-    <IncludePath>..\..\..\json-c;..\..\..\openssl\include;..\..\..\curl\include;..\..\libpubnub;..\..\..\libevent;..\..\..\libevent\WIN32-Code;..\..\..\libevent\include;..\..\libpubnub-cpp;$(IncludePath)</IncludePath>
+    <LinkIncremental>false</LinkIncremental>
+    <IncludePath>..\..\..\json-c;..\..\libpubnub;..\..\libpubnub-cpp;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -51,12 +53,12 @@
       </PrecompiledHeader>
       <WarningLevel>Level3</WarningLevel>
       <Optimization>Disabled</Optimization>
-      <PreprocessorDefinitions>WIN32;_DEBUG;_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <CompileAs>CompileAsCpp</CompileAs>
+      <PreprocessorDefinitions>WIN32;_DEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
-      <SubSystem>Windows</SubSystem>
+      <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
+      <AdditionalDependencies>WS2_32.lib;$(SolutionDir)$(Configuration)\libpubnub.lib;..\..\..\openssl\lib\libeay32.lib;..\..\..\openssl\lib\ssleay32.lib;..\..\..\curl\lib\libcurl.lib;..\..\..\json-c\$(Configuration)\json.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -67,41 +69,18 @@
       <Optimization>MaxSpeed</Optimization>
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
-      <PreprocessorDefinitions>WIN32;NDEBUG;_LIB;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <CompileAs>CompileAsCpp</CompileAs>
+      <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
-      <SubSystem>Windows</SubSystem>
+      <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
+      <AdditionalDependencies>WS2_32.lib;$(SolutionDir)$(Configuration)\libpubnub.lib;..\..\..\openssl\lib\libeay32.lib;..\..\..\openssl\lib\ssleay32.lib;..\..\..\curl\lib\libcurl.lib;..\..\..\json-c\$(Configuration)\json.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <Text Include="ReadMe.txt" />
-  </ItemGroup>
-  <ItemGroup>
-    <ClCompile Include="..\..\libpubnub-cpp\pubnub-sync.cpp">
-      <ObjectFileName Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(IntDir)pubnub-sync_cpp.obj</ObjectFileName>
-      <ObjectFileName Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(IntDir)pubnub-sync_cpp.obj</ObjectFileName>
-    </ClCompile>
-    <ClCompile Include="..\..\libpubnub-cpp\pubnub.cpp">
-      <ObjectFileName Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(IntDir)pubnub_cpp.obj</ObjectFileName>
-      <ObjectFileName Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(IntDir)pubnub_cpp.obj</ObjectFileName>
-    </ClCompile>
-    <ClCompile Include="..\..\libpubnub\crypto.c" />
-    <ClCompile Include="..\..\libpubnub\pubnub-libevent.c" />
-    <ClCompile Include="..\..\libpubnub\pubnub-sync.c" />
-    <ClCompile Include="..\..\libpubnub\pubnub.c" />
-  </ItemGroup>
-  <ItemGroup>
-    <ClInclude Include="..\..\libpubnub-cpp\pubnub-sync.hpp" />
-    <ClInclude Include="..\..\libpubnub-cpp\pubnub.hpp" />
-    <ClInclude Include="..\..\libpubnub\crypto.h" />
-    <ClInclude Include="..\..\libpubnub\pubnub-libevent.h" />
-    <ClInclude Include="..\..\libpubnub\pubnub-priv.h" />
-    <ClInclude Include="..\..\libpubnub\pubnub-sync.h" />
-    <ClInclude Include="..\..\libpubnub\pubnub.h" />
+    <ClCompile Include="..\..\examples-cpp\sync-demo\example-sync-demo-cpp.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

@@ -3,7 +3,9 @@
 #include <string.h>
 #include <time.h>
 
-#ifndef _MSC_VER
+#ifdef _MSC_VER
+#include <winsock2.h>
+#else
 #include <poll.h>
 #endif
 
@@ -23,8 +25,8 @@
 #define GET_CLOCK_NOW __int64 t,li; \
 	 QueryPerformanceCounter((LARGE_INTEGER*)&t); \
 	 QueryPerformanceFrequency((LARGE_INTEGER*)&li); \
-	 now.tv_sec = t/li; \
-	 now.tv_nsec = (t - now.tv_sec * li) * 1000000000 / li;
+	 now.tv_sec = int(t/li); \
+	 now.tv_nsec = int((t - now.tv_sec * li) * 1000000000 / li);
 #else
 #define GET_CLOCK_NOW clock_gettime(CLOCK_REALTIME, &now); 
 #endif
@@ -197,13 +199,21 @@ pubnub_sync_wait(struct pubnub *p, void *ctx_data)
 			timeout = -1;
 		}
 
+#ifdef _MSC_VER
+		int n = (sync->n ? WSAPoll(sync->fdset, sync->n, timeout) : 0);
+#else
 		int n = poll(sync->fdset, sync->n, timeout);
+#endif
 
 		if (n < 0) {
 			/* poll() errors are ignored, it's not clear what
 			 * we should do. Most likely, we have just received
 			 * a signal and will spin around and restart poll(). */
+#ifdef _MSC_VER
+			DBGMSG("WSAPoll error: %d\n", WSAGetLastError());
+#else
 			DBGMSG("poll(): %s\n", strerror(errno));
+#endif
 			continue;
 		}
 
@@ -217,7 +227,9 @@ pubnub_sync_wait(struct pubnub *p, void *ctx_data)
 			 * timeout_cb only after the call is bad idea. */
 			void (*timeout_cb)(struct pubnub *p, void *cb_data) = sync->timeout_cb;
 			sync->timeout_cb = NULL;
-			timeout_cb(p, sync->timeout_cb_data);
+			if (timeout_cb) {
+				timeout_cb(p, sync->timeout_cb_data);
+			}
 			continue;
 		}
 
