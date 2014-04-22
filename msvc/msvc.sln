@@ -15,6 +15,12 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "sync-demo", "sync-demo\sync
 		{6C88E3EF-A6DA-4BF8-859F-C473DF553157} = {6C88E3EF-A6DA-4BF8-859F-C473DF553157}
 	EndProjectSection
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "itesting", "itesting\itesting.vcxproj", "{520059DA-ADC9-4326-91C9-0AB642BE643D}"
+	ProjectSection(ProjectDependencies) = postProject
+		{A43F7138-D07F-48E3-996B-D0162D0E162E} = {A43F7138-D07F-48E3-996B-D0162D0E162E}
+		{F32CF7AB-D826-4C42-BAED-3E5315D47922} = {F32CF7AB-D826-4C42-BAED-3E5315D47922}
+	EndProjectSection
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Win32 = Debug|Win32
@@ -37,6 +43,10 @@ Global
 		{F32CF7AB-D826-4C42-BAED-3E5315D47922}.Debug|Win32.Build.0 = Debug|Win32
 		{F32CF7AB-D826-4C42-BAED-3E5315D47922}.Release|Win32.ActiveCfg = Release|Win32
 		{F32CF7AB-D826-4C42-BAED-3E5315D47922}.Release|Win32.Build.0 = Release|Win32
+		{520059DA-ADC9-4326-91C9-0AB642BE643D}.Debug|Win32.ActiveCfg = Debug|Win32
+		{520059DA-ADC9-4326-91C9-0AB642BE643D}.Debug|Win32.Build.0 = Debug|Win32
+		{520059DA-ADC9-4326-91C9-0AB642BE643D}.Release|Win32.ActiveCfg = Release|Win32
+		{520059DA-ADC9-4326-91C9-0AB642BE643D}.Release|Win32.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
