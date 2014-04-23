@@ -12,12 +12,17 @@
 #include "pubnub.hpp"
 #include "pubnub-sync.hpp"
 
+//#define DEBUG
+
 class WaitingTest : public ::testing::Test
 {
 public:
 	static const int pubCount = 10;
+#ifdef _MSC_VER
 	PROCESS_INFORMATION pi;
-
+#else
+	pid_t pid;
+#endif
 	int _out_pipe[2];
 	int _old_out;
 	std::string _out;
@@ -28,7 +33,7 @@ public:
 		_old_out = 0;
 
 		_out.clear();
-#if 1
+#ifndef DEBUG
 #ifdef _MSC_VER
 		if (_pipe(_out_pipe, 65536, O_BINARY) != -1) {
 #define READ_PIPE(hnd, buf, size) (eof(hnd) ? 0 : read(hnd, buf, size))
@@ -55,7 +60,7 @@ public:
 			close(_out_pipe[1]);
 		}
 	}
-
+#ifdef _MSC_VER
 	void run(TCHAR *name) {
 		TCHAR fname[256];
 		GetModuleFileName(NULL, fname, _countof(fname));
@@ -84,8 +89,26 @@ public:
 	void runLibEvent() {
 		run(_T("libevent-demo.exe"));
 	}
-#if 1
+#else
+	void run(const char *name) {
+		pid = fork();
+		if (!pid) {
+			char *argv[] = {NULL};
+			execv(name, argv);
+		}
+	}
+
+	void runSync() {
+		run("../../examples-cpp/sync-demo/example-sync-demo-cpp");
+	}
+
+	void runLibEvent() {
+		run("../../examples-cpp/libevent-demo/example-libevent-demo-cpp");
+	}	
+#endif
+
 	void getOut() {
+#ifndef DEBUG
 		fflush(stdout);
 		if (_old_out > 0) {
 			dup2(_old_out, fileno(stdout));
@@ -104,8 +127,9 @@ public:
 			buf.resize(bytesRead);
 			_out += buf;
 		}
-	}
 #endif
+	}
+
 	bool publish() {
 		pubnub_sync *sync = pubnub_sync_init();
 		PubNub p("demo", "demo", &pubnub_sync_callbacks, sync);
@@ -140,13 +164,22 @@ public:
 	}
 
 	void testing() {
+#ifdef _MSC_VER
 		Sleep(1000);
 		EXPECT_TRUE(publish());
 		Sleep(2000);
 		EXPECT_EQ(pubCount, countOut("integration testing"));
 		TerminateProcess(pi.hProcess, 0);
+#else
+		sleep(1);
+		EXPECT_TRUE(publish());
+		sleep(2);
+		EXPECT_EQ(pubCount, countOut("integration testing"));
+		kill(pid, SIGTERM);
+#endif
 	}
 };
+const int WaitingTest::pubCount;
 
 TEST_F(WaitingTest, Sync) {
 	runSync();

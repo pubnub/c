@@ -5,6 +5,7 @@
 #ifndef _MSC_VER
 #include <unistd.h>
 #endif
+#include <stdlib.h>
 
 #include <event2/event.h>
 

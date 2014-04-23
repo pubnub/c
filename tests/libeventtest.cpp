@@ -74,7 +74,7 @@ int	evtimer_pending(struct event *, struct timeval *)
 	return 1;
 }
 
-struct event *event_new(struct event_base *, int, short, void *, void *)
+struct event *event_new(struct event_base *, int, short, void (*)(int, short int, void*), void *)
 {
 	return (struct event *)malloc(sizeof(struct event));
 }
