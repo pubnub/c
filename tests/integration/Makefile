@@ -4,7 +4,7 @@ SYS_CXXFLAGS= -I. -I../libpubnub `pkg-config --cflags json libcurl libcrypto lib
 LIBS=`pkg-config --libs json libcurl libcrypto libpubnub-cpp`-lgtest -lpthread
 LDFLAGS=
 
-OBJS=itesting.o waiting.o
+OBJS=itesting.o waiting.o server.o
 
 all: itesting
 

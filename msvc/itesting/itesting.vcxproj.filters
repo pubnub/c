@@ -21,6 +21,9 @@
     <ClCompile Include="..\..\tests\integration\waiting.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\tests\integration\server.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\tests\integration\itesting.h">
