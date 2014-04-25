@@ -25,13 +25,18 @@ public:
 	static bool publishSuccess;
 	static bool historySuccess;
 
-	struct event_base *evbase;
-	struct evhttp *libsrv;
+	bool usedTheSameConnection;
+
+	event_base *evbase;
+	evhttp *libsrv;
+	evhttp_connection *evcon;
 	PubNub *p;
 
 	virtual void SetUp() {
 		publishSuccess = false;
 		historySuccess = false;
+		usedTheSameConnection = true;
+		evcon = NULL;
 		evbase = event_base_new();
 		libsrv = evhttp_new(evbase);
 		int t = evhttp_bind_socket(libsrv, ADDR, 4000);
@@ -50,9 +55,21 @@ public:
 
 bool ServerTest::publishSuccess, ServerTest::historySuccess;
 
-
-void router(struct evhttp_request *r, void *arg) {
+void conClose(struct evhttp_connection *c, void *arg)
+{
 	ServerTest *p = (ServerTest*)arg;
+	p->usedTheSameConnection = false;
+}
+
+void router(struct evhttp_request *r, void *arg)
+{
+	ServerTest *p = (ServerTest*)arg;
+	if (p->evcon) {
+		p->usedTheSameConnection = p->usedTheSameConnection && (p->evcon == evhttp_request_get_connection(r));
+	} else {
+		p->evcon = evhttp_request_get_connection(r);
+		evhttp_connection_set_closecb(p->evcon, conClose, arg);
+	}
 	const char *uri = evhttp_request_get_uri(r);
 	struct evbuffer *evb = evbuffer_new();
 	evhttp_add_header(evhttp_request_get_output_headers(r),
@@ -100,11 +117,12 @@ publish(PubNub &p)
 	json_object_put(msg);
 }
 
-TEST_F(ServerTest, Sync) {
+TEST_F(ServerTest, UsingTheSameConnection) {
 	publish(*p);
 	event_base_dispatch(evbase);
 	EXPECT_TRUE(publishSuccess);
 	EXPECT_TRUE(historySuccess);
+	EXPECT_TRUE(usedTheSameConnection);
 }
 
 
