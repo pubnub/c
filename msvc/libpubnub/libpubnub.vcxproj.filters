@@ -30,6 +30,12 @@
     <ClCompile Include="..\..\libpubnub\pubnub-libevent.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\libpubnub\pubnub-sync.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="..\..\libpubnub-cpp\pubnub-sync.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="..\..\libpubnub-cpp\pubnub.hpp">
@@ -45,6 +51,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="..\..\libpubnub\pubnub.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\libpubnub\pubnub-sync.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\..\libpubnub-cpp\pubnub-sync.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

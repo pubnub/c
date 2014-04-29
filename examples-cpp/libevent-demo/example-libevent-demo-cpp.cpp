@@ -5,8 +5,9 @@
 #ifndef _MSC_VER
 #include <unistd.h>
 #endif
+#include <stdlib.h>
 
-#include <event.h>
+#include <event2/event.h>
 
 #include <json.h>
 
@@ -38,7 +39,7 @@
 
 /* The clock update timer. */
 
-struct event clock_update_timer;
+struct event *clock_update_timer;
 static void
 clock_update(int fd, short kind, void *userp)
 {
@@ -56,7 +57,7 @@ clock_update(int fd, short kind, void *userp)
 	/* (A more prudent timer strategy would be to update clock
 	 * on the next second _boundary_.) */
 	struct timeval timeout = { SFINIT(.tv_sec, 1), SFINIT(.tv_usec, 0) };
-	evtimer_add(&clock_update_timer, &timeout);
+	evtimer_add(clock_update_timer, &timeout);
 }
 
 
@@ -187,14 +188,14 @@ int
 main(void)
 {
 	/* Set up the libevent library. */
-	event_init();
+	struct event_base *evbase = event_base_new();
 
 	/* Set up the PubNub library, with a single shared context,
 	 * using the libevent backend for event handling. */
-	PubNub p("demo", "demo", &pubnub_libevent_callbacks, pubnub_libevent_init());
+	PubNub p("demo", "demo", &pubnub_libevent_callbacks, pubnub_libevent_init(evbase));
 
 	/* Set the clock update timer. */
-	evtimer_set(&clock_update_timer, clock_update, NULL);
+	clock_update_timer = evtimer_new(evbase, clock_update, NULL);
 	clock_update(-1, EV_TIMEOUT, NULL);
 
 	/* First step in the PubNub call sequence is publishing a message. */
@@ -204,8 +205,9 @@ main(void)
 	 * launch a GUI or whatever. */
 
 	/* Start the event loop. */
-	event_dispatch();
+	event_base_dispatch(evbase);
 
 	/* We should never reach here. */
+	event_base_free(evbase);
 	return EXIT_SUCCESS;
 }

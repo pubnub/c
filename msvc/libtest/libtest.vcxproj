@@ -59,7 +59,7 @@
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>..\..\..\googletest\msvc\gtest-md\$(Configuration)\gtest.lib;..\..\..\json-c\$(Configuration)\json.lib;..\..\..\openssl\lib\libeay32.lib;..\..\..\curl\lib\libcurl.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>..\..\..\googletest\msvc\gtest-md\$(Configuration)\gtest.lib;..\..\..\json-c\$(Configuration)\json.lib;..\..\..\openssl\lib\libeay32.lib;..\..\..\openssl\lib\ssleay32.lib;..\..\..\curl\lib\libcurl.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -78,7 +78,7 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <OptimizeReferences>true</OptimizeReferences>
-      <AdditionalDependencies>..\..\..\googletest\msvc\gtest-md\$(Configuration)\gtest.lib;..\..\..\json-c\$(Configuration)\json.lib;..\..\..\openssl\lib\libeay32.lib;..\..\..\curl\lib\libcurl.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>..\..\..\googletest\msvc\gtest-md\$(Configuration)\gtest.lib;..\..\..\json-c\$(Configuration)\json.lib;..\..\..\openssl\lib\libeay32.lib;..\..\..\openssl\lib\ssleay32.lib;..\..\..\curl\lib\libcurl.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>

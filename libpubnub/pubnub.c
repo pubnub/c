@@ -8,6 +8,7 @@
 #include <printbuf.h>
 
 #include <curl/curl.h>
+#include <openssl/ssl.h>
 
 #include "crypto.h"
 #include "pubnub.h"
@@ -359,7 +360,6 @@ pubnub_gen_uuid(void)
 	return strdup(uuidbuf);
 }
 
-
 static struct printbuf *
 channelset_printbuf(const struct channelset *cs)
 {
@@ -481,6 +481,15 @@ channelset_done(struct channelset *cs)
 	cs->set = NULL;
 }
 
+static void
+pubnub_free_ssl_cacerts(struct pubnub *p)
+{
+	if (p->ssl_cacerts)
+	{
+		sk_X509_INFO_pop_free(p->ssl_cacerts, X509_INFO_free);
+		p->ssl_cacerts = NULL;
+	}
+}
 
 PUBNUB_API
 struct pubnub *
@@ -495,6 +504,7 @@ pubnub_init(const char *publish_key, const char *subscribe_key,
 	p->origin = strdup("http://pubsub.pubnub.com");
 	p->uuid = pubnub_gen_uuid();
 	strcpy(p->time_token, "0");
+	p->resume_on_reconnect = true;
 
 	p->cb = cb;
 	p->cb_data = cb_data;
@@ -538,6 +548,7 @@ pubnub_done(struct pubnub *p)
 
 	channelset_done(&p->channelset);
 
+	pubnub_free_ssl_cacerts(p);
 	printbuf_free(p->body);
 	printbuf_free(p->url);
 	free(p->publish_key);
@@ -603,6 +614,25 @@ pubnub_error_policy(struct pubnub *p, unsigned int retry_mask, bool print)
 	p->error_print = print;
 }
 
+PUBNUB_API
+void
+pubnub_set_ssl_cacerts(struct pubnub *p, const char *cacerts, size_t len)
+{
+	BIO *bio;
+
+	pubnub_free_ssl_cacerts(p);
+
+	bio = BIO_new_mem_buf((char *)cacerts, len);
+	p->ssl_cacerts = PEM_X509_INFO_read_bio(bio, NULL, NULL, NULL);
+	BIO_free(bio);
+}
+
+PUBNUB_API
+void
+pubnub_set_resume_on_reconnect(struct pubnub *p, bool resume_on_reconnect)
+{
+	p->resume_on_reconnect = resume_on_reconnect;
+}
 
 static size_t
 pubnub_http_inputcb(char *ptr, size_t size, size_t nmemb, void *userdata)
@@ -611,6 +641,30 @@ pubnub_http_inputcb(char *ptr, size_t size, size_t nmemb, void *userdata)
 	DBGMSG("http input: %zd bytes\n", size * nmemb);
 	printbuf_memappend_fast(p->body, ptr, size * nmemb);
 	return size * nmemb;
+}
+
+static CURLcode
+pubnub_ssl_contextcb(CURL *curl, void *context, void *userdata)
+{
+	SSL_CTX *ssl_context = (SSL_CTX *)context;
+	struct pubnub *p = (struct pubnub *)userdata;
+
+	if (p->ssl_cacerts)
+	{
+		X509_STORE *cert_store = SSL_CTX_get_cert_store(ssl_context);
+		int i;
+
+		for (i = 0; i < sk_X509_INFO_num(p->ssl_cacerts); i++)
+		{
+			X509_INFO *cert_info = sk_X509_INFO_value(p->ssl_cacerts, i);
+			if (cert_info->x509)
+				X509_STORE_add_cert(cert_store, cert_info->x509);
+			if (cert_info->crl)
+				X509_STORE_add_crl(cert_store, cert_info->crl);
+		}
+	}
+
+	return CURLE_OK;
 }
 
 static void
@@ -662,6 +716,8 @@ pubnub_http_request(struct pubnub *p, pubnub_http_cb cb, void *cb_data, bool cb_
 	curl_easy_setopt(p->curl, CURLOPT_NOPROGRESS, 1L);
 	curl_easy_setopt(p->curl, CURLOPT_NOSIGNAL, (long) p->nosignal);
 	curl_easy_setopt(p->curl, CURLOPT_TIMEOUT, p->timeout);
+	curl_easy_setopt(p->curl, CURLOPT_SSL_CTX_FUNCTION, pubnub_ssl_contextcb);
+	curl_easy_setopt(p->curl, CURLOPT_SSL_CTX_DATA, p);
 
 	printbuf_reset(p->body);
 	p->finished_cb = cb;
@@ -777,7 +833,7 @@ resubscribe_http_cb(struct pubnub *p, enum pubnub_res result, struct json_object
 
 	/* Restart the subscribe first (to be sure the unsub callback
 	 * cannot disturb it). Do it even in case of failed leave()/join(). */
-	if (strcmp(cb_http_data->sub_time_token, "0"))
+	if (p->resume_on_reconnect && strcmp(cb_http_data->sub_time_token, "0"))
 		strcpy(p->time_token, cb_http_data->sub_time_token);
 	pubnub_subscribe_internal(p, cb_http_data->sub_timeout,
 			cb_http_data->sub_cb, cb_http_data->sub_call_data,

@@ -40,10 +40,10 @@
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
-    <IncludePath>..\..\..\json-c;..\..\..\openssl\include;..\..\..\curl\include;..\..\libpubnub;..\..\..\libevent;..\..\..\libevent\WIN32-Code;..\..\..\libevent\include;$(IncludePath)</IncludePath>
+    <IncludePath>..\..\..\json-c;..\..\..\openssl\include;..\..\..\curl\include;..\..\libpubnub;..\..\..\libevent;..\..\..\libevent\WIN32-Code;..\..\..\libevent\include;..\..\libpubnub-cpp;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
-    <IncludePath>..\..\..\json-c;..\..\..\openssl\include;..\..\..\curl\include;..\..\libpubnub;..\..\..\libevent;..\..\..\libevent\WIN32-Code;..\..\..\libevent\include;$(IncludePath)</IncludePath>
+    <IncludePath>..\..\..\json-c;..\..\..\openssl\include;..\..\..\curl\include;..\..\libpubnub;..\..\..\libevent;..\..\..\libevent\WIN32-Code;..\..\..\libevent\include;..\..\libpubnub-cpp;$(IncludePath)</IncludePath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
@@ -81,19 +81,26 @@
     <Text Include="ReadMe.txt" />
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="..\..\libpubnub-cpp\pubnub-sync.cpp">
+      <ObjectFileName Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(IntDir)pubnub-sync_cpp.obj</ObjectFileName>
+      <ObjectFileName Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(IntDir)pubnub-sync_cpp.obj</ObjectFileName>
+    </ClCompile>
     <ClCompile Include="..\..\libpubnub-cpp\pubnub.cpp">
       <ObjectFileName Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">$(IntDir)pubnub_cpp.obj</ObjectFileName>
       <ObjectFileName Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">$(IntDir)pubnub_cpp.obj</ObjectFileName>
     </ClCompile>
     <ClCompile Include="..\..\libpubnub\crypto.c" />
     <ClCompile Include="..\..\libpubnub\pubnub-libevent.c" />
+    <ClCompile Include="..\..\libpubnub\pubnub-sync.c" />
     <ClCompile Include="..\..\libpubnub\pubnub.c" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="..\..\libpubnub-cpp\pubnub-sync.hpp" />
     <ClInclude Include="..\..\libpubnub-cpp\pubnub.hpp" />
     <ClInclude Include="..\..\libpubnub\crypto.h" />
     <ClInclude Include="..\..\libpubnub\pubnub-libevent.h" />
     <ClInclude Include="..\..\libpubnub\pubnub-priv.h" />
+    <ClInclude Include="..\..\libpubnub\pubnub-sync.h" />
     <ClInclude Include="..\..\libpubnub\pubnub.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

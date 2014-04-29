@@ -1,7 +1,10 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#ifndef _MSC_VER
 #include <unistd.h>
+#endif
+#include <stdlib.h>
 
 #include <json.h>
 
@@ -67,7 +70,9 @@ main()
 					<< std::endl;
 			}
 		}
+#ifndef _MSC_VER
 		sleep(1);
+#endif
 	} while (1);
 
 

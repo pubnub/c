@@ -4,6 +4,10 @@ Microsoft Visual C++ projects:
 Description:
 ------------
 
+## itesting
+
+Integration testing (see [tests/integration](../tests/integration))
+
 ## libevent-demo
 
 C++ libevent demo project (see [examples-cpp/libevent-demo](../examples-cpp/libevent-demo))
@@ -15,6 +19,10 @@ PubNub library project (see [libpubnub](../libpubnub) + [libpubnub-cpp](../libpu
 ## libtest
 
 PubNub library google testing project (see [tests](../tests))
+
+## sync-demo
+
+C++ sync demo project (see [examples-cpp/sync-demo](../examples-cpp/sync-demo))
 
 Installation of the libraries:
 ------------------------------

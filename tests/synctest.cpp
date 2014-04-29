@@ -25,7 +25,11 @@ public:
 	virtual void TearDown();
 };
 
+#ifdef _MSC_VER
+int WSAPoll(struct pollfd *ufds, int nfds, int timeout)
+#else
 int poll(struct pollfd *ufds, int nfds, int timeout)
+#endif
 {
 	return SyncTest::poll(ufds, nfds, timeout);
 }
