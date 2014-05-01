@@ -182,6 +182,14 @@ struct pubnub *pubnub_init(const char *publish_key, const char *subscribe_key,
  * will not be called (this may change in the future). */
 void pubnub_done(struct pubnub *p);
 
+/* Serialize the PubNub context to the json object
+ * */
+struct json_object *pubnub_serialize(struct pubnub *p);
+
+/* Initialize the PubNub context from the serialized object
+ * */
+struct pubnub *pubnub_init_serialized(struct json_object *obj,
+                        const struct pubnub_callbacks *cb, void *cb_data);
 
 /* Set the secret key that is used for signing published messages
  * to confirm they are genuine. Using the secret key is optional. */

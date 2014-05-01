@@ -561,6 +561,61 @@ pubnub_done(struct pubnub *p)
 }
 
 PUBNUB_API
+struct json_object *
+pubnub_serialize(struct pubnub *p)
+{
+	json_object *obj = json_object_new_object();
+	json_object_object_add(obj, "publish_key", json_object_new_string(p->publish_key));
+	json_object_object_add(obj, "subscribe_key", json_object_new_string(p->subscribe_key));
+	json_object_object_add(obj, "time_token", json_object_new_string(p->time_token));
+	json_object_object_add(obj, "uuid", json_object_new_string(p->uuid));
+	json_object_object_add(obj, "origin", json_object_new_string(p->origin));
+	json_object_object_add(obj, "secret_key", json_object_new_string(p->secret_key));
+	json_object_object_add(obj, "cipher_key", json_object_new_string(p->cipher_key));
+	if (p->channelset.n > 0) {
+		json_object *arr = json_object_new_array();
+		for (int i = 0; i < p->channelset.n; i++) {
+			json_object_array_add(arr, json_object_new_string(p->channelset.set[i]));
+		}
+		json_object_object_add(obj, "channels", arr);
+	}
+	return obj;
+}
+
+PUBNUB_API
+struct pubnub *
+pubnub_init_serialized(struct json_object *obj,
+	const struct pubnub_callbacks *cb, void *cb_data)
+{
+	const char *pub = json_object_get_string(json_object_object_get(obj, "publish_key"));
+	const char *sub = json_object_get_string(json_object_object_get(obj, "subscribe_key"));
+	struct pubnub *p = pubnub_init(pub, sub, cb, cb_data);
+
+	int tt_size = sizeof(p->time_token);
+	strncpy(p->time_token, json_object_get_string(json_object_object_get(obj, "time_token")), tt_size);
+	p->time_token[tt_size - 1] = 0;
+
+	pubnub_set_uuid(p, json_object_get_string(json_object_object_get(obj, "uuid")));
+	pubnub_set_origin(p, json_object_get_string(json_object_object_get(obj, "origin")));
+	pubnub_set_secret_key(p, json_object_get_string(json_object_object_get(obj, "secret_key")));
+	pubnub_set_cipher_key(p, json_object_get_string(json_object_object_get(obj, "cipher_key")));
+
+	json_object *arr = json_object_object_get(obj, "channels");
+	if (arr && json_object_is_type(arr, json_type_array)) {
+		int n = json_object_array_length(arr);
+		if (n) {
+			const char **channels = (const char**)malloc(sizeof(char*) * n);
+			for (int i = 0; i < n; i++) {
+				channels[i] = json_object_get_string(json_object_array_get_idx(arr, i));
+			}
+			pubnub_subscribe_multi(p, channels, n, -1, NULL, NULL);
+			free(channels);
+		}
+	}
+	return p;
+}
+
+PUBNUB_API
 void
 pubnub_set_secret_key(struct pubnub *p, const char *secret_key)
 {
@@ -1067,12 +1122,6 @@ pubnub_subscribe_multi(struct pubnub *p, const char *channels[], int channels_n,
 		return;
 	}
 
-	if (p->channelset.set == NULL) {
-		/* A fresh subscribe, restart fresh (we do not care about
-		 * messages received while we were not subscribed anywhere). */
-		strcpy(p->time_token, "0");
-	}
-
 	const struct channelset cs = { SFINIT(.set,channels), SFINIT(.n, channels_n) };
 	unsigned newchans = 0;
 	if (channels != NULL)
@@ -1155,6 +1204,11 @@ pubnub_unsubscribe(struct pubnub *p, const char *channels[], int channels_n,
 		} else {
 			/* Unsubscribe from all channels. */
 			channelset_done(&p->channelset);
+		}
+		if (p->channelset.set == NULL) {
+			/* A fresh subscribe, restart fresh (we do not care about
+			 * messages received while we were not subscribed anywhere). */
+			strcpy(p->time_token, "0");
 		}
 	}
 
