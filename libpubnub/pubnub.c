@@ -141,7 +141,7 @@ pubnub_handle_error(struct pubnub *p, enum pubnub_res result, json_object *msg, 
 
 
 void
-pubnub_connection_cleanup(struct pubnub *p, bool stop_wait)
+pubnub_connection_cleanup(struct pubnub *p)
 {
 	p->method = NULL;
 	http_cleanup(p->http);
@@ -152,7 +152,7 @@ pubnub_connection_cleanup(struct pubnub *p, bool stop_wait)
 static void
 pubnub_connection_cancel(struct pubnub *p)
 {
-	pubnub_connection_cleanup(p, false);
+	pubnub_connection_cleanup(p);
 	if (p->finished_cb)
 		p->finished_cb(p, PNR_CANCELLED, NULL, p->cb_data, p->finished_cb_data);
 }
@@ -887,7 +887,7 @@ pubnub_unsubscribe(struct pubnub *p, const char *channels[], int channels_n,
 			cb_data = cb_http_data;
 			cb_internal = true;
 
-			pubnub_connection_cleanup(p, false);
+			pubnub_connection_cleanup(p);
 		} else {
 			/* ... cancel it! */
 			pubnub_connection_cancel(p);

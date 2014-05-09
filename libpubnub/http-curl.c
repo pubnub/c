@@ -18,7 +18,7 @@
 
 
 static void
-pubnub_connection_finished(struct pubnub *p, CURLcode res, bool stop_wait)
+pubnub_connection_finished(struct pubnub *p, CURLcode res)
 {
 	DBGMSG("DONE: (%d) %s\n", res, p->http->curl_error);
 
@@ -27,7 +27,7 @@ pubnub_connection_finished(struct pubnub *p, CURLcode res, bool stop_wait)
 
 	/* Check against I/O errors */
 	if (res != CURLE_OK) {
-		pubnub_connection_cleanup(p, stop_wait);
+		pubnub_connection_cleanup(p);
 		if (res == CURLE_OPERATION_TIMEDOUT) {
 			pubnub_handle_error(p, PNR_TIMEOUT, NULL, method, true);
 		} else {
@@ -42,7 +42,7 @@ pubnub_connection_finished(struct pubnub *p, CURLcode res, bool stop_wait)
 	long code = 599;
 	curl_easy_getinfo(p->http->curl, CURLINFO_RESPONSE_CODE, &code);
 	/* At this point, we can tear down the connection. */
-	pubnub_connection_cleanup(p, stop_wait);
+	pubnub_connection_cleanup(p);
 	if (code / 100 != 2) {
 		json_object *httpcode = json_object_new_int(code);
 		pubnub_handle_error(p, PNR_HTTP_ERROR, httpcode, method, true);
@@ -68,12 +68,10 @@ pubnub_connection_finished(struct pubnub *p, CURLcode res, bool stop_wait)
 }
 
 /* Let curl take care of the ongoing connections, then check for new events
- * and handle them (call the user callbacks etc.).  If stop_wait == true,
- * we have already called cb->wait and need to call cb->stop_wait if the
- * connection is over. Returns true if the connection has finished, otherwise
- * it is still running. */
+ * and handle them (call the user callbacks etc.). Returns true if the
+ * connection has finished, otherwise it is still running. */
 static bool
-pubnub_connection_check(struct pubnub *p, int fd, int bitmask, bool stop_wait)
+pubnub_connection_check(struct pubnub *p, int fd, int bitmask)
 {
 	int running_handles = 0;
 	DBGMSG("event_sockcb fd %d bitmask %d rh %d...\n", fd, bitmask, running_handles);
@@ -81,7 +79,7 @@ pubnub_connection_check(struct pubnub *p, int fd, int bitmask, bool stop_wait)
 	DBGMSG("event_sockcb ...rc %d\n", rc);
 	if (rc != CURLM_OK) {
 		const char *method = p->method;
-		pubnub_connection_cleanup(p, stop_wait);
+		pubnub_connection_cleanup(p);
 		json_object *msgstr = json_object_new_string(curl_multi_strerror(rc));
 		pubnub_handle_error(p, PNR_IO_ERROR, msgstr, method, true);
 		json_object_put(msgstr);
@@ -97,7 +95,7 @@ pubnub_connection_check(struct pubnub *p, int fd, int bitmask, bool stop_wait)
 			continue;
 
 		/* Done! */
-		pubnub_connection_finished(p, msg->data.result, stop_wait);
+		pubnub_connection_finished(p, msg->data.result);
 		done = true;
 	}
 
@@ -113,13 +111,13 @@ pubnub_event_sockcb(struct pubnub *p, int fd, int mode, void *cb_data)
 		(mode & 2 ? CURL_CSELECT_OUT : 0) |
 		(mode & 4 ? CURL_CSELECT_ERR : 0);
 
-	pubnub_connection_check(p, fd, ev_bitmask, true);
+	pubnub_connection_check(p, fd, ev_bitmask);
 }
 
 static void
 pubnub_event_timeoutcb(struct pubnub *p, void *cb_data)
 {
-	pubnub_connection_check(p, CURL_SOCKET_TIMEOUT, 0, true);
+	pubnub_connection_check(p, CURL_SOCKET_TIMEOUT, 0);
 }
 
 /* Socket callback for libcurl setting up / tearing down watches. */
@@ -311,7 +309,7 @@ pubnub_http_request(struct pubnub *p, pubnub_http_cb cb, void *cb_data, bool cb_
 	curl_multi_add_handle(p->http->curlm, p->http->curl);
 	DBGMSG("add handle: post\n");
 
-	if (!pubnub_connection_check(p, CURL_SOCKET_TIMEOUT, 0, false)) {
+	if (!pubnub_connection_check(p, CURL_SOCKET_TIMEOUT, 0)) {
 		/* Connection did not fail early, let's call wait and return. */
 		DBGMSG("wait: pre\n");
 		/* Call wait() only if this is not an error retry; wait
