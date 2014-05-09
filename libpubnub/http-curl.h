@@ -15,7 +15,8 @@ struct pubnub_http *http_init(struct pubnub *p);
 void http_done(struct pubnub_http *http);
 
 /* Issue an HTTP request within p->http context based on p->url, storing
- * the result in p->body and calling p->finished_cb when ready. */
+ * the result in p->body and calling pubnub_connection_finished()
+ * when ready. */
 void http_request(struct pubnub *p, bool wait);
 /* Tear down HTTP request context; any ongoing request is interrupted. */
 void http_cleanup(struct pubnub_http *http);
