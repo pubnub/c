@@ -238,25 +238,6 @@ http_done(struct pubnub_http *http)
 
 
 void
-http_cleanup(struct pubnub_http *http)
-{
-	if (http->curl) {
-		curl_multi_remove_handle(http->curlm, http->curl);
-		curl_easy_cleanup(http->curl);
-		http->curl = NULL;
-	}
-}
-
-
-void
-http_printbuf_urlappend(struct pubnub_http *http, struct printbuf *url, const char *urlelem)
-{
-	char *urlenc = curl_easy_escape(http->curl, urlelem, strlen(urlelem));
-	printbuf_memappend_fast(url, urlenc, strlen(urlenc));
-	curl_free(urlenc);
-}
-
-void
 http_request(struct pubnub *p, bool wait)
 {
 	p->http->curl = curl_easy_init();
@@ -288,4 +269,23 @@ http_request(struct pubnub *p, bool wait)
 			p->cb->wait(p, p->cb_data);
 		DBGMSG("wait: post\n");
 	}
+}
+
+void
+http_cleanup(struct pubnub_http *http)
+{
+	if (http->curl) {
+		curl_multi_remove_handle(http->curlm, http->curl);
+		curl_easy_cleanup(http->curl);
+		http->curl = NULL;
+	}
+}
+
+
+void
+http_printbuf_urlappend(struct pubnub_http *http, struct printbuf *url, const char *urlelem)
+{
+	char *urlenc = curl_easy_escape(http->curl, urlelem, strlen(urlelem));
+	printbuf_memappend_fast(url, urlenc, strlen(urlenc));
+	curl_free(urlenc);
 }
