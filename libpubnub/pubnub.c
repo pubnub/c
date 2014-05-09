@@ -142,7 +142,7 @@ pubnub_handle_error(struct pubnub *p, enum pubnub_res result, json_object *msg, 
 }
 
 
-void
+static void
 pubnub_connection_cleanup(struct pubnub *p)
 {
 	p->method = NULL;
@@ -157,6 +157,49 @@ pubnub_connection_cancel(struct pubnub *p)
 	pubnub_connection_cleanup(p);
 	if (p->finished_cb)
 		p->finished_cb(p, PNR_CANCELLED, NULL, p->cb_data, p->finished_cb_data);
+}
+
+void
+pubnub_connection_finished(struct pubnub *p, enum pubnub_res res, const char *errstr, int httpcode)
+{
+	/* pubnub_connection_cleanup() will clobber p->method */
+	const char *method = p->method;
+	/* Tear down the connection. */
+	pubnub_connection_cleanup(p);
+
+	/* Check against I/O and HTTP errors */
+	if (res == PNR_TIMEOUT) {
+		pubnub_handle_error(p, PNR_TIMEOUT, NULL, method, true);
+		return;
+	}
+	if (res == PNR_IO_ERROR) {
+		json_object *msgstr = json_object_new_string(errstr);
+		pubnub_handle_error(p, PNR_IO_ERROR, msgstr, method, true);
+		json_object_put(msgstr);
+		return;
+	}
+	if (httpcode / 100 != 2) {
+		json_object *httpcodeint = json_object_new_int(httpcode);
+		pubnub_handle_error(p, PNR_HTTP_ERROR, httpcodeint, method, true);
+		json_object_put(httpcodeint);
+		return;
+	}
+
+	/* Parse body */
+	json_object *response = json_tokener_parse(p->body->buf);
+	if (!response) {
+		pubnub_handle_error(p, PNR_FORMAT_ERROR, NULL, method, true);
+		return;
+	}
+
+	DBGMSG("DONE: Passed all traps! stop_wait %d\n", p->finished_cb_internal);
+
+	/* The regular callback */
+	if (!p->finished_cb_internal)
+		p->cb->stop_wait(p, p->cb_data);
+	if (p->finished_cb)
+		p->finished_cb(p, PNR_OK, response, p->cb_data, p->finished_cb_data);
+	json_object_put(response);
 }
 
 static void

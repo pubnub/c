@@ -18,53 +18,26 @@
 
 
 static void
-pubnub_connection_finished(struct pubnub *p, CURLcode res)
+http_connection_finished(struct pubnub *p, CURLcode res)
 {
 	DBGMSG("DONE: (%d) %s\n", res, p->http->curl_error);
 
-	/* pubnub_connection_cleanup() will clobber p->method */
-	const char *method = p->method;
-
-	/* Check against I/O errors */
-	if (res != CURLE_OK) {
-		pubnub_connection_cleanup(p);
+	enum pubnub_res pres;
+	long httpcode = 599;
+	const char *errstr = NULL;
+	if (res == CURLE_OK) {
+		pres = PNR_OK;
+		curl_easy_getinfo(p->http->curl, CURLINFO_RESPONSE_CODE, &httpcode);
+	} else {
 		if (res == CURLE_OPERATION_TIMEDOUT) {
-			pubnub_handle_error(p, PNR_TIMEOUT, NULL, method, true);
+			pres = PNR_TIMEOUT;
 		} else {
-			json_object *msgstr = json_object_new_string(curl_easy_strerror(res));
-			pubnub_handle_error(p, PNR_IO_ERROR, msgstr, method, true);
-			json_object_put(msgstr);
+			pres = PNR_IO_ERROR;
+			errstr = curl_easy_strerror(res);
 		}
-		return;
 	}
 
-	/* Check HTTP code */
-	long code = 599;
-	curl_easy_getinfo(p->http->curl, CURLINFO_RESPONSE_CODE, &code);
-	/* At this point, we can tear down the connection. */
-	pubnub_connection_cleanup(p);
-	if (code / 100 != 2) {
-		json_object *httpcode = json_object_new_int(code);
-		pubnub_handle_error(p, PNR_HTTP_ERROR, httpcode, method, true);
-		json_object_put(httpcode);
-		return;
-	}
-
-	/* Parse body */
-	json_object *response = json_tokener_parse(p->body->buf);
-	if (!response) {
-		pubnub_handle_error(p, PNR_FORMAT_ERROR, NULL, method, true);
-		return;
-	}
-
-	DBGMSG("DONE: Passed all traps! stop_wait %d\n", p->finished_cb_internal);
-
-	/* The regular callback */
-	if (!p->finished_cb_internal)
-		p->cb->stop_wait(p, p->cb_data);
-	if (p->finished_cb)
-		p->finished_cb(p, PNR_OK, response, p->cb_data, p->finished_cb_data);
-	json_object_put(response);
+	pubnub_connection_finished(p, pres, errstr, httpcode);
 }
 
 /* Let curl take care of the ongoing connections, then check for new events
@@ -78,11 +51,8 @@ pubnub_connection_check(struct pubnub *p, int fd, int bitmask)
 	CURLMcode rc = curl_multi_socket_action(p->http->curlm, fd, bitmask, &running_handles);
 	DBGMSG("event_sockcb ...rc %d\n", rc);
 	if (rc != CURLM_OK) {
-		const char *method = p->method;
-		pubnub_connection_cleanup(p);
-		json_object *msgstr = json_object_new_string(curl_multi_strerror(rc));
-		pubnub_handle_error(p, PNR_IO_ERROR, msgstr, method, true);
-		json_object_put(msgstr);
+		const char *errstr = curl_multi_strerror(rc);
+		pubnub_connection_finished(p, PNR_IO_ERROR, errstr, 599);
 		return true;
 	}
 
@@ -95,7 +65,7 @@ pubnub_connection_check(struct pubnub *p, int fd, int bitmask)
 			continue;
 
 		/* Done! */
-		pubnub_connection_finished(p, msg->data.result);
+		http_connection_finished(p, msg->data.result);
 		done = true;
 	}
 

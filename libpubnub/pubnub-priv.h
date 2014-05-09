@@ -55,7 +55,12 @@ struct pubnub {
 };
 
 bool pubnub_handle_error(struct pubnub *p, enum pubnub_res result, json_object *msg, const char *method, bool cb);
-void pubnub_connection_cleanup(struct pubnub *p);
+
+/* Notification from HTTP backend that a connection has been successfully
+ * finished.  If res == PNR_IO_ERROR, errstr shall contain the error
+ * description.  A check for httpcode is performed inside and a transition
+ * of PNR_OK to PNR_HTTP_ERROR happens automatically. */
+void pubnub_connection_finished(struct pubnub *p, enum pubnub_res res, const char *errstr, int httpcode);
 
 #ifdef DEBUG
 #define DBGMSG(x, ...) do { fprintf(stderr, "[%d] ", __LINE__); fprintf(stderr, x, ##__VA_ARGS__); } while (0)
