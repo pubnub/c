@@ -2,13 +2,11 @@
 #define PUBNUB__PubNub_priv_h
 
 #include <printbuf.h>
-#include <curl/curl.h>
 
 #include "pubnub.h"
+#include "http-curl.h"
 
 struct json_object;
-
-typedef void (*pubnub_http_cb)(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data);
 
 struct channelset {
 	const char **set;
@@ -49,15 +47,14 @@ struct pubnub {
 
 	bool nosignal;
 
-	CURL *curl;
-	CURLM *curlm;
-	struct curl_slist *curl_headers;
-	char curl_error[CURL_ERROR_SIZE];
+	struct pubnub_http *http;
 	struct printbuf *url;
 	struct printbuf *body;
 	long timeout;
 	struct stack_st_X509_INFO *ssl_cacerts;
 };
+
+bool pubnub_handle_error(struct pubnub *p, enum pubnub_res result, json_object *msg, const char *method, bool cb);
 
 #ifdef DEBUG
 #define DBGMSG(x, ...) do { fprintf(stderr, "[%d] ", __LINE__); fprintf(stderr, x, ##__VA_ARGS__); } while (0)

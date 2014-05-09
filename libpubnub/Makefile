@@ -5,7 +5,7 @@ SYS_CFLAGS=-std=gnu99 $(SOFLAGS) -I. `pkg-config --cflags json libcurl libcrypto
 LIBS=`pkg-config --libs json libcurl libcrypto libevent`
 LDFLAGS=$(SOFLAGS) -shared -Wl,-soname,libpubnub.so.0
 
-OBJS=pubnub.o pubnub-sync.o pubnub-libevent.o crypto.o
+OBJS=pubnub.o pubnub-sync.o pubnub-libevent.o crypto.o http-curl.o
 
 all: libpubnub.so.0.2 libpubnub.pc
 
