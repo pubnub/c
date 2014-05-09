@@ -21,7 +21,8 @@ struct pubnub_http {
 struct pubnub_http *http_init(struct pubnub *p);
 void http_done(struct pubnub_http *http);
 
-void pubnub_connection_cleanup(struct pubnub *p, bool stop_wait);
+/* Tear down HTTP request context; any ongoing request is interrupted. */
+void http_cleanup(struct pubnub_http *http);
 
 void pubnub_http_setup(struct pubnub *p, const char *urlelems[], const char **qparelems, long timeout);
 void pubnub_http_request(struct pubnub *p, pubnub_http_cb cb, void *cb_data, bool cb_internal, bool wait);

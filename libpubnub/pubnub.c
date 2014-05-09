@@ -140,6 +140,13 @@ pubnub_handle_error(struct pubnub *p, enum pubnub_res result, json_object *msg, 
 }
 
 
+void
+pubnub_connection_cleanup(struct pubnub *p, bool stop_wait)
+{
+	p->method = NULL;
+	http_cleanup(p->http);
+}
+
 /* Cancel ongoing HTTP connection, freeing all request resources and
  * invoking the relevant callbacks. */
 static void

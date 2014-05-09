@@ -240,14 +240,12 @@ http_done(struct pubnub_http *http)
 
 
 void
-pubnub_connection_cleanup(struct pubnub *p, bool stop_wait)
+http_cleanup(struct pubnub_http *http)
 {
-	p->method = NULL;
-
-	if (p->http->curl) {
-		curl_multi_remove_handle(p->http->curlm, p->http->curl);
-		curl_easy_cleanup(p->http->curl);
-		p->http->curl = NULL;
+	if (http->curl) {
+		curl_multi_remove_handle(http->curlm, http->curl);
+		curl_easy_cleanup(http->curl);
+		http->curl = NULL;
 	}
 }
 
