@@ -27,6 +27,8 @@ void http_cleanup(struct pubnub_http *http);
 
 void http_printbuf_urlappend(struct pubnub_http *http, struct printbuf *url, const char *urlelem);
 
-void pubnub_http_request(struct pubnub *p, pubnub_http_cb cb, void *cb_data, bool cb_internal, bool wait);
+/* Issue an HTTP request within p->http context based on p->url, storing
+ * the result in p->body and calling p->finished_cb when ready. */
+void http_request(struct pubnub *p, bool wait);
 
 #endif

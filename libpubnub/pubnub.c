@@ -62,6 +62,8 @@
  *                               wait triggers pubnub_timeout_cb)
  */
 
+static void pubnub_http_request(struct pubnub *p, pubnub_http_cb cb, void *cb_data, bool cb_internal, bool wait);
+
 
 static enum pubnub_res
 pubnub_error_report(struct pubnub *p, enum pubnub_res result, json_object *msg, const char *method, bool retry)
@@ -187,6 +189,17 @@ pubnub_http_setup(struct pubnub *p, const char *urlelems[], const char **qparele
 	printbuf_memappend_fast(p->url, "" /* \0 */, 1);
 
 	p->timeout = timeout;
+}
+
+static void
+pubnub_http_request(struct pubnub *p, pubnub_http_cb cb, void *cb_data, bool cb_internal, bool wait)
+{
+	printbuf_reset(p->body);
+	p->finished_cb = cb;
+	p->finished_cb_data = cb_data;
+	p->finished_cb_internal = cb_internal;
+
+	http_request(p, wait);
 }
 
 

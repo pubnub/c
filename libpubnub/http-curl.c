@@ -257,7 +257,7 @@ http_printbuf_urlappend(struct pubnub_http *http, struct printbuf *url, const ch
 }
 
 void
-pubnub_http_request(struct pubnub *p, pubnub_http_cb cb, void *cb_data, bool cb_internal, bool wait)
+http_request(struct pubnub *p, bool wait)
 {
 	p->http->curl = curl_easy_init();
 
@@ -273,11 +273,6 @@ pubnub_http_request(struct pubnub *p, pubnub_http_cb cb, void *cb_data, bool cb_
 	curl_easy_setopt(p->http->curl, CURLOPT_TIMEOUT, p->timeout);
 	curl_easy_setopt(p->http->curl, CURLOPT_SSL_CTX_FUNCTION, pubnub_ssl_contextcb);
 	curl_easy_setopt(p->http->curl, CURLOPT_SSL_CTX_DATA, p);
-
-	printbuf_reset(p->body);
-	p->finished_cb = cb;
-	p->finished_cb_data = cb_data;
-	p->finished_cb_internal = cb_internal;
 
 	DBGMSG("add handle: pre\n");
 	curl_multi_add_handle(p->http->curlm, p->http->curl);
