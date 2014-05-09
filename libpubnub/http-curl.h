@@ -8,6 +8,7 @@
 #include "pubnub.h"
 
 struct json_object;
+struct printbuf;
 
 typedef void (*pubnub_http_cb)(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data);
 
@@ -24,7 +25,8 @@ void http_done(struct pubnub_http *http);
 /* Tear down HTTP request context; any ongoing request is interrupted. */
 void http_cleanup(struct pubnub_http *http);
 
-void pubnub_http_setup(struct pubnub *p, const char *urlelems[], const char **qparelems, long timeout);
+void http_printbuf_urlappend(struct pubnub_http *http, struct printbuf *url, const char *urlelem);
+
 void pubnub_http_request(struct pubnub *p, pubnub_http_cb cb, void *cb_data, bool cb_internal, bool wait);
 
 #endif

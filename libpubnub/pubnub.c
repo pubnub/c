@@ -157,6 +157,38 @@ pubnub_connection_cancel(struct pubnub *p)
 		p->finished_cb(p, PNR_CANCELLED, NULL, p->cb_data, p->finished_cb_data);
 }
 
+static void
+pubnub_http_setup(struct pubnub *p, const char *urlelems[], const char **qparelems, long timeout)
+{
+	printbuf_reset(p->url);
+	printbuf_memappend_fast(p->url, p->origin, strlen(p->origin));
+	for (const char **urlelemp = urlelems; *urlelemp; urlelemp++) {
+		/* Join urlemes by slashes, e.g.
+		 *   { "v2", "time", NULL }
+		 * means /v2/time */
+		printbuf_memappend_fast(p->url, "/", 1);
+		http_printbuf_urlappend(p->http, p->url, *urlelemp);
+	}
+	if (qparelems) {
+		printbuf_memappend_fast(p->url, "?", 1);
+		/* qparelemp elements are in pairs, e.g.
+		 *   { "x", NULL, "UUID", "abc", "tt, "1", NULL }
+		 * means ?x&UUID=abc&tt=1 */
+		for (const char **qparelemp = qparelems; *qparelemp; qparelemp += 2) {
+			if (qparelemp > qparelems)
+				printbuf_memappend_fast(p->url, "?", 1);
+			printbuf_memappend_fast(p->url, qparelemp[0], strlen(qparelemp[0]));
+			if (qparelemp[1]) {
+				printbuf_memappend_fast(p->url, "=", 1);
+				printbuf_memappend_fast(p->url, qparelemp[1], strlen(qparelemp[1]));
+			}
+		}
+	}
+	printbuf_memappend_fast(p->url, "" /* \0 */, 1);
+
+	p->timeout = timeout;
+}
+
 
 static char *
 pubnub_gen_uuid(void)

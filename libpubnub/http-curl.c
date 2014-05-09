@@ -249,37 +249,11 @@ http_cleanup(struct pubnub_http *http)
 
 
 void
-pubnub_http_setup(struct pubnub *p, const char *urlelems[], const char **qparelems, long timeout)
+http_printbuf_urlappend(struct pubnub_http *http, struct printbuf *url, const char *urlelem)
 {
-	printbuf_reset(p->url);
-	printbuf_memappend_fast(p->url, p->origin, strlen(p->origin));
-	for (const char **urlelemp = urlelems; *urlelemp; urlelemp++) {
-		/* Join urlemes by slashes, e.g.
-		 *   { "v2", "time", NULL }
-		 * means /v2/time */
-		printbuf_memappend_fast(p->url, "/", 1);
-		char *urlenc = curl_easy_escape(p->http->curl, *urlelemp, strlen(*urlelemp));
-		printbuf_memappend_fast(p->url, urlenc, strlen(urlenc));
-		curl_free(urlenc);
-	}
-	if (qparelems) {
-		printbuf_memappend_fast(p->url, "?", 1);
-		/* qparelemp elements are in pairs, e.g.
-		 *   { "x", NULL, "UUID", "abc", "tt, "1", NULL }
-		 * means ?x&UUID=abc&tt=1 */
-		for (const char **qparelemp = qparelems; *qparelemp; qparelemp += 2) {
-			if (qparelemp > qparelems)
-				printbuf_memappend_fast(p->url, "?", 1);
-			printbuf_memappend_fast(p->url, qparelemp[0], strlen(qparelemp[0]));
-			if (qparelemp[1]) {
-				printbuf_memappend_fast(p->url, "=", 1);
-				printbuf_memappend_fast(p->url, qparelemp[1], strlen(qparelemp[1]));
-			}
-		}
-	}
-	printbuf_memappend_fast(p->url, "" /* \0 */, 1);
-
-	p->timeout = timeout;
+	char *urlenc = curl_easy_escape(http->curl, urlelem, strlen(urlelem));
+	printbuf_memappend_fast(url, urlenc, strlen(urlenc));
+	curl_free(urlenc);
 }
 
 void
