@@ -8,6 +8,8 @@
 
 struct json_object;
 
+typedef void (*pubnub_http_cb)(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data);
+
 struct channelset {
 	const char **set;
 	int n;

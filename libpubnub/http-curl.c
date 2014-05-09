@@ -16,6 +16,13 @@
 /* See the beginning of pubnub.c for a whole-picture control flow diagram
  * of how the individual functions below are dispatched. */
 
+struct pubnub_http {
+	CURL *curl;
+	CURLM *curlm;
+	struct curl_slist *curl_headers;
+	char curl_error[CURL_ERROR_SIZE];
+};
+
 
 static void
 http_connection_finished(struct pubnub *p, CURLcode res)

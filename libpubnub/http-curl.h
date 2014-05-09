@@ -9,15 +9,7 @@
 
 struct json_object;
 struct printbuf;
-
-typedef void (*pubnub_http_cb)(struct pubnub *p, enum pubnub_res result, struct json_object *response, void *ctx_data, void *call_data);
-
-struct pubnub_http {
-	CURL *curl;
-	CURLM *curlm;
-	struct curl_slist *curl_headers;
-	char curl_error[CURL_ERROR_SIZE];
-};
+struct pubnub_http;
 
 struct pubnub_http *http_init(struct pubnub *p);
 void http_done(struct pubnub_http *http);
