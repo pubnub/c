@@ -8,7 +8,7 @@
 #include <curl/curl.h>
 #include <openssl/ssl.h>
 
-#include "http-curl.h"
+#include "http.h"
 #include "pubnub-priv.h"
 
 /* TODO: Use curl shares. */

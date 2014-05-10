@@ -4,7 +4,7 @@
 #include <printbuf.h>
 
 #include "pubnub.h"
-#include "http-curl.h"
+#include "http.h"
 
 struct json_object;
 
