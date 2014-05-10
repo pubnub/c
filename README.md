@@ -87,7 +87,8 @@ as development packages). On Debian-like systems, use the command:
 
 	sudo apt-get install libevent-dev libjson0-dev libcurl4-openssl-dev libssl-dev
 
-Use the command
+(if your build environment is constrained, please refer to the Minimal
+Version section below).  Use the command
 
 	make
 
@@ -142,3 +143,33 @@ Using our own C client, we've built example chat plugins for Adium, Pidgin, and 
 
 Check them out in our examples directory at https://github.com/pubnub/c/blob/master/examples/libpurple !
 
+Minimal Version
+---------------
+
+The libpubnub currently has a hard dependency only on a single library,
+the libjson (which is itself quite small and with no further dependencies).
+All the other libraries are by default required to build and use libpubnub,
+but are not strictly required and can be removed easily:
+
+  * The libevent library is meant to help users deploy libpubnub within
+    asynchronous applications.  If you use a custom framework in your
+    async applications or wish to use libpubnub synchronously only (within
+    simple tools or with multiple threads or processes), edit
+    libpubnub/Makefile to simply delete references of libevent from the
+    SYS_CFLAG and LIBS lines and remove pubnub-libevent.o from the OBJS list.
+
+  * The libcurl library is recommended to provide robust, high performance
+    and full-featured HTTP communication with PubNub servers.  However,
+    in embedded environments, deploying libcurl can be a challenge.
+    If that is the case, an alternative (development preview, beta quality,
+    and with no HTTPS support) HTTP backend with minimal dependencies is
+    available; edit libpubnub/Makefile to remove references of libcurl
+    from the SYS_CFLAGS and LIBS lines and substitute http-curl.o
+    with http-mini.o in the OBJS list.
+
+  * The libssl library is used to provide all encryption functionality;
+    not just HTTPS support, but also for message signing (secret key)
+    and end-to-end symmetric encryption (cypher key).  If this is not
+    required, the libssl library can be removed.  Manual source code
+    modifications are currently required, but they are obvious and with
+    small scope.
