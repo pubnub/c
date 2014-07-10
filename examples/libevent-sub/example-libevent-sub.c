@@ -3,7 +3,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#include <event.h>
+#include <event2/event.h>
 
 #include <json.h>
 
@@ -102,22 +102,22 @@ int
 main(void)
 {
 	/* Set up the libevent library. */
-	event_init();
+	struct event_base *evbase = event_base_new();
 
 	/* Set up the PubNub library, with a single shared context,
 	 * using the libevent backend for event handling. */
-	struct pubnub *p = pubnub_init("demo", "demo", &pubnub_libevent_callbacks, pubnub_libevent_init());
+	struct pubnub *p = pubnub_init("demo", "demo", &pubnub_libevent_callbacks, pubnub_libevent_init(evbase));
 
 	/* Set the terminal interaction handlers. */
 	terminal_interactive();
 	atexit(terminal_cooked);
 
-	struct event ev;
-	event_set(&ev, 0 /*stdin*/, EV_READ | EV_PERSIST, read_stdin, p);
-	event_add(&ev, NULL);
+	struct event *ev;
+	ev = event_new(evbase, 0 /*stdin*/, EV_READ | EV_PERSIST, read_stdin, p);
+	event_add(ev, NULL);
 
 	/* Start the event loop. */
-	event_dispatch();
+	event_base_dispatch(evbase);
 
 	/* We should never reach here. */
 	pubnub_done(p);

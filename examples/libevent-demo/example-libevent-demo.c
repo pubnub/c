@@ -3,7 +3,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#include <event.h>
+#include <event2/event.h>
 
 #include <json.h>
 
@@ -35,7 +35,7 @@
 
 /* The clock update timer. */
 
-struct event clock_update_timer;
+struct event *clock_update_timer;
 static void
 clock_update(int fd, short kind, void *userp)
 {
@@ -53,7 +53,7 @@ clock_update(int fd, short kind, void *userp)
 	/* (A more prudent timer strategy would be to update clock
 	 * on the next second _boundary_.) */
 	struct timeval timeout = { .tv_sec = 1, .tv_usec = 0 };
-	evtimer_add(&clock_update_timer, &timeout);
+	evtimer_add(clock_update_timer, &timeout);
 }
 
 
@@ -187,7 +187,7 @@ main(void)
 	struct pubnub *p = pubnub_init("demo", "demo", &pubnub_libevent_callbacks, pubnub_libevent_init(evbase));
 
 	/* Set the clock update timer. */
-	evtimer_set(&clock_update_timer, clock_update, NULL);
+	clock_update_timer = evtimer_new(evbase, clock_update, NULL);
 	clock_update(-1, EV_TIMEOUT, NULL);
 
 	/* First step in the PubNub call sequence is publishing a message. */
@@ -197,7 +197,7 @@ main(void)
 	 * launch a GUI or whatever. */
 
 	/* Start the event loop. */
-	event_dispatch();
+	event_base_dispatch(evbase);
 
 	/* We should never reach here. */
 	pubnub_done(p);
