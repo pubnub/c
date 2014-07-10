@@ -100,6 +100,22 @@ pubnub_error_retry(struct pubnub *p, void *cb_data)
 	pubnub_http_request(p, p->finished_cb, p->finished_cb_data, p->finished_cb_internal, false);
 }
 
+void
+pubnub_finished_cb(struct pubnub *p, enum pubnub_res result, struct json_object *response)
+{
+	/* In some places, e.g. resubscribe_http_init(), we look at whether
+	 * p->finished_cb_data holds anything, and if there are leftovers
+	 * from a previous call (e.g. here_now), things blow up.  Therefore,
+	 * make sure that at the point when we issue the callback, there are
+	 * no leftovers. */
+	pubnub_http_cb finished_cb = p->finished_cb;
+	void *finished_cb_data = p->finished_cb_data;
+	p->finished_cb = NULL;
+	p->finished_cb_data = NULL;
+
+	finished_cb(p, result, response, p->cb_data, finished_cb_data);
+}
+
 /* Deal with errors. This will (i) print the error and (ii) either (a) retry
  * the request or (b) notify the user (if @cb is true).
  *
@@ -138,7 +154,7 @@ pubnub_handle_error(struct pubnub *p, enum pubnub_res result, json_object *msg, 
 		p->cb->stop_wait(p, p->cb_data); // unconditional!
 
 		if (cb && p->finished_cb)
-			p->finished_cb(p, result, msg, p->cb_data, p->finished_cb_data);
+			pubnub_finished_cb(p, result, msg);
 
 		return !cb;
 	}
@@ -193,7 +209,7 @@ pubnub_connection_finished(struct pubnub *p, CURLcode res, bool stop_wait)
 	if (!p->finished_cb_internal)
 		p->cb->stop_wait(p, p->cb_data);
 	if (p->finished_cb)
-		p->finished_cb(p, PNR_OK, response, p->cb_data, p->finished_cb_data);
+		pubnub_finished_cb(p, PNR_OK, response);
 	json_object_put(response);
 }
 
@@ -216,7 +232,7 @@ pubnub_connection_cancel(struct pubnub *p)
 {
 	pubnub_connection_cleanup(p, false);
 	if (p->finished_cb)
-		p->finished_cb(p, PNR_CANCELLED, NULL, p->cb_data, p->finished_cb_data);
+		pubnub_finished_cb(p, PNR_CANCELLED, NULL);
 }
 
 /* Let curl take care of the ongoing connections, then check for new events
