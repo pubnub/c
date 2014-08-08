@@ -48,6 +48,9 @@ struct timespec {
 #define SFINIT(f, v) f = v
 #endif
 
+#define PUBNUB_APIVER_MAJOR 1
+#define PUBNUB_APIVER_MINOR 0
+
 
 /* Result codes for PubNub methods. */
 enum pubnub_res {

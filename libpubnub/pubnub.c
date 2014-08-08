@@ -539,7 +539,7 @@ pubnub_init(const char *publish_key, const char *subscribe_key,
 	curl_multi_setopt(p->curlm, CURLMOPT_TIMERFUNCTION, pubnub_http_timercb);
 	curl_multi_setopt(p->curlm, CURLMOPT_TIMERDATA, p);
 
-	p->curl_headers = curl_slist_append(p->curl_headers, "User-Agent: c-generic/0");
+	p->curl_headers = curl_slist_append(p->curl_headers, "User-Agent: c-generic/1.0");
 	p->curl_headers = curl_slist_append(p->curl_headers, "V: 3.4");
 
 	return p;
