@@ -66,6 +66,9 @@
  */
 
 
+#define SDK_INFO "c-generic/1.0"
+
+
 static void pubnub_http_request(struct pubnub *p, pubnub_http_cb cb, void *cb_data, bool cb_internal, bool wait);
 
 static enum pubnub_res
@@ -539,7 +542,7 @@ pubnub_init(const char *publish_key, const char *subscribe_key,
 	curl_multi_setopt(p->curlm, CURLMOPT_TIMERFUNCTION, pubnub_http_timercb);
 	curl_multi_setopt(p->curlm, CURLMOPT_TIMERDATA, p);
 
-	p->curl_headers = curl_slist_append(p->curl_headers, "User-Agent: c-generic/1.0");
+	p->curl_headers = curl_slist_append(p->curl_headers, "User-Agent: " SDK_INFO);
 	p->curl_headers = curl_slist_append(p->curl_headers, "V: 3.4");
 
 	return p;
@@ -697,14 +700,16 @@ pubnub_http_setup(struct pubnub *p, const char *urlelems[], const char **qparele
 		printbuf_memappend_fast(p->url, urlenc, strlen(urlenc));
 		curl_free(urlenc);
 	}
+
+	printbuf_memappend_fast(p->url, "?pnsdk=", 7);
+	printbuf_memappend_fast(p->url, SDK_INFO, strlen(SDK_INFO));
+
 	if (qparelems) {
-		printbuf_memappend_fast(p->url, "?", 1);
 		/* qparelemp elements are in pairs, e.g.
 		 *   { "x", NULL, "UUID", "abc", "tt, "1", NULL }
 		 * means ?x&UUID=abc&tt=1 */
 		for (const char **qparelemp = qparelems; *qparelemp; qparelemp += 2) {
-			if (qparelemp > qparelems)
-				printbuf_memappend_fast(p->url, "?", 1);
+			printbuf_memappend_fast(p->url, "&", 1);
 			printbuf_memappend_fast(p->url, qparelemp[0], strlen(qparelemp[0]));
 			if (qparelemp[1]) {
 				printbuf_memappend_fast(p->url, "=", 1);
