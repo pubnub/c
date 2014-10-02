@@ -182,12 +182,14 @@ struct pubnub *pubnub_init(const char *publish_key, const char *subscribe_key,
  * will not be called (this may change in the future). */
 void pubnub_done(struct pubnub *p);
 
-/* Serialize the PubNub context to the json object
- * */
+/* Serialize the PubNub context to a json object.  Use this e.g. if you
+ * need to restart your app and do not want to miss any messages on the
+ * subscribed channel.  The serialized form is not meant for long-term
+ * storage. */
 struct json_object *pubnub_serialize(struct pubnub *p);
 
-/* Initialize the PubNub context from the serialized object
- * */
+/* Initialize the PubNub context from a serialized JSON object as
+ * produced by pubnub_serialize(). */
 struct pubnub *pubnub_init_serialized(struct json_object *obj,
                         const struct pubnub_callbacks *cb, void *cb_data);
 
