@@ -194,7 +194,7 @@ protected:
 		char *r = NULL;
 		if (!curlRequests.empty()) {
 			const char *url = curlRequests.back().c_str();
-			const char *t = strchr(url, '=');
+			const char *t = strchr(url, '?');
 			if (t) {
 				r = strdup(url);
 				r[t - url] = 0;
@@ -219,14 +219,14 @@ TEST_F(PubnubTest, Publish) {
 	json_object_object_add(msg, "str", json_object_new_string("test"));
 	pubnub_publish(p, "channel", msg, -1, NULL, NULL);
 	json_object_put(msg);
-	EXPECT_STREQ("http://pubsub.pubnub.com/publish/demo/demo/0/channel/0/%7B%20%22str%22%3A%20%22test%22%20%7D", curlRequests.back().c_str());
+	EXPECT_STREQ("http://pubsub.pubnub.com/publish/demo/demo/0/channel/0/%7B%20%22str%22%3A%20%22test%22%20%7D?pnsdk=c-generic/1.0", curlRequests.back().c_str());
 }
 
 TEST_F(PubnubTest, Subscribe) {
 	ASSERT_TRUE(curlInit);
 	pubnub_subscribe(p, "channel", -1, NULL, NULL);
 	char *s = GetSubUrl();
-	EXPECT_STREQ("http://pubsub.pubnub.com/subscribe/demo/channel/0/0?uuid", s);
+	EXPECT_STREQ("http://pubsub.pubnub.com/subscribe/demo/channel/0/0", s);
 	free(s);
 	pubnub_connection_cancel(p);
 }
@@ -238,7 +238,7 @@ TEST_F(PubnubTest, SubscribeWait) {
 	pubnub_http_inputcb(resp, strlen(resp), 1, p);
 	pubnub_connection_finished(p, CURLE_OK, false);
 	char *s = GetSubUrl();
-	EXPECT_STREQ("http://pubsub.pubnub.com/subscribe/demo/channel/0/LAST_RECEIVED_TIMETOKEN?uuid", s);
+	EXPECT_STREQ("http://pubsub.pubnub.com/subscribe/demo/channel/0/LAST_RECEIVED_TIMETOKEN", s);
 	free(s);
 	EXPECT_EQ(1, waitCalled);
 }
@@ -261,7 +261,7 @@ TEST_F(PubnubTest, SubscribeMulti) {
 	const char *channels[] = {"channel1", "channel2"};
 	pubnub_subscribe_multi(p, channels, 2, -1, NULL, NULL);
 	char *s = GetSubUrl();
-	EXPECT_STREQ("http://pubsub.pubnub.com/subscribe/demo/channel1%2Cchannel2/0/0?uuid", s);
+	EXPECT_STREQ("http://pubsub.pubnub.com/subscribe/demo/channel1%2Cchannel2/0/0", s);
 	free(s);
 	pubnub_connection_cancel(p);
 }
@@ -278,13 +278,13 @@ void PubnubTest::SubUnsubLeaveFlow(bool resume_on_reconnect)
 	pubnub_subscribe(p, "CH_A", -1, NULL, NULL);
 	EXPECT_EQ(1, p->channelset.n);
 	char *s = GetSubUrl();
-	EXPECT_STREQ("http://pubsub.pubnub.com/subscribe/demo/CH_A/0/0?uuid", s);
+	EXPECT_STREQ("http://pubsub.pubnub.com/subscribe/demo/CH_A/0/0", s);
 	free(s);
 	char *resp = "[[],'LAST_RECEIVED_TIMETOKEN']";
 	pubnub_http_inputcb(resp, strlen(resp), 1, p);
 	pubnub_connection_finished(p, CURLE_OK, false);
 	s = GetSubUrl();
-	EXPECT_STREQ("http://pubsub.pubnub.com/subscribe/demo/CH_A/0/LAST_RECEIVED_TIMETOKEN?uuid", s);
+	EXPECT_STREQ("http://pubsub.pubnub.com/subscribe/demo/CH_A/0/LAST_RECEIVED_TIMETOKEN", s);
 	free(s);
 
 	// 2. Next Step
@@ -297,12 +297,12 @@ void PubnubTest::SubUnsubLeaveFlow(bool resume_on_reconnect)
 	EXPECT_EQ(2, p->channelset.n);
 	s = GetSubUrl();
 	if (resume_on_reconnect)
-		EXPECT_STREQ("http://pubsub.pubnub.com/subscribe/demo/CH_A%2CCH_A-pnpres/0/LAST_RECEIVED_TIMETOKEN?uuid", s);
+		EXPECT_STREQ("http://pubsub.pubnub.com/subscribe/demo/CH_A%2CCH_A-pnpres/0/LAST_RECEIVED_TIMETOKEN", s);
 	else
-		EXPECT_STREQ("http://pubsub.pubnub.com/subscribe/demo/CH_A%2CCH_A-pnpres/0/LAST1_RECEIVED_TIMETOKEN?uuid", s);
+		EXPECT_STREQ("http://pubsub.pubnub.com/subscribe/demo/CH_A%2CCH_A-pnpres/0/LAST1_RECEIVED_TIMETOKEN", s);
 	free(s);
 	s = GetSubUrl();
-	EXPECT_STREQ("http://pubsub.pubnub.com/subscribe/demo/CH_A%2CCH_A-pnpres/0/0?uuid", s);
+	EXPECT_STREQ("http://pubsub.pubnub.com/subscribe/demo/CH_A%2CCH_A-pnpres/0/0", s);
 	free(s);
 
 	// 3. Next Step
@@ -314,12 +314,12 @@ void PubnubTest::SubUnsubLeaveFlow(bool resume_on_reconnect)
 	EXPECT_EQ(3, p->channelset.n);
 	s = GetSubUrl();
 	if (resume_on_reconnect)
-		EXPECT_STREQ("http://pubsub.pubnub.com/subscribe/demo/CH_A%2CCH_A-pnpres%2CCH_B/0/LAST_RECEIVED_TIMETOKEN?uuid", s);
+		EXPECT_STREQ("http://pubsub.pubnub.com/subscribe/demo/CH_A%2CCH_A-pnpres%2CCH_B/0/LAST_RECEIVED_TIMETOKEN", s);
 	else
-		EXPECT_STREQ("http://pubsub.pubnub.com/subscribe/demo/CH_A%2CCH_A-pnpres%2CCH_B/0/LAST2_RECEIVED_TIMETOKEN?uuid", s);
+		EXPECT_STREQ("http://pubsub.pubnub.com/subscribe/demo/CH_A%2CCH_A-pnpres%2CCH_B/0/LAST2_RECEIVED_TIMETOKEN", s);
 	free(s);
 	s = GetSubUrl();
-	EXPECT_STREQ("http://pubsub.pubnub.com/subscribe/demo/CH_A%2CCH_A-pnpres%2CCH_B/0/0?uuid", s);
+	EXPECT_STREQ("http://pubsub.pubnub.com/subscribe/demo/CH_A%2CCH_A-pnpres%2CCH_B/0/0", s);
 	free(s);
 
 	// 4. Next Step
@@ -329,12 +329,12 @@ void PubnubTest::SubUnsubLeaveFlow(bool resume_on_reconnect)
 	EXPECT_EQ(2, p->channelset.n);
 	s = GetSubUrl();
 	if (resume_on_reconnect)
-		EXPECT_STREQ("http://pubsub.pubnub.com/subscribe/demo/CH_B%2CCH_A-pnpres/0/LAST_RECEIVED_TIMETOKEN?uuid", s);
+		EXPECT_STREQ("http://pubsub.pubnub.com/subscribe/demo/CH_B%2CCH_A-pnpres/0/LAST_RECEIVED_TIMETOKEN", s);
 	else
-		EXPECT_STREQ("http://pubsub.pubnub.com/subscribe/demo/CH_B%2CCH_A-pnpres/0/LAST2_RECEIVED_TIMETOKEN?uuid", s);
+		EXPECT_STREQ("http://pubsub.pubnub.com/subscribe/demo/CH_B%2CCH_A-pnpres/0/LAST2_RECEIVED_TIMETOKEN", s);
 	free(s);
 	s = GetSubUrl();
-	EXPECT_STREQ("http://pubsub.pubnub.com/v2/presence/sub-key/demo/channel/CH_A/leave?uuid", s);
+	EXPECT_STREQ("http://pubsub.pubnub.com/v2/presence/sub-key/demo/channel/CH_A/leave", s);
 	free(s);
 
 	// 5. Next Step
@@ -342,7 +342,7 @@ void PubnubTest::SubUnsubLeaveFlow(bool resume_on_reconnect)
 	pubnub_unsubscribe(p, channels5, 2, -1, NULL, NULL);
 	pubnub_connection_cancel(p);
 	s = GetSubUrl();
-	EXPECT_STREQ("http://pubsub.pubnub.com/v2/presence/sub-key/demo/channel/CH_A-pnpres%2CCH_B/leave?uuid", s);
+	EXPECT_STREQ("http://pubsub.pubnub.com/v2/presence/sub-key/demo/channel/CH_A-pnpres%2CCH_B/leave", s);
 	EXPECT_EQ(0, p->channelset.n);
 	EXPECT_EQ(0, curlRequests.size());
 	free(s);
@@ -359,19 +359,19 @@ TEST_F(PubnubTest, MultiSubUnsubLeaveFlow_DONT_RESUME) {
 TEST_F(PubnubTest, History) {
 	ASSERT_TRUE(curlInit);
 	pubnub_history(p, "channel", 10, -1, NULL, NULL);
-	EXPECT_STREQ("http://pubsub.pubnub.com/history/demo/channel/0/10", curlRequests.back().c_str());
+	EXPECT_STREQ("http://pubsub.pubnub.com/history/demo/channel/0/10?pnsdk=c-generic/1.0", curlRequests.back().c_str());
 }
 
 TEST_F(PubnubTest, HereNow) {
 	ASSERT_TRUE(curlInit);
 	pubnub_here_now(p, "channel", -1, NULL, NULL);
-	EXPECT_STREQ("http://pubsub.pubnub.com/v2/presence/sub-key/demo/channel/channel", curlRequests.back().c_str());
+	EXPECT_STREQ("http://pubsub.pubnub.com/v2/presence/sub-key/demo/channel/channel?pnsdk=c-generic/1.0", curlRequests.back().c_str());
 }
 
 TEST_F(PubnubTest, Time) {
 	ASSERT_TRUE(curlInit);
 	pubnub_time(p, -1, NULL, NULL);
-	EXPECT_STREQ("http://pubsub.pubnub.com/time/0", curlRequests.back().c_str());
+	EXPECT_STREQ("http://pubsub.pubnub.com/time/0?pnsdk=c-generic/1.0", curlRequests.back().c_str());
 }
 
 TEST(ChannelSetTest, AddRemove) {
