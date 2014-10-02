@@ -187,12 +187,22 @@ void pubnub_done(struct pubnub *p);
 
 /* Serialize the PubNub context to a json object.  Use this e.g. if you
  * need to restart your app and do not want to miss any messages on the
- * subscribed channel.  The serialized form is not meant for long-term
- * storage. */
+ * subscribed channel.
+ *
+ * The serialized form is not meant for long-term or external storage:
+ * - The subscribe timetoken that is a part of the serialized state
+ *   will get stale quickly (resuming the subscribe shouldn't take
+ *   longer than a minute or so).
+ * - We treat the JSON data as trusted and do no sanity checks when
+ *   deserializing.  A missing attribute will make the process crash!
+ *
+ * (We will make an effort to be backwards compatible to states generated
+ * by older library versions; but we do not make promises.) */
 struct json_object *pubnub_serialize(struct pubnub *p);
 
 /* Initialize the PubNub context from a serialized JSON object as
- * produced by pubnub_serialize(). */
+ * produced by pubnub_serialize().  N.B. no verification of the
+ * object data is performed; we assume the data is trusted. */
 struct pubnub *pubnub_init_serialized(struct json_object *obj,
                         const struct pubnub_callbacks *cb, void *cb_data);
 
