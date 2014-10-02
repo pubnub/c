@@ -592,13 +592,13 @@ pubnub_serialize(struct pubnub *p)
 	json_object_object_add(obj, "secret_key", json_object_new_string(p->secret_key));
 	json_object_object_add(obj, "cipher_key", json_object_new_string(p->cipher_key));
 	json_object_object_add(obj, "resume_on_reconnect", json_object_new_boolean(p->resume_on_reconnect));
-	if (p->channelset.n > 0) {
-		json_object *arr = json_object_new_array();
-		for (int i = 0; i < p->channelset.n; i++) {
-			json_object_array_add(arr, json_object_new_string(p->channelset.set[i]));
-		}
-		json_object_object_add(obj, "channels", arr);
+
+	json_object *arr = json_object_new_array();
+	for (int i = 0; i < p->channelset.n; i++) {
+		json_object_array_add(arr, json_object_new_string(p->channelset.set[i]));
 	}
+	json_object_object_add(obj, "channels", arr);
+
 	return obj;
 }
 
@@ -622,17 +622,17 @@ pubnub_init_serialized(struct json_object *obj,
 	pubnub_set_resume_on_reconnect(p, json_object_get_boolean(json_object_object_get(obj, "resume_on_reconnect")));
 
 	json_object *arr = json_object_object_get(obj, "channels");
-	if (arr && json_object_is_type(arr, json_type_array)) {
-		int n = json_object_array_length(arr);
-		if (n) {
-			const char **channels = (const char**)malloc(sizeof(char*) * n);
-			for (int i = 0; i < n; i++) {
-				channels[i] = json_object_get_string(json_object_array_get_idx(arr, i));
-			}
-			pubnub_subscribe_multi(p, channels, n, -1, NULL, NULL);
-			free(channels);
+
+	int n = json_object_array_length(arr);
+	if (n > 0) {
+		const char **channels = (const char**)malloc(sizeof(char*) * n);
+		for (int i = 0; i < n; i++) {
+			channels[i] = json_object_get_string(json_object_array_get_idx(arr, i));
 		}
+		pubnub_subscribe_multi(p, channels, n, -1, NULL, NULL);
+		free(channels);
 	}
+
 	return p;
 }
 
