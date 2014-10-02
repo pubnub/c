@@ -1,26 +1,33 @@
-Running google tests
-====================
+Running Tests
+=============
+
+These are pretty tight unit tests that do not involve any communication
+with the network server either.  In the integration/ directory, we cover
+some cases of actual network communication.
+
+We use the Google tests (gtest) framework.
 
 Installation google testing framework
 -------------------------------------
 
-## Linux/Mac OS X
+## Debian compatible
+
+Install the libgtest-dev package.
+
+## Other Linux/Mac OS X
 
 1. Get the googletest framework
 
 		wget http://googletest.googlecode.com/files/gtest-1.7.0.zip
 
-2. Unzip and build google test
+2. Unzip in some directory
 
 		unzip gtest-1.7.0.zip
-		cd gtest-1.7.0
-		./configure
-		make
 
-3. "Install" the headers and libs on your system
-
-		sudo cp -a include/gtest /usr/include
-		sudo cp -a lib/.libs/* /usr/lib/
+3. Adjust the Makefile in the directory of this README, modifying the
+   GTEST_DIR variable value near the top of the file, passing the path
+   to the unpacked gtest.  Alternatively, pass GTEST_DIR=... on the
+   commandline of `make` below.
 
 ## MS Windows
 

@@ -3,7 +3,7 @@ includedir=@INCDIR@
 
 Name: pubnub-cpp
 Description: PubNub Cloud Messaging Library (C++ bindings)
-Version: 0.1
+Version: 1.0
 Requires: json, libcurl, libcrypto, libevent, libpubnub
 Conflicts:
 Libs: -L${libdir} -lpubnub-cpp

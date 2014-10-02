@@ -66,6 +66,9 @@
  */
 
 
+#define SDK_INFO "c-generic/1.0"
+
+
 static void pubnub_http_request(struct pubnub *p, pubnub_http_cb cb, void *cb_data, bool cb_internal, bool wait);
 
 static enum pubnub_res
@@ -98,6 +101,22 @@ static void
 pubnub_error_retry(struct pubnub *p, void *cb_data)
 {
 	pubnub_http_request(p, p->finished_cb, p->finished_cb_data, p->finished_cb_internal, false);
+}
+
+void
+pubnub_finished_cb(struct pubnub *p, enum pubnub_res result, struct json_object *response)
+{
+	/* In some places, e.g. resubscribe_http_init(), we look at whether
+	 * p->finished_cb_data holds anything, and if there are leftovers
+	 * from a previous call (e.g. here_now), things blow up.  Therefore,
+	 * make sure that at the point when we issue the callback, there are
+	 * no leftovers. */
+	pubnub_http_cb finished_cb = p->finished_cb;
+	void *finished_cb_data = p->finished_cb_data;
+	p->finished_cb = NULL;
+	p->finished_cb_data = NULL;
+
+	finished_cb(p, result, response, p->cb_data, finished_cb_data);
 }
 
 /* Deal with errors. This will (i) print the error and (ii) either (a) retry
@@ -138,7 +157,7 @@ pubnub_handle_error(struct pubnub *p, enum pubnub_res result, json_object *msg, 
 		p->cb->stop_wait(p, p->cb_data); // unconditional!
 
 		if (cb && p->finished_cb)
-			p->finished_cb(p, result, msg, p->cb_data, p->finished_cb_data);
+			pubnub_finished_cb(p, result, msg);
 
 		return !cb;
 	}
@@ -193,7 +212,7 @@ pubnub_connection_finished(struct pubnub *p, CURLcode res, bool stop_wait)
 	if (!p->finished_cb_internal)
 		p->cb->stop_wait(p, p->cb_data);
 	if (p->finished_cb)
-		p->finished_cb(p, PNR_OK, response, p->cb_data, p->finished_cb_data);
+		pubnub_finished_cb(p, PNR_OK, response);
 	json_object_put(response);
 }
 
@@ -216,7 +235,7 @@ pubnub_connection_cancel(struct pubnub *p)
 {
 	pubnub_connection_cleanup(p, false);
 	if (p->finished_cb)
-		p->finished_cb(p, PNR_CANCELLED, NULL, p->cb_data, p->finished_cb_data);
+		pubnub_finished_cb(p, PNR_CANCELLED, NULL);
 }
 
 /* Let curl take care of the ongoing connections, then check for new events
@@ -523,7 +542,7 @@ pubnub_init(const char *publish_key, const char *subscribe_key,
 	curl_multi_setopt(p->curlm, CURLMOPT_TIMERFUNCTION, pubnub_http_timercb);
 	curl_multi_setopt(p->curlm, CURLMOPT_TIMERDATA, p);
 
-	p->curl_headers = curl_slist_append(p->curl_headers, "User-Agent: c-generic/0");
+	p->curl_headers = curl_slist_append(p->curl_headers, "User-Agent: " SDK_INFO);
 	p->curl_headers = curl_slist_append(p->curl_headers, "V: 3.4");
 
 	return p;
@@ -738,14 +757,16 @@ pubnub_http_setup(struct pubnub *p, const char *urlelems[], const char **qparele
 		printbuf_memappend_fast(p->url, urlenc, strlen(urlenc));
 		curl_free(urlenc);
 	}
+
+	printbuf_memappend_fast(p->url, "?pnsdk=", 7);
+	printbuf_memappend_fast(p->url, SDK_INFO, strlen(SDK_INFO));
+
 	if (qparelems) {
-		printbuf_memappend_fast(p->url, "?", 1);
 		/* qparelemp elements are in pairs, e.g.
 		 *   { "x", NULL, "UUID", "abc", "tt, "1", NULL }
 		 * means ?x&UUID=abc&tt=1 */
 		for (const char **qparelemp = qparelems; *qparelemp; qparelemp += 2) {
-			if (qparelemp > qparelems)
-				printbuf_memappend_fast(p->url, "?", 1);
+			printbuf_memappend_fast(p->url, "&", 1);
 			printbuf_memappend_fast(p->url, qparelemp[0], strlen(qparelemp[0]));
 			if (qparelemp[1]) {
 				printbuf_memappend_fast(p->url, "=", 1);
