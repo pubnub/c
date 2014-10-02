@@ -539,14 +539,13 @@ TEST_F(PubnubTest, Serialization) {
 	ASSERT_TRUE(curlInit);
 	const char *channels[] = {"ch_1", "ch_2"};
 	pubnub_subscribe_multi(p, channels, 2, -1, NULL, NULL);
-	char *s = GetSubUrl();
-	const char *request1 = "https://test.origin/subscribe/subscribe_key/ch_1%2Cch_2/0/0";
-	EXPECT_STREQ(request1, s);
-	free(s);
+	const char *request1 = "https://test.origin/subscribe/subscribe_key/ch_1%2Cch_2/0/0?pnsdk=c-generic/1.0&uuid=uuid";
+	EXPECT_STREQ(request1, curlRequests.back().c_str());
+	curlRequests.pop_back();
 	char resp1[] = "[[],'LAST_RECEIVED_TIMETOKEN']";
 	pubnub_http_inputcb(resp1, strlen(resp1), 1, p);
 	pubnub_connection_finished(p, CURLE_OK, false);
-	s = GetSubUrl();
+	char *s = GetSubUrl();
 	const char *request2 = "https://test.origin/subscribe/subscribe_key/ch_1%2Cch_2/0/LAST_RECEIVED_TIMETOKEN";
 	EXPECT_STREQ(request2, s);
 	free(s);
@@ -555,9 +554,8 @@ TEST_F(PubnubTest, Serialization) {
 	struct json_object *obj = pubnub_serialize(p);
 	struct pubnub *ps = pubnub_init_serialized(obj, p->cb, p->cb_data);
 
-	s = GetSubUrl();
-	EXPECT_STREQ(request1, s);
-	free(s);
+	EXPECT_STREQ(request1, curlRequests.back().c_str());
+	curlRequests.pop_back();
 	char resp2[] = "[[],'NEW_RECEIVED_TIMETOKEN']";
 	pubnub_http_inputcb(resp2, strlen(resp2), 1, ps);
 	pubnub_connection_finished(ps, CURLE_OK, false);
