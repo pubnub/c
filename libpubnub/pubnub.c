@@ -572,6 +572,7 @@ pubnub_serialize(struct pubnub *p)
 	json_object_object_add(obj, "origin", json_object_new_string(p->origin));
 	json_object_object_add(obj, "secret_key", json_object_new_string(p->secret_key));
 	json_object_object_add(obj, "cipher_key", json_object_new_string(p->cipher_key));
+	json_object_object_add(obj, "resume_on_reconnect", json_object_new_boolean(p->resume_on_reconnect));
 	if (p->channelset.n > 0) {
 		json_object *arr = json_object_new_array();
 		for (int i = 0; i < p->channelset.n; i++) {
@@ -599,6 +600,7 @@ pubnub_init_serialized(struct json_object *obj,
 	pubnub_set_origin(p, json_object_get_string(json_object_object_get(obj, "origin")));
 	pubnub_set_secret_key(p, json_object_get_string(json_object_object_get(obj, "secret_key")));
 	pubnub_set_cipher_key(p, json_object_get_string(json_object_object_get(obj, "cipher_key")));
+	pubnub_set_resume_on_reconnect(p, json_object_get_boolean(json_object_object_get(obj, "resume_on_reconnect")));
 
 	json_object *arr = json_object_object_get(obj, "channels");
 	if (arr && json_object_is_type(arr, json_type_array)) {
