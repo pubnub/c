@@ -189,6 +189,10 @@ void pubnub_done(struct pubnub *p);
  * need to restart your app and do not want to miss any messages on the
  * subscribed channel.
  *
+ * More specifically, PubNub state (like API keys, UUID, channels,
+ * timetokens) is serialized while runtime configuration (nosignal,
+ * cacerts or the error policy) is not.
+ *
  * The serialized form is not meant for long-term or external storage:
  * - The subscribe timetoken that is a part of the serialized state
  *   will get stale quickly (resuming the subscribe shouldn't take
