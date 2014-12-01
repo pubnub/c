@@ -279,13 +279,21 @@ void pubnub_error_policy(struct pubnub *p, unsigned int retry_mask, bool print);
  */
 void pubnub_set_ssl_cacerts(struct pubnub *p, const char *cacerts, size_t len);
 
-/* Set RESUME_ON_RECONNECT of this PubNub context
- * If RESUME_ON_RECONNECT == TRUE, then upon reconnecting or switching channels, 
- * the client will use the last received time token it was subscribed on before
- * the subscribe cycle was interrupted.
- * If RESUME_ON_RECONNECT == FALSE, then upon reconnecting, the client will use
- * time token received on current subscribe cycle.
- * DEFAULT is RESUME_ON_RECONNECT == TRUE
+/* Set PubNub time token handling when joining new channels during an on-going
+ * subscribe.
+ *
+ * If true (DEFAULT), the client will use the last received time token it was
+ * subscribed on before the subscribe cycle was interrupted; this means that
+ * after joining a channel, we will catch up with all messages on all subscribed
+ * messages sent meanwhile - *including* messages distributed on the newly
+ * joined channel sent before the join was completed.
+ *
+ * If false, after join, the client will subscribe with the time token returned
+ * by the join - therefore, on the new channel receiving messages only since
+ * joining it, but possibly missing some messages on other subscribed channels.
+ *
+ * If no channels are joined or leaved throughout the pubnub context lifetime,
+ * this API call is of no consequence.
  */
 void pubnub_set_resume_on_reconnect(struct pubnub *p, bool resume_on_reconnect);
 
