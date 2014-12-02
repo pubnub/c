@@ -1186,6 +1186,23 @@ pubnub_subscribe_multi(struct pubnub *p, const char *channels[], int channels_n,
 }
 
 
+PUBNUB_API
+void
+pubnub_reset_subscribe(struct pubnub *p, bool reset_timetoken)
+{
+	if (p->method && !strcmp(p->method, "subscribe")) {
+		/* An ongoing subscribe, cancel. */
+		pubnub_connection_cancel(p);
+	}
+
+	if (reset_timetoken) {
+		/* Start fresh when subscribing again, ignoring any
+		 * messages up to then. */
+		strcpy(p->time_token, "0");
+	}
+}
+
+
 static void
 pubnub_leave(struct pubnub *p, const char *channelset, long timeout,
 		pubnub_unsubscribe_cb cb, void *cb_data, bool cb_internal)

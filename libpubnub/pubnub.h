@@ -352,6 +352,38 @@ void pubnub_subscribe(struct pubnub *p, const char *channel,
 void pubnub_subscribe_multi(struct pubnub *p, const char *channels[], int channels_n,
 		long timeout, pubnub_subscribe_cb cb, void *cb_data);
 
+/* Reset an ongoing subscription.  If a subscribe request is underway,
+ * it is cancelled.  (Callbacks are invoked with the PNR_CANCELLED
+ * status.)  Note that no new subscribe is called automatically, call
+ * pubnub_subscribe() again when ready.
+ *
+ * If the reset_timetoken flag is set to true, a new subscription time
+ * token is obtained on the next call - i.e. any messages received
+ * before the *next* subscribe call are dropped.
+ *
+ * You do not need to explicitly call this function when joining or
+ * leaving channels.  It is intended for cases like when you know you
+ * lost your internet connectivity and it is no use waiting for a proper
+ * timeout.
+ *
+ * Another use-case is performing a manual retry of the subscribe call
+ * on a timeout with the aim to drop messages that appeared during
+ * the outage, like:
+ *
+ * 	pubnub_error_policy(p, ~(1<<PNR_TIMEOUT), true);
+ * 	pubnub_subscribe(p, "sub_channel", -1, NULL, NULL);
+ * 	if (pubnub_sync_last_result(sync) == PNR_TIMEOUT) {
+ * 		pubnub_reset_subscribe(p, true);
+ * 		continue;
+ * 	}
+ * 	if (pubnub_sync_last_result(sync) != PNR_OK)
+ * 		return EXIT_FAILURE;
+ *
+ * (Beware: as of PubNub version 1.0, this API call is experimental and
+ * not part of the stable API or ABI.)
+ */
+void pubnub_reset_subscribe(struct pubnub *p, bool reset_timetoken);
+
 /* Cancel an ongoing subscription to @channels.  If a subscribe is
  * currently ongoing, it will be restarted silently (without subscribe
  * callback invoked) to reflect the reduced set of channels.  You can
