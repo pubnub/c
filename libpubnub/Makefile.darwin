@@ -9,9 +9,9 @@ LIBDIR=$(PREFIX)/lib
 
 
 # Compile using `make XCFLAGS=-DDEBUG` to enable debugging code.
-LIBS=`pkg-config --libs json libcurl libcrypto libevent`
+LIBS=`pkg-config --libs json libcurl libcrypto libevent libssl`
 
-SYS_CFLAGS=-std=gnu99 $(SOFLAGS) -I. `pkg-config --cflags json libcurl libcrypto libevent`
+SYS_CFLAGS=-std=gnu99 $(SOFLAGS) -I. `pkg-config --cflags json libcurl libcrypto libevent libssl`
 
 
 OBJS=pubnub.o pubnub-sync.o pubnub-libevent.o crypto.o

@@ -1,0 +1,42 @@
+
+CUSTOM_CXXFLAGS=-Wall -O3
+SOFLAGS=-fPIC
+PREFIX=/opt/local
+LDFLAGS=$(SOFLAGS) -dynamiclib -Wl,-install_name,$(PREFIX)/lib/libpubnub-cpp.1.dylib
+
+INCDIR=$(PREFIX)/include
+LIBDIR=$(PREFIX)/lib
+
+
+# Compile using `make XCFLAGS=-DDEBUG` to enable debugging code.
+LIBS=`pkg-config --libs json libcurl libcrypto libevent libssl`
+
+SYS_CXXFLAGS=$(SOFLAGS) -I. -I../libpubnub `pkg-config --cflags json libcurl libcrypto libevent libssl`
+
+C_OBJS=../libpubnub/pubnub.o ../libpubnub/crypto.o ../libpubnub/pubnub-sync.o
+OBJS=pubnub.o pubnub-sync.o
+
+all: libpubnub-cpp.1.dylib libpubnub-cpp.pc
+ifndef INCDIR
+        $(error INCDIR is undefined; have you run make in the project root?)
+endif
+libpubnub-cpp.1.dylib: $(OBJS)
+	clang++  $(LDFLAGS) -o $@ $^ $(C_OBJS) $(LIBS)
+
+libpubnub-cpp.pc: libpubnub-cpp.pc.in
+	sed -e 's#@LIBDIR@#$(LIBDIR)#g; s#@INCDIR@#$(INCDIR)#g' $^ >$@
+
+clean:
+	rm -f *.o libpubnub-cpp.1.dylib libpubnub-cpp.pc
+
+install:
+ifndef INCDIR
+        $(error INCDIR is undefined; have you run make in the project root?)
+endif
+	$(INSTALL) $(INSTALL_FLAGS) -m 0644 pubnub.hpp $(DESTDIR)$(INCDIR)/pubnub.hpp
+	$(INSTALL) $(INSTALL_FLAGS) -m 0644 pubnub-sync.hpp $(DESTDIR)$(INCDIR)/pubnub-sync.hpp
+	$(INSTALL) $(INSTALL_FLAGS) -m 0755 libpubnub-cpp.1.dylib $(DESTDIR)$(LIBDIR)/libpubnub-cpp.1.dylib
+	ln -s -f libpubnub-cpp.1.dylib $(DESTDIR)$(LIBDIR)/libpubnub-cpp.dylib
+	$(INSTALL) $(INSTALL_FLAGS) -m 0644 libpubnub-cpp.pc $(DESTDIR)$(LIBDIR)/pkgconfig/libpubnub-cpp.pc
+
+-include ../Makefile.lib
