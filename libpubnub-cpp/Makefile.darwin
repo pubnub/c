@@ -1,4 +1,4 @@
-
+CC=clang++ -stdlib=libstdc++
 CUSTOM_CXXFLAGS=-Wall -O3
 SOFLAGS=-fPIC
 PREFIX=/opt/local
@@ -21,7 +21,7 @@ ifndef INCDIR
         $(error INCDIR is undefined; have you run make in the project root?)
 endif
 libpubnub-cpp.1.dylib: $(OBJS)
-	clang++  $(LDFLAGS) -o $@ $^ $(C_OBJS) $(LIBS)
+	$(CC) $(LDFLAGS) -o $@ $^ $(C_OBJS) $(LIBS)
 
 libpubnub-cpp.pc: libpubnub-cpp.pc.in
 	sed -e 's#@LIBDIR@#$(LIBDIR)#g; s#@INCDIR@#$(INCDIR)#g' $^ >$@
