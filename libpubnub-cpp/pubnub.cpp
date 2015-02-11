@@ -2,7 +2,7 @@
 #include <string>
 #include <vector>
 
-#include <json.h>
+#include <json/json.h>
 
 #include "pubnub.hpp"
 #include "pubnub.h"

@@ -1,7 +1,7 @@
 #ifndef PUBNUB__PubNub_priv_h
 #define PUBNUB__PubNub_priv_h
 
-#include <printbuf.h>
+#include <json/printbuf.h>
 #include <curl/curl.h>
 
 #include "pubnub.h"

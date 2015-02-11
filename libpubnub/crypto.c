@@ -2,7 +2,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include <json.h>
+#include <json/json.h>
 
 #include <openssl/evp.h>
 #include <openssl/bio.h>
