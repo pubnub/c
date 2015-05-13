@@ -206,6 +206,19 @@ PubNub::history(const std::string &channel, int limit,
 	}
 }
 
+PUBNUB_API
+void
+PubNub::history_ex(const std::string &channel, int limit, bool include_token,
+		long timeout, PubNub_history_cb cb, void *cb_data)
+{
+	if (cb) {
+		history_pair *cb_info = new history_pair(std::pair<PubNub_history_cb, PubNub *>(cb, this), cb_data);
+		pubnub_history_ex(p, channel.c_str(), limit, timeout, pubnub_cpp_history_cb, cb_info, include_token);
+	} else {
+		pubnub_history_ex(p, channel.c_str(), limit, timeout, NULL, NULL, include_token);
+	}
+}
+
 
 /** PubNub API here_now */
 

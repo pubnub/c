@@ -1358,6 +1358,35 @@ pubnub_history(struct pubnub *p, const char *channel, int limit,
 	pubnub_http_request(p, pubnub_history_http_cb, cb_http_data, true, true);
 }
 
+void
+pubnub_history_ex(struct pubnub *p, const char *channel, int limit,
+		long timeout, pubnub_history_cb cb, void *cb_data, int include_token)
+{
+	if (!cb) cb = p->cb->history;
+
+	if (p->method) {
+		if (cb)
+			cb(p, pubnub_error_report(p, PNR_OCCUPIED, NULL, "history", false),
+				NULL, p->cb_data, cb_data);
+		return;
+	}
+	p->method = "history";
+
+	if (timeout < 0)
+		timeout = 5;
+
+	struct pubnub_history_http_cb *cb_http_data = (struct pubnub_history_http_cb *)malloc(sizeof(*cb_http_data));
+	cb_http_data->cb = cb;
+	cb_http_data->call_data = cb_data;
+
+	char strlimit[64]; snprintf(strlimit, sizeof(strlimit), "%d", limit);
+	const char *urlelems[] = { "history", p->subscribe_key, channel, "0", strlimit, NULL };
+	char *str_include_token = include_token ? "true" : "false";
+	const char *qparamelems[] = { "include_token", str_include_token, NULL };
+	pubnub_http_setup(p, urlelems, qparamelems, timeout);
+	pubnub_http_request(p, pubnub_history_http_cb, cb_http_data, true, true);
+}
+
 
 PUBNUB_API
 void

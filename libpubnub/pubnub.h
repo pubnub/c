@@ -404,6 +404,12 @@ void pubnub_unsubscribe(struct pubnub *p, const char *channels[], int channels_n
 void pubnub_history(struct pubnub *p, const char *channel, int limit,
 		long timeout, pubnub_history_cb cb, void *cb_data);
 
+/* Like pubnug_history_ex, but with additional options.
+ * @include_token - the value of the `include_token` URL parameter to send
+ */
+void pubnub_history_ex(struct pubnub *p, const char *channel, int limit,
+		long timeout, pubnub_history_cb cb, void *cb_data, int include_token);
+
 /* List the clients subscribed to @channel. The response will be
  * a JSON object with attributes "occupancy" (number of clients)
  * and "uuids" (array of client UUIDs). */

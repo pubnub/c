@@ -189,6 +189,11 @@ public:
 	void history(const std::string &channel, int limit,
 			long timeout = -1, PubNub_history_cb cb = NULL, void *cb_data = NULL);
 
+	/* Like history(), but with the added options.
+	 * @include_token the value of the `include_token` URL parameter to send */
+	void history_ex(const std::string &channel, int limit, bool include_token,
+			long timeout = -1, PubNub_history_cb cb = NULL, void *cb_data = NULL);
+
 	/* List the clients subscribed to @channel. The response will be
 	 * a JSON object with attributes "occupancy" (number of clients)
 	 * and "uuids" (array of client UUIDs). */
