@@ -404,14 +404,15 @@ void pubnub_unsubscribe(struct pubnub *p, const char *channels[], int channels_n
 void pubnub_history(struct pubnub *p, const char *channel, int limit,
 		long timeout, pubnub_history_cb cb, void *cb_data);
 
-/* Like pubnub_history_ex, but with additional options.
- * This will use the v2 Pubnub API, so message format is a little different
+/* Similar to pubnub_history(), with additional options and a richer
+ * response format.
+ * This will use the v2 Pubnub API, so format is a little different
  * than what is returned from pubnub_history() which uses v1.
  *
- * If you set @include_token to 0 (false), it will be an array of
- * three elements - the first will be the message array (one element
- * per message), and the second and third will be numbers, the timestamp
- * of the first and of the last message.
+ * If you set @include_token to 0 (false), response will be an array
+ * of three elements - the first will be the message array (one
+ * element per message), and the second and third will be numbers, the
+ * timestamps of the first and of the last message.
  *
  * If you set @include_token to anything != 0 (true), it will also be
  * an array of three elements like for false, but this time the first
