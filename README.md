@@ -1,3 +1,5 @@
+# Please direct all Support Questions and Concerns to Support@PubNub.com
+
 PubNub C Library
 ================
 
@@ -142,3 +144,4 @@ Using our own C client, we've built example chat plugins for Adium, Pidgin, and 
 
 Check them out in our examples directory at https://github.com/pubnub/c/blob/master/examples/libpurple !
 
+# Please direct all Support Questions and Concerns to Support@PubNub.com
