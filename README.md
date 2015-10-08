@@ -1,4 +1,7 @@
-# Please direct all Support Questions and Concerns to Support@PubNub.com
+# This C Repo is deprecated -- Please try our Latest and Greatest C-Core!
+This C Repo is being deprecated.  Please try our new C-Core repo available at https://github.com/pubnub/c-core
+
+### Please direct all Support Questions and Concerns to Support@PubNub.com
 
 PubNub C Library
 ================
