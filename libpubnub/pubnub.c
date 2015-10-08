@@ -4,8 +4,8 @@
 #include <string.h>
 #include <time.h>
 
-#include <json.h>
-#include <printbuf.h>
+#include <json/json.h>
+#include <json/printbuf.h>
 
 #include <curl/curl.h>
 #include <openssl/ssl.h>

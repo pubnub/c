@@ -11,7 +11,7 @@ typedef int bool;
 
 #include <time.h>
 
-#include <json.h>
+#include <json/json.h>
 
 #ifdef __cplusplus
 extern "C" {
