@@ -1,0 +1,202 @@
+/* Copyright (c) PubNub Inc. */
+/* See LICENSE in the root directory of this source tree. */
+
+#include "app_context_internal.h"
+
+#if !PUBNUB_ENABLE_APP_CONTEXT
+#error "app_context_wire_channel.c requires PUBNUB_ENABLE_APP_CONTEXT=ON"
+#endif
+
+#include "core/protocol_common/pn_buf_serialize.h"
+#include "core/protocol_common/pn_url_encode.h"
+#include "core/runtime/middleware/middleware_internal.h"
+
+#include <string.h>
+
+pubnub_res_t pn_channel_metadata_build_path_get_all(pubnub_http_request_t* request,
+                                                    const char* subscribe_key)
+{
+    if (NULL == request || NULL == subscribe_key) {
+        return PUBNUB_ERR_INVALID_ARGUMENT;
+    }
+
+    pubnub_string_view_t sub_key_view;
+    pubnub_res_t         rc = pn_request_scratch_encode(
+        request, subscribe_key, &sub_key_view, PN_ENCODE_NONE);
+    if (PUBNUB_OK != rc) {
+        return rc;
+    }
+
+    unsigned int n              = 0;
+    request->path_segments[n++] = (pubnub_string_view_t){"v2", 2};
+    request->path_segments[n++] = (pubnub_string_view_t){"objects", 7};
+    request->path_segments[n++] = sub_key_view;
+    request->path_segments[n++] = (pubnub_string_view_t){"channels", 8};
+    request->path_segment_count = n;
+
+    return PUBNUB_OK;
+}
+
+pubnub_res_t pn_channel_metadata_build_path_single(pubnub_http_request_t* request,
+                                                   pubnub_allocator_provider_t* allocator,
+                                                   const char* subscribe_key,
+                                                   const char* channel,
+                                                   char**      out_encoded)
+{
+    if (NULL == request || NULL == allocator || NULL == subscribe_key
+        || NULL == channel || NULL == out_encoded) {
+        return PUBNUB_ERR_INVALID_ARGUMENT;
+    }
+
+    *out_encoded = NULL;
+
+    pubnub_string_view_t sub_key_view;
+    pubnub_res_t         rc = pn_request_scratch_encode(
+        request, subscribe_key, &sub_key_view, PN_ENCODE_NONE);
+    if (PUBNUB_OK != rc) {
+        return rc;
+    }
+
+    size_t channel_len     = strlen(channel);
+    char*  encoded_channel = pn_url_encode_alloc_n(
+        (const uint8_t*)channel, channel_len, allocator, PN_ENCODE_FULL);
+    if (NULL == encoded_channel) {
+        return PUBNUB_ERR_OUT_OF_MEMORY;
+    }
+
+    unsigned int n              = 0;
+    request->path_segments[n++] = (pubnub_string_view_t){"v2", 2};
+    request->path_segments[n++] = (pubnub_string_view_t){"objects", 7};
+    request->path_segments[n++] = sub_key_view;
+    request->path_segments[n++] = (pubnub_string_view_t){"channels", 8};
+    request->path_segments[n++] =
+        (pubnub_string_view_t){encoded_channel, strlen(encoded_channel)};
+    request->path_segment_count = n;
+
+    *out_encoded = encoded_channel;
+    return PUBNUB_OK;
+}
+
+pubnub_res_t
+pn_channel_metadata_build_body(pubnub_serialization_provider_t*          serial,
+                               pubnub_allocator_provider_t*              alloc,
+                               const pubnub_set_channel_metadata_opts_t* opts,
+                               pubnub_buffer_t* body_buf)
+{
+    if (NULL == serial || NULL == opts || NULL == body_buf
+        || NULL == body_buf->data || 0 == body_buf->cap) {
+        return PUBNUB_ERR_INVALID_ARGUMENT;
+    }
+    if (NULL == serial->value_create_object || NULL == serial->object_set
+        || NULL == serial->value_create_string || NULL == serial->serialize
+        || NULL == serial->value_destroy) {
+        return PUBNUB_ERR_SERIALIZATION;
+    }
+
+    pubnub_json_value_t* obj = serial->value_create_object(serial);
+    if (NULL == obj) {
+        return PUBNUB_ERR_OUT_OF_MEMORY;
+    }
+
+    pubnub_res_t rc = PUBNUB_OK;
+
+    if (NULL != opts->name) {
+        pubnub_json_value_t* val =
+            serial->value_create_string(serial, opts->name, strlen(opts->name));
+        if (NULL == val) {
+            rc = PUBNUB_ERR_OUT_OF_MEMORY;
+            goto cleanup;
+        }
+        rc = serial->object_set(serial, obj, "name", 4, val);
+        if (PUBNUB_OK != rc) {
+            serial->value_destroy(serial, val);
+            goto cleanup;
+        }
+    }
+
+    if (NULL != opts->description) {
+        pubnub_json_value_t* val = serial->value_create_string(
+            serial, opts->description, strlen(opts->description));
+        if (NULL == val) {
+            rc = PUBNUB_ERR_OUT_OF_MEMORY;
+            goto cleanup;
+        }
+        rc = serial->object_set(serial, obj, "description", 11, val);
+        if (PUBNUB_OK != rc) {
+            serial->value_destroy(serial, val);
+            goto cleanup;
+        }
+    }
+
+    if (NULL != opts->type) {
+        pubnub_json_value_t* val =
+            serial->value_create_string(serial, opts->type, strlen(opts->type));
+        if (NULL == val) {
+            rc = PUBNUB_ERR_OUT_OF_MEMORY;
+            goto cleanup;
+        }
+        rc = serial->object_set(serial, obj, "type", 4, val);
+        if (PUBNUB_OK != rc) {
+            serial->value_destroy(serial, val);
+            goto cleanup;
+        }
+    }
+
+    if (NULL != opts->status) {
+        pubnub_json_value_t* val = serial->value_create_string(
+            serial, opts->status, strlen(opts->status));
+        if (NULL == val) {
+            rc = PUBNUB_ERR_OUT_OF_MEMORY;
+            goto cleanup;
+        }
+        rc = serial->object_set(serial, obj, "status", 6, val);
+        if (PUBNUB_OK != rc) {
+            serial->value_destroy(serial, val);
+            goto cleanup;
+        }
+    }
+
+    rc = pn_app_context_set_custom_field(
+        serial, obj, opts->custom_value, opts->custom, opts->custom_len);
+    if (PUBNUB_OK != rc) {
+        goto cleanup;
+    }
+
+    rc = pn_buf_serialize_grow(alloc, serial, obj, body_buf);
+
+cleanup:
+    serial->value_destroy(serial, obj);
+    return rc;
+}
+
+pubnub_res_t pn_channel_metadata_parse(pubnub_serialization_provider_t* serial,
+                                       const pubnub_json_value_t* data_node,
+                                       pubnub_channel_metadata_t* out)
+{
+    if (NULL == out) {
+        return PUBNUB_ERR_INVALID_ARGUMENT;
+    }
+    memset(out, 0, sizeof(*out));
+
+    if (NULL == serial || NULL == data_node) {
+        return PUBNUB_ERR_INVALID_ARGUMENT;
+    }
+    if (NULL == serial->object_get || NULL == serial->value_as_string) {
+        return PUBNUB_ERR_SERIALIZATION;
+    }
+
+    pubnub_json_value_t* parent = (pubnub_json_value_t*)data_node;
+
+    pn_extract_obj_string(serial, parent, "id", 2, &out->id);
+    pn_extract_obj_string(serial, parent, "name", 4, &out->name);
+    pn_extract_obj_string(serial, parent, "description", 11, &out->description);
+    pn_extract_obj_string(serial, parent, "type", 4, &out->type);
+    pn_extract_obj_string(serial, parent, "status", 6, &out->status);
+
+    out->custom = serial->object_get(parent, "custom", 6);
+
+    pn_extract_obj_string(serial, parent, "updated", 7, &out->updated);
+    pn_extract_obj_string(serial, parent, "eTag", 4, &out->etag);
+
+    return PUBNUB_OK;
+}

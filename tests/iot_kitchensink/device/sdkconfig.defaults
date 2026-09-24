@@ -1,0 +1,59 @@
+# PubNub IoT kitchensink -- ESP-IDF default sdkconfig overrides.
+#
+# mbedTLS certificate bundle provides the CA trust store used by
+# certs_esp.c (esp_crt_bundle_attach). Without it, TLS connections
+# to PubNub fail because no CA certificates are loaded.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y
+
+# Enable dynamic TLS I/O buffer allocation.  Without this, mbedTLS pre-allocates
+# the full IN (16 KB) + OUT (4 KB) buffer for every active session at connection
+# time and holds them until the session closes.  With 6 in-flight slots this
+# pre-allocates 6 × 20 KB = 120 KB of heap just for TLS buffers, which combined
+# with the ~112 KB SDK arena pool exhausts heap and causes ssl_setup OOM.
+# With dynamic buffers, the 16 KB IN buffer is allocated only while data is
+# being received and freed immediately after; idle sessions hold < 2 KB.
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+
+# Increase task watchdog timeout to 300s. The full test suite can
+# take several minutes depending on feature selection and network.
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=300
+
+# Custom partition table — factory app partition enlarged to 2 MB for
+# the full-feature kitchensink binary (all features enabled ~1 MB binary).
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# ESP32-S3 DevKitC-1 has 8 MB QSPI flash.
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="8MB"
+
+# lwIP TCP tuning for the kitchensink test suite.
+#
+# The test suite runs ~73 tests, each opening and closing multiple TCP
+# connections (subscribe TLS + presence HTTP + publish HTTPS).  With the
+# default TIME_WAIT of 2 * TCP_MSL = 120 seconds, PCB entries accumulate
+# faster than they expire.  After ~13 tests the entire PCB pool fills
+# with TIME_WAIT entries, and new connect() calls block indefinitely —
+# all 6 in-flight slots stall simultaneously.
+#
+# Reducing TCP_MSL to 5 s (TIME_WAIT = 10 s) lets PCBs recycle within
+# one test boundary.  Raising the PCB and socket limits provides headroom
+# for the worst-case concurrent connection burst (subscribe + 3 presence
+# operations + 2 publish/REST = 6 simultaneous sockets).
+CONFIG_LWIP_TCP_MSL=5000
+CONFIG_LWIP_MAX_ACTIVE_TCP=32
+CONFIG_LWIP_MAX_SOCKETS=16
+# Raise per-connection TCP receive mbox from default 6 to handle 6 simultaneous
+# incoming SYN-ACKs without drops when all 6 in-flight slots connect at once.
+CONFIG_LWIP_TCP_RECVMBOX_SIZE=20
+# Raise the global TCPIP task input mbox for the same reason.
+CONFIG_LWIP_TCPIP_RECVMBOX_SIZE=64
+
+# Disable response decompression. The tinfl decompressor workspace (~8 KB)
+# combined with the worst-case concurrent workload (6 in-flight requests with
+# 6 TLS sessions + serialization buffers + middleware state) exhausts the
+# arena allocator's Zone B budget, causing OOM during inflate. Disabling
+# compression trades ~8-10 KB larger responses for eliminating the ~19 KB
+# decompression workspace requirement.
+CONFIG_PUBNUB_KS_ENABLE_COMPRESSION=n

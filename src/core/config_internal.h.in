@@ -1,0 +1,57 @@
+/* Copyright (c) PubNub Inc. */
+/* See LICENSE in the root directory of this source tree. */
+/* Generated from config_internal.h.in by CMake - do not edit. */
+
+/** @brief Internal compile-time constants (PN_*, not installed). */
+
+#ifndef PN_CONFIG_INTERNAL_H
+#define PN_CONFIG_INTERNAL_H
+
+#include "pubnub/config.h"
+
+/*
+ * PN_PROFILE_EMBEDDED: 1 on constrained (bare-metal / RTOS-class) targets,
+ * 0 on hosted OSes (Linux/macOS/BSD/Windows). CMake derives it from the
+ * selected build profile ("embedded") or a no-heap configuration. It drives
+ * the socket transport's stack/resource ceilings (poll fd count and poll-set
+ * storage): tight when 1, relaxed when 0. Internal-only stack-ceiling
+ * selection detail — not part of the installed public API surface.
+ */
+#define PN_PROFILE_EMBEDDED @PN_PROFILE_EMBEDDED@
+
+/** Internal queue slot count (in-flight + pending per context). */
+#define PN_TOTAL_REQUEST_SLOTS \
+    (PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS + PUBNUB_CFG_MAX_PENDING_REQUESTS)
+
+/** Protocol framing overhead estimate (bytes). */
+#define PN_HTTP_FRAMING_OVERHEAD 512
+
+/*
+ * Provider builtin selection (set by CMake).
+ * For non-CMake builds, override via -DPN_USE_BUILTIN_<FAMILY>=0 or 1.
+ */
+#ifndef PN_USE_BUILTIN_ALLOCATOR
+#define PN_USE_BUILTIN_ALLOCATOR     @PN_USE_BUILTIN_ALLOCATOR@
+#endif
+
+#ifndef PN_USE_BUILTIN_TRANSPORT
+#define PN_USE_BUILTIN_TRANSPORT     @PN_USE_BUILTIN_TRANSPORT@
+#endif
+
+#ifndef PN_USE_BUILTIN_SERIALIZATION
+#define PN_USE_BUILTIN_SERIALIZATION @PN_USE_BUILTIN_SERIALIZATION@
+#endif
+
+#ifndef PN_USE_BUILTIN_CRYPTO
+#define PN_USE_BUILTIN_CRYPTO        @PN_USE_BUILTIN_CRYPTO@
+#endif
+
+#ifndef PN_USE_BUILTIN_LOGGER
+#define PN_USE_BUILTIN_LOGGER        @PN_USE_BUILTIN_LOGGER@
+#endif
+
+#ifndef PN_USE_BUILTIN_PLATFORM
+#define PN_USE_BUILTIN_PLATFORM      @PN_USE_BUILTIN_PLATFORM@
+#endif
+
+#endif /* PN_CONFIG_INTERNAL_H */

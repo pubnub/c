@@ -1,0 +1,153 @@
+#!/bin/bash
+# Git pre-commit hook for the PubNub C SDK.
+# Install: ln -sf ../../tools/pre-commit .git/hooks/pre-commit
+#
+# Checks staged C/H files against:
+#   1. clang-format-19 (always — fast)
+#   2. clang-tidy-22 (if available and compile_commands.json exists)
+#   3. cppcheck (if available and compile_commands.json exists — slower)
+#
+# To bypass temporarily: git commit --no-verify
+
+set -euo pipefail
+
+STAGED=$(git diff --cached --name-only --diff-filter=ACM \
+    | grep -E '\.(c|h)$' \
+    | grep -v 'third_party/' \
+    | grep -v '\.h\.in$' \
+    || true)
+
+[ -z "$STAGED" ] && exit 0
+
+# --- clang-format ---
+echo "pre-commit: checking formatting..."
+echo "$STAGED" | xargs ./tools/clang-format.sh --dry-run --Werror
+echo "pre-commit: formatting OK"
+
+# --- clang-tidy (staged .c files in src/ and include/ only) ---
+STAGED_SRC=$(echo "$STAGED" | grep -E '^(src|include)/' || true)
+
+CLANG_TIDY_MAJOR=22
+
+if [ -n "$STAGED_SRC" ]; then
+    CT=""
+    if command -v "clang-tidy-${CLANG_TIDY_MAJOR}" &>/dev/null; then
+        CT="clang-tidy-${CLANG_TIDY_MAJOR}"
+    elif [ -x "/opt/homebrew/opt/llvm@${CLANG_TIDY_MAJOR}/bin/clang-tidy" ]; then
+        CT="/opt/homebrew/opt/llvm@${CLANG_TIDY_MAJOR}/bin/clang-tidy"
+    elif [ -x "/usr/local/opt/llvm@${CLANG_TIDY_MAJOR}/bin/clang-tidy" ]; then
+        CT="/usr/local/opt/llvm@${CLANG_TIDY_MAJOR}/bin/clang-tidy"
+    fi
+
+    # Always regenerate ci-lint compilation database so clang-tidy sees
+    # current source tree (new files, renamed headers, changed toggles).
+    if [ -n "$CT" ] && command -v cmake &>/dev/null; then
+        echo "pre-commit: regenerating ci-lint compile_commands.json..."
+        if ! cmake --preset ci-lint >/dev/null 2>&1; then
+            echo "pre-commit: warning: cmake --preset ci-lint failed; falling back to existing DB"
+        fi
+    fi
+
+    COMPILE_DB=""
+    if [ -f build/ci-lint/compile_commands.json ]; then
+        COMPILE_DB="build/ci-lint/compile_commands.json"
+    elif [ -f build/dev/compile_commands.json ]; then
+        COMPILE_DB="build/dev/compile_commands.json"
+    fi
+
+    if [ -n "$CT" ] && [ -n "$COMPILE_DB" ]; then
+        STAGED_C=$(echo "$STAGED_SRC" | grep -E '\.c$' || true)
+        if [ -n "$STAGED_C" ]; then
+            # Only check files present in the compile DB — files for disabled
+            # features won't have entries and would hit #error guards.
+            CHECKED_C=""
+            REPO_ROOT="$(pwd)"
+            while IFS= read -r f; do
+                if grep -q "\"${REPO_ROOT}/${f}\"" "$COMPILE_DB" 2>/dev/null; then
+                    CHECKED_C="${CHECKED_C}${REPO_ROOT}/${f}"$'\n'
+                else
+                    echo "pre-commit: skipping $f (not in compile_commands.json)"
+                fi
+            done <<< "$STAGED_C"
+            CHECKED_C=$(echo "$CHECKED_C" | sed '/^$/d')
+
+            if [ -n "$CHECKED_C" ]; then
+                echo "pre-commit: running clang-tidy..."
+                CT_EXTRA_ARGS=""
+                if [ "$(uname -s)" = "Darwin" ] && command -v xcrun &>/dev/null; then
+                    CT_EXTRA_ARGS="--extra-arg=--sysroot=$(xcrun --show-sdk-path)"
+                fi
+                # shellcheck disable=SC2086
+                CT_OUTPUT=$(echo "$CHECKED_C" | xargs "$CT" \
+                    -p "$(dirname "$COMPILE_DB")" \
+                    --warnings-as-errors='*' \
+                    -header-filter='^.*/(?!_deps/)(src|include/pubnub)/' \
+                    $CT_EXTRA_ARGS 2>&1) || {
+                    echo "$CT_OUTPUT" | grep -v "^Suppressed\|^Use -header-filter\|warnings generated"
+                    exit 1
+                }
+                echo "pre-commit: clang-tidy OK"
+            else
+                echo "pre-commit: skipping clang-tidy (no staged files in compile DB)"
+            fi
+        fi
+    else
+        if [ -z "$CT" ]; then
+            echo "pre-commit: skipping clang-tidy (clang-tidy-${CLANG_TIDY_MAJOR} not found)"
+        else
+            echo "pre-commit: skipping clang-tidy (no compile_commands.json — run cmake first)"
+        fi
+    fi
+fi
+
+# --- cppcheck (optional, staged src/ and include/ files only) ---
+if command -v cppcheck &>/dev/null && [ -n "$STAGED_SRC" ]; then
+    COMPILE_DB=""
+    if [ -f build/dev/compile_commands.json ]; then
+        COMPILE_DB="build/dev/compile_commands.json"
+    elif [ -f build/ci-lint/compile_commands.json ]; then
+        COMPILE_DB="build/ci-lint/compile_commands.json"
+    fi
+
+    if [ -n "$COMPILE_DB" ]; then
+        STAGED_C=$(echo "$STAGED_SRC" | grep -E '\.c$' || true)
+        if [ -z "$STAGED_C" ]; then
+            echo "pre-commit: skipping cppcheck (only headers staged — checked via includers)"
+        else
+            # Only check files present in the compile DB — files for
+            # disabled features won't have entries and cppcheck errors
+            # on unmatched file-filters.
+            FILE_FILTERS=""
+            REPO_ROOT="$(pwd)"
+            while IFS= read -r f; do
+                if grep -q "\"${REPO_ROOT}/${f}\"" "$COMPILE_DB" 2>/dev/null; then
+                    FILE_FILTERS="$FILE_FILTERS --file-filter=*${f}"
+                fi
+            done <<< "$STAGED_C"
+
+            if [ -z "$FILE_FILTERS" ]; then
+                echo "pre-commit: skipping cppcheck (no staged files in compile DB)"
+            else
+                echo "pre-commit: running cppcheck..."
+                # shellcheck disable=SC2086
+                cppcheck \
+                    --project="$COMPILE_DB" \
+                    $FILE_FILTERS \
+                    --error-exitcode=1 \
+                    --enable=warning,performance,portability \
+                    --suppress=missingIncludeSystem \
+                    --inline-suppr \
+                    -q
+                echo "pre-commit: cppcheck OK"
+            fi
+        fi
+    else
+        echo "pre-commit: skipping cppcheck (no compile_commands.json — run cmake first)"
+    fi
+else
+    if [ -z "$STAGED_SRC" ]; then
+        echo "pre-commit: skipping cppcheck (no src/include files staged)"
+    else
+        echo "pre-commit: skipping cppcheck (not installed)"
+    fi
+fi

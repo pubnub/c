@@ -1,0 +1,338 @@
+name: c
+schema: 1
+version: "1.0.0"
+scm: github.com/pubnub/c
+changelog:
+  - date: "2026-09-21"
+    version: 1.0.0
+    changes:
+      - type: feature
+        text: "Ground-up rewrite of the PubNub C SDK: a platform-neutral C11 core (with a C99 compatibility mode) built around six pluggable provider families — transport, serialization, crypto, allocator, logger, and platform."
+      - type: feature
+        text: "Multi-context architecture with no static or global per-context state; multiple independent client contexts operate concurrently in a single process."
+      - type: feature
+        text: "Pluggable HTTP transport providers: a libcurl-backed backend for hosted platforms and a native BSD-socket backend for constrained and embedded targets."
+      - type: feature
+        text: "Pluggable allocator providers supporting both a hosted heap-managed model and an embedded no-heap arena model with preallocated per-context/request pools sized for N concurrent in-flight requests."
+      - type: feature
+        text: "Three request-completion styles for every asynchronous operation: blocking await (sync), completion callback (async), and cooperative single-threaded polling via pubnub_process for no-thread event loops."
+      - type: feature
+        text: "Request/future handles with a three-level timeout hierarchy (global, endpoint, per-request), configurable in-flight concurrency, and explicit bounded-queue backpressure."
+      - type: feature
+        text: "Compile-time secure transport (PUBNUB_ENABLE_SECURE_TRANSPORT) with OpenSSL and mbedTLS TLS stacks selectable per transport backend; plaintext requires explicit opt-out."
+      - type: feature
+        text: "Named build profiles (full, minimal, embedded) with per-profile memory and latency budgets, plus explicit CMake feature toggles for every feature module."
+      - type: feature
+        text: "Payload crypto module with an AES-256-CBC cryptor using a random initialization vector (identifier ACRH) and a legacy cryptor, exposed through a pluggable crypto provider contract."
+      - type: feature
+        text: "Publish API: synchronous and asynchronous delivery, GET and POST transport, store flag with per-message TTL, stream-filter metadata, raw JSON value trees, optional body compression, and file-message publishing."
+      - type: feature
+        text: "Subscribe API (event-engine, PubSub v2): channels, channel groups, presence channels, wildcard subscriptions, stream-filter expressions, and timetoken cursor restore, with typed listeners for messages, signals, message actions, files, presence, and App Context objects."
+      - type: feature
+        text: "Presence API: here-now, where-now, get/set presence state, and heartbeat."
+      - type: feature
+        text: "Channel Groups API: add and remove channels, list channels in a group, and remove a group."
+      - type: feature
+        text: "Message Persistence (Storage) API: fetch messages with metadata, message actions, file, message-type and publisher-UUID includes, reverse ordering, count and start/end bounds, delete messages, and message counts."
+      - type: feature
+        text: "Message Actions API: add, get, and remove reactions on published messages."
+      - type: feature
+        text: "Signal API: lightweight signal publishing."
+      - type: feature
+        text: "Files API: send, list, download, delete, generate a file URL, and publish a file message."
+      - type: feature
+        text: "App Context (Objects v2) API: get/set/remove UUID and channel metadata, list all UUID and channel metadata, and manage memberships and channel members."
+      - type: feature
+        text: "Access Manager v3 API: grant, parse, set, and revoke resource tokens."
+      - type: feature
+        text: "Mobile Push API: add, remove, and list channels for a device and remove a device, for the APNS2 and FCM gateways."
+      - type: feature
+        text: "Time API: fetch the current PubNub network timetoken."
+features:
+  access:
+    - ACCESS-GRANT-TOKEN
+    - ACCESS-PARSE-TOKEN
+    - ACCESS-SET-TOKEN
+    - ACCESS-REVOKE-TOKEN
+    - ACCESS-TOKEN-MANAGEMENT
+  channel-groups:
+    - CHANNEL-GROUPS-ADD-CHANNELS
+    - CHANNEL-GROUPS-REMOVE-CHANNELS
+    - CHANNEL-GROUPS-REMOVE-GROUPS
+    - CHANNEL-GROUPS-LIST-CHANNELS-IN-GROUP
+  presence:
+    - PRESENCE-HERE-NOW
+    - PRESENCE-WHERE-NOW
+    - PRESENCE-GET-STATE
+    - PRESENCE-SET-STATE
+    - PRESENCE-HEARTBEAT
+  publish:
+    - PUBLISH-SYNC
+    - PUBLISH-ASYNC
+    - PUBLISH-GET
+    - PUBLISH-POST
+    - PUBLISH-STORE-FLAG
+    - PUBLISH-MESSAGE-TTL
+    - PUBLISH-WITH-METADATA
+    - PUBLISH-RAW-JSON
+    - PUBLISH-COMPRESS-MESSAGE
+    - PUBLISH-FILE-MESSAGE
+  storage:
+    - STORAGE-FETCH-MESSAGES
+    - STORAGE-DELETE-MESSAGES
+    - STORAGE-MESSAGE-COUNT
+    - STORAGE-REVERSE
+    - STORAGE-COUNT
+    - STORAGE-START-END
+    - STORAGE-INCLUDE-TIMETOKEN
+    - STORAGE-FETCH-WITH-META
+    - STORAGE-FETCH-WITH-MESSAGE-ACTIONS
+    - STORAGE-FETCH-WITH-FILE
+    - STORAGE-FETCH-WITH-INCLUDE-MESSAGE-TYPE
+    - STORAGE-FETCH-WITH-INCLUDE-UUID
+  subscribe:
+    - SUBSCRIBE-CHANNELS
+    - SUBSCRIBE-CHANNEL-GROUPS
+    - SUBSCRIBE-PRESENCE-CHANNELS
+    - SUBSCRIBE-PRESENCE-CHANNELS-GROUPS
+    - SUBSCRIBE-WILDCARD
+    - SUBSCRIBE-FILTER-EXPRESSION
+    - SUBSCRIBE-WITH-TIMETOKEN
+    - SUBSCRIBE-PUBSUB-V2
+    - SUBSCRIBE-SIGNAL-LISTENER
+    - SUBSCRIBE-MESSAGE-ACTIONS-LISTENER
+    - SUBSCRIBE-FILE-LISTENER
+    - SUBSCRIBE-OBJECTS-CHANNEL-LISTENER
+    - SUBSCRIBE-OBJECTS-UUID-LISTENER
+  unsubscribe:
+    - UNSUBSCRIBE-ALL
+  signal:
+    - SIGNAL-SEND
+  objects:
+    - OBJECTS-GET-ALL-UUID-METADATA
+    - OBJECTS-GET-UUID-METADATA
+    - OBJECTS-SET-UUID-METADATA
+    - OBJECTS-REMOVE-UUID-METADATA
+    - OBJECTS-GET-ALL-CHANNEL-METADATA
+    - OBJECTS-GET-CHANNEL-METADATA
+    - OBJECTS-SET-CHANNEL-METADATA
+    - OBJECTS-REMOVE-CHANNEL-METADATA
+    - OBJECTS-GET-MEMBERSHIPS-V2
+    - OBJECTS-SET-MEMBERSHIPS-V2
+    - OBJECTS-GET-CHANNEL-MEMBERS-V2
+    - OBJECTS-SET-CHANNEL-MEMBERS-V2
+  files:
+    - FILES-SEND-FILE
+    - FILES-LIST-FILES
+    - FILES-GET-FILE-URL
+    - FILES-DELETE-FILE
+    - FILES-DOWNLOAD-FILE
+  message-actions:
+    - MESSAGE-ACTIONS-GET
+    - MESSAGE-ACTIONS-ADD
+    - MESSAGE-ACTIONS-REMOVE
+  push:
+    - PUSH-ADD-DEVICE-TO-CHANNELS
+    - PUSH-REMOVE-DEVICE-FROM-CHANNELS
+    - PUSH-LIST-CHANNELS-FROM-DEVICE
+    - PUSH-REMOVE-DEVICE
+    - PUSH-TYPE-APNS2
+    - PUSH-TYPE-FCM
+  time:
+    - TIME-TIME
+  others:
+    - RANDOM-INITIALIZATION-VECTOR
+supported-platforms:
+  - version: PubNub POSIX C SDK
+    platforms:
+      - Modern Linux distributions (glibc-based, released within the last few years) on x86-64 and arm64 are supported. Older distributions may require minor build tweaks.
+      - macOS 12 (Monterey) or newer on Apple Silicon (arm64) and Intel (x86-64) is supported.
+      - TLS/SSL support uses OpenSSL 3.0 or newer via the libcurl transport backend. If TLS is disabled at compile time (PUBNUB_ENABLE_SECURE_TRANSPORT=OFF), OpenSSL is not required.
+  - version: PubNub Windows C SDK
+    platforms:
+      - Windows 10 or newer on x86-64, built with a recent MSVC, Clang, or MinGW toolchain.
+      - TLS/SSL support uses OpenSSL 3.0 or newer via the libcurl transport backend. If TLS is disabled at compile time, OpenSSL is not required.
+  - version: PubNub FreeRTOS SDK
+    platforms:
+      - FreeRTOS with a lwIP-compatible BSD socket layer is supported through the native socket transport backend and the embedded no-heap profile.
+      - TLS/SSL support uses mbedTLS. If TLS is disabled at compile time, mbedTLS is not required.
+  - version: PubNub ESP32 SDK
+    platforms:
+      - ESP-IDF 5.2 or newer (and Zephyr on the nRF7002 DK) is supported through the native socket transport backend and the embedded profile.
+      - TLS/SSL support uses mbedTLS. If TLS is disabled at compile time, mbedTLS is not required.
+sdks:
+  - full-name: PubNub POSIX C SDK
+    short-name: POSIX C
+    artifacts:
+      - artifact-type: api-client
+        language: C
+        tier: 1
+        tags:
+          - Server
+          - Mobile
+        source-repository: https://github.com/pubnub/c
+        documentation: https://www.pubnub.com/docs/sdks/c
+        distributions:
+          - distribution-type: source code
+            distribution-repository: GitHub release
+            package-name: c
+            location: https://github.com/pubnub/c/releases/tag/1.0.0
+            requires:
+              - name: "cJSON"
+                min-version: "1.7.15"
+                license: "MIT"
+                license-url: "https://github.com/DaveGamble/cJSON/blob/master/LICENSE"
+                location: "Shipped with SDK"
+                is-required: "Required"
+              - name: "libcurl"
+                min-version: "7.68.0"
+                license: "curl license"
+                license-url: "https://curl.se/docs/copyright.html"
+                location: "Installation required"
+                is-required: "Optional"
+              - name: "OpenSSL"
+                min-version: "3.0.0"
+                license: "Apache license 2.0"
+                license-url: "https://www.openssl.org/source/license.html"
+                location: "Installation required"
+                is-required: "Optional"
+            supported-platforms:
+              supported-operating-systems:
+                Linux:
+                  target-architecture:
+                    - x86-64
+                    - arm64
+                  minimum-os-version:
+                    - Ubuntu 20.04 LTS
+                  maximum-os-version:
+                    - Ubuntu 24.04 LTS
+                macOS:
+                  target-architecture:
+                    - arm64
+                    - x86-64
+                  minimum-os-version:
+                    - macOS 12.0
+                  maximum-os-version:
+                    - macOS 15.0
+  - full-name: PubNub Windows C SDK
+    short-name: Windows C
+    artifacts:
+      - artifact-type: api-client
+        language: C
+        tier: 2
+        tags:
+          - Server
+          - Mobile
+        source-repository: https://github.com/pubnub/c
+        documentation: https://www.pubnub.com/docs/sdks/c
+        distributions:
+          - distribution-type: source code
+            distribution-repository: GitHub release
+            package-name: c
+            location: https://github.com/pubnub/c/releases/tag/1.0.0
+            requires:
+              - name: "cJSON"
+                min-version: "1.7.15"
+                license: "MIT"
+                license-url: "https://github.com/DaveGamble/cJSON/blob/master/LICENSE"
+                location: "Shipped with SDK"
+                is-required: "Required"
+              - name: "libcurl"
+                min-version: "7.68.0"
+                license: "curl license"
+                license-url: "https://curl.se/docs/copyright.html"
+                location: "Installation required"
+                is-required: "Optional"
+              - name: "OpenSSL"
+                min-version: "3.0.0"
+                license: "Apache license 2.0"
+                license-url: "https://www.openssl.org/source/license.html"
+                location: "Installation required"
+                is-required: "Optional"
+            supported-platforms:
+              supported-operating-systems:
+                Windows:
+                  target-architecture:
+                    - x86-64
+                  minimum-os-version:
+                    - Windows 10 Pro
+                  maximum-os-version:
+                    - Windows 11 Pro
+  - full-name: PubNub FreeRTOS SDK
+    short-name: FreeRTOS
+    artifacts:
+      - artifact-type: api-client
+        language: C
+        tier: 2
+        tags:
+          - Mobile
+        source-repository: https://github.com/pubnub/c
+        documentation: https://www.pubnub.com/docs/sdks/c
+        distributions:
+          - distribution-type: source code
+            distribution-repository: GitHub release
+            package-name: c
+            location: https://github.com/pubnub/c/releases/tag/1.0.0
+            requires:
+              - name: "jsmn"
+                min-version: "1.1.0"
+                license: "MIT"
+                license-url: "https://github.com/zserge/jsmn/blob/master/LICENSE"
+                location: "Shipped with SDK"
+                is-required: "Required"
+              - name: "mbedTLS"
+                min-version: "3.0.0"
+                license: "Apache license 2.0"
+                license-url: "https://github.com/Mbed-TLS/mbedtls/blob/development/LICENSE"
+                location: "Installation required"
+                is-required: "Optional"
+            supported-platforms:
+              supported-operating-systems:
+                IoT:
+                  runtime-version:
+                    - Native
+                  target-architecture:
+                    - Cortex-M
+                  minimum-os-version:
+                    - FreeRTOS 10
+                  maximum-os-version:
+                    - FreeRTOS 10
+  - full-name: PubNub ESP32 SDK
+    short-name: ESP32
+    artifacts:
+      - artifact-type: api-client
+        language: C
+        tier: 2
+        tags:
+          - Mobile
+        source-repository: https://github.com/pubnub/c
+        documentation: https://www.pubnub.com/docs/sdks/c
+        distributions:
+          - distribution-type: source code
+            distribution-repository: GitHub release
+            package-name: c
+            location: https://github.com/pubnub/c/releases/tag/1.0.0
+            requires:
+              - name: "jsmn"
+                min-version: "1.1.0"
+                license: "MIT"
+                license-url: "https://github.com/zserge/jsmn/blob/master/LICENSE"
+                location: "Shipped with SDK"
+                is-required: "Required"
+              - name: "mbedTLS"
+                min-version: "3.0.0"
+                license: "Apache license 2.0"
+                license-url: "https://github.com/Mbed-TLS/mbedtls/blob/development/LICENSE"
+                location: "Installation required"
+                is-required: "Optional"
+            supported-platforms:
+              supported-operating-systems:
+                IoT:
+                  runtime-version:
+                    - Native
+                  target-architecture:
+                    - Xtensa
+                  minimum-os-version:
+                    - ESP-IDF 5.2
+                  maximum-os-version:
+                    - ESP-IDF 5.2

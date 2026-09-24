@@ -1,0 +1,10 @@
+{
+  "name": "pubnub-ks-companion",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Companion for PubNub C SDK IoT kitchensink tests",
+  "dependencies": {
+    "pubnub": "^13.0.1"
+  }
+}

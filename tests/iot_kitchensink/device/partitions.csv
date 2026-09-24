@@ -1,0 +1,7 @@
+# PubNub IoT kitchensink partition table.
+# 8 MB flash (ESP32-S3 DevKitC-1). Factory app enlarged to 2 MB to
+# accommodate the full-feature kitchensink binary.
+# Name,   Type, SubType, Offset,   Size,     Flags
+nvs,      data, nvs,     0x9000,   0x6000,
+phy_init, data, phy,     0xf000,   0x1000,
+factory,  app,  factory, 0x10000,  0x200000,

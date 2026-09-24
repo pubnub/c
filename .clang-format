@@ -1,0 +1,117 @@
+---
+# PubNub C SDK — clang-format 18+
+#
+# Stroustrup braces, 4-space indent, 80-col limit.
+# Targets both hosted (Linux/macOS/Windows) and embedded (ESP32/FreeRTOS)
+# code in C99/C11.
+
+BasedOnStyle: LLVM
+
+ColumnLimit: 80
+IndentWidth: 4
+ContinuationIndentWidth: 4
+TabWidth: 4
+UseTab: Never
+LineEnding: LF
+
+# --- Alignment ------------------------------------------------------------
+# Consecutive alignment keeps struct fields, macro tables, and parallel
+# assignments readable — the primary use case in this config-heavy SDK.
+AlignAfterOpenBracket: Align
+AlignArrayOfStructures: Left
+AlignConsecutiveAssignments: Consecutive
+AlignConsecutiveBitFields: Consecutive
+AlignConsecutiveDeclarations: Consecutive
+AlignConsecutiveMacros: Consecutive
+AlignEscapedNewlines: Left
+AlignOperands: AlignAfterOperator
+AlignTrailingComments:
+  Kind: Always
+  OverEmptyLines: 1
+
+# --- Pointers & qualifiers ------------------------------------------------
+DerivePointerAlignment: false
+PointerAlignment: Left
+QualifierAlignment: Left
+
+# --- Braces ----------------------------------------------------------------
+# Stroustrup: function opening brace on its own line, everything else K&R.
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterControlStatement: Never
+  AfterExternBlock: false
+  AfterEnum: false
+  AfterFunction: true
+  AfterStruct: false
+  AfterUnion: false
+  BeforeElse: false
+  BeforeLambdaBody: false
+  IndentBraces: false
+  SplitEmptyFunction: true
+  SplitEmptyRecord: true
+
+# --- Braces enforcement ----------------------------------------------------
+# Auto-insert braces around single-statement bodies (MISRA/CERT aligned).
+InsertBraces: true
+RemoveSemicolon: true
+
+# --- Functions, parameters, arguments --------------------------------------
+BinPackArguments: false
+BinPackParameters: false
+AllowAllParametersOfDeclarationOnNextLine: false
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortBlocksOnASingleLine: Empty
+
+# --- Control flow -----------------------------------------------------------
+# Never collapse control flow to single line — clarity over brevity,
+# especially for code review and embedded safety audits.
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: true
+IndentCaseLabels: false
+IndentCaseBlocks: false
+
+# --- Return type & definitions ----------------------------------------------
+BreakAfterReturnType: Automatic
+SeparateDefinitionBlocks: Always
+
+# --- Operators & ternary ----------------------------------------------------
+BreakBeforeBinaryOperators: NonAssignment
+BreakBeforeTernaryOperators: true
+
+# --- Strings & comments ----------------------------------------------------
+BreakStringLiterals: true
+ReflowComments: true
+SpacesBeforeTrailingComments: 1
+
+# --- Spaces -----------------------------------------------------------------
+SpaceAfterCStyleCast: false
+SpaceBeforeAssignmentOperators: true
+SpaceBeforeParens: ControlStatements
+SpacesInParens: Never
+
+# --- Includes (don't reorder — manual grouping) ----------------------------
+SortIncludes: Never
+
+# --- Misc -------------------------------------------------------------------
+MaxEmptyLinesToKeep: 1
+IndentWrappedFunctionNames: false
+IndentPPDirectives: None
+
+# --- Penalties (prefer breaking arguments over return type or strings) ------
+PenaltyBreakAssignment: 2
+PenaltyBreakBeforeFirstCallParameter: 19
+PenaltyBreakComment: 300
+PenaltyBreakFirstLessLess: 120
+PenaltyBreakOpenParenthesis: 0
+PenaltyBreakString: 1000
+PenaltyExcessCharacter: 4
+PenaltyReturnTypeOnItsOwnLine: 100
+
+# --- Macro awareness --------------------------------------------------------
+ForEachMacros:
+  - foreach
+AttributeMacros:
+  - __attribute__
+StatementAttributeLikeMacros:
+  - __attribute__

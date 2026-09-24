@@ -1,0 +1,15 @@
+{
+  "name": "pubnub-cross-sdk-companion",
+  "version": "0.1.0",
+  "description": "Headless JS companion for PubNub C SDK cross-SDK parity tests",
+  "main": "companion.js",
+  "scripts": {
+    "test": "node companion.js --help"
+  },
+  "dependencies": {
+    "pubnub": "^8.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

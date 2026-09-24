@@ -1,0 +1,115 @@
+---
+# PubNub C SDK — clang-tidy configuration (LLVM 18+).
+#
+# CERT C + bugprone + portability focused.
+# Tuned for a multi-platform C99/C11 codebase targeting both hosted
+# (Linux, macOS, Windows) and embedded (ESP32, FreeRTOS, bare-metal)
+# where platform-specific headers may be absent on the build host.
+
+Checks: >
+  -*,
+
+  cert-*,
+
+  bugprone-*,
+  -bugprone-easily-swappable-parameters,
+
+  clang-analyzer-*,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
+
+  concurrency-*,
+
+  misc-*,
+  -misc-unused-parameters,
+  -misc-include-cleaner,
+
+  performance-*,
+
+  portability-*,
+
+  readability-braces-around-statements,
+  readability-else-after-return,
+  readability-function-size,
+  readability-identifier-naming,
+  readability-implicit-bool-conversion,
+  readability-inconsistent-declaration-parameter-name,
+  readability-isolate-declaration,
+  readability-misleading-indentation,
+  readability-non-const-parameter,
+  readability-redundant-control-flow,
+  readability-redundant-preprocessor,
+  readability-simplify-boolean-expr,
+  readability-uppercase-literal-suffix,
+
+WarningsAsErrors: >
+  cert-*,
+  bugprone-sizeof-expression,
+  bugprone-use-after-move,
+  bugprone-unsafe-functions,
+  bugprone-suspicious-include,
+  bugprone-switch-missing-default-case,
+  concurrency-*,
+  misc-no-recursion
+
+# Only analyse project headers — skip system / platform-specific headers
+# that may not exist on the current build host.
+HeaderFilterRegex: '.*/include/pubnub/.*\.h$|.*/src/.*\.(h|c)$'
+
+CheckOptions:
+  # cert-dcl16-c: accepted literal suffixes.
+  - key:   cert-dcl16-c.NewSuffixes
+    value: 'L;LL;LU;LLU'
+
+  # bugprone-signal-handler: restrict to POSIX-async-signal-safe.
+  - key:   bugprone-signal-handler.AsyncSafeFunctionSet
+    value: POSIX
+
+  # readability-braces-around-statements: require braces always.
+  - key:   readability-braces-around-statements.ShortStatementLines
+    value: '0'
+
+  # readability-implicit-bool-conversion: allow idiomatic C patterns
+  # (pointer truthiness and integer zero-checks).
+  - key:   readability-implicit-bool-conversion.AllowPointerConditions
+    value: true
+  - key:   readability-implicit-bool-conversion.AllowIntegerConditions
+    value: true
+
+  # readability-function-size: flag excessively large functions.
+  # Generous thresholds — this is a warning, not a gate.
+  - key:   readability-function-size.LineThreshold
+    value: '200'
+  - key:   readability-function-size.StatementThreshold
+    value: '100'
+  - key:   readability-function-size.BranchThreshold
+    value: '30'
+  - key:   readability-function-size.ParameterThreshold
+    value: '8'
+  - key:   readability-function-size.NestingThreshold
+    value: '5'
+
+  # readability-identifier-naming: enforce project naming conventions.
+  # Public API: pubnub_ / PUBNUB_, internal: pn_ / PN_.
+  - key:   readability-identifier-naming.GlobalFunctionCase
+    value: lower_case
+  - key:   readability-identifier-naming.MacroDefinitionCase
+    value: UPPER_CASE
+  - key:   readability-identifier-naming.EnumConstantCase
+    value: UPPER_CASE
+  - key:   readability-identifier-naming.LocalVariableCase
+    value: lower_case
+  - key:   readability-identifier-naming.ParameterCase
+    value: lower_case
+  - key:   readability-identifier-naming.StructCase
+    value: lower_case
+  - key:   readability-identifier-naming.TypedefCase
+    value: lower_case
+  - key:   readability-identifier-naming.TypedefSuffix
+    value: '_t'
+
+  # misc-no-recursion: critical for embedded targets with limited stack.
+  # Enabled in bugprone-*; listed here to confirm it's a hard error.
+
+  # readability-uppercase-literal-suffix: prefer 1UL over 1ul (CERT aligned).
+  - key:   readability-uppercase-literal-suffix.NewSuffixes
+    value: 'L;LL;U;UL;ULL;LU;LLU'

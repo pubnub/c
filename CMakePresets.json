@@ -1,0 +1,139 @@
+{
+    "version": 6,
+    "cmakeMinimumRequired": {
+        "major": 3,
+        "minor": 16,
+        "patch": 0
+    },
+    "configurePresets": [
+        {
+            "name": "default",
+            "hidden": true,
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+            }
+        },
+        {
+            "name": "full",
+            "displayName": "Full (all features, hosted providers)",
+            "description": "All features enabled with hosted platform providers (posix, openssl, cjson, stdlib).",
+            "inherits": "default",
+            "cacheVariables": {
+                "PUBNUB_PROFILE": "full",
+                "PUBNUB_BUILD_TESTS": "ON",
+                "PUBNUB_BUILD_EXAMPLES": "ON"
+            }
+        },
+        {
+            "name": "minimal",
+            "displayName": "Minimal (core features only)",
+            "description": "Core features (publish, subscribe) with minimal providers.",
+            "inherits": "default",
+            "cacheVariables": {
+                "PUBNUB_PROFILE": "minimal",
+                "PUBNUB_BUILD_TESTS": "ON"
+            }
+        },
+        {
+            "name": "embedded",
+            "displayName": "Embedded (core, arena allocator, no crypto)",
+            "description": "Core features (publish, subscribe) with arena allocator, no crypto, FreeRTOS platform. No-heap friendly. Set CMAKE_TOOLCHAIN_FILE for your target board.",
+            "inherits": "default",
+            "cacheVariables": {
+                "PUBNUB_PROFILE": "embedded",
+                "PUBNUB_BUILD_TESTS": "OFF",
+                "CMAKE_BUILD_TYPE": "MinSizeRel"
+            }
+        },
+        {
+            "name": "dev",
+            "displayName": "Development (real backends, sanitizers)",
+            "description": "Real provider backends for development/testing with ASan/UBSan enabled. Mirrors the provider stack of ci-lint so tests that rely on real JSON parse / HTTP transport / POSIX time can run end-to-end.",
+            "inherits": "default",
+            "cacheVariables": {
+                "PUBNUB_ENABLE_PUBLISH": "ON",
+                "PUBNUB_ENABLE_SUBSCRIBE": "ON",
+                "PUBNUB_ENABLE_PRESENCE": "ON",
+                "PUBNUB_ENABLE_HISTORY": "ON",
+                "PUBNUB_ENABLE_FILES": "ON",
+                "PUBNUB_ENABLE_CRYPTO": "ON",
+                "PUBNUB_ENABLE_PAM": "ON",
+                "PUBNUB_ENABLE_APP_CONTEXT": "ON",
+                "PUBNUB_ENABLE_MESSAGE_ACTIONS": "ON",
+                "PUBNUB_ENABLE_CHANNEL_GROUPS": "ON",
+                "PUBNUB_ENABLE_SIGNAL": "ON",
+                "PUBNUB_ENABLE_TIME": "ON",
+                "PUBNUB_ENABLE_PUSH_NOTIFICATIONS": "ON",
+                "PUBNUB_BUILD_TESTS": "ON",
+                "PUBNUB_PROVIDER_ALLOCATOR": "stdlib",
+                "PUBNUB_PROVIDER_PLATFORM": "posix",
+                "PUBNUB_PROVIDER_SERIALIZATION": "cjson",
+                "PUBNUB_PROVIDER_TRANSPORT": "curl",
+                "PUBNUB_PROVIDER_CRYPTO": "openssl",
+                "PUBNUB_PROVIDER_LOGGER": "none",
+                "PUBNUB_ENABLE_COMPRESSION": "ON",
+                "PUBNUB_ENABLE_FILESYSTEM": "ON",
+                "PUBNUB_ENABLE_IPV6": "ON",
+                "PUBNUB_ENABLE_PROXY": "ON",
+                "PUBNUB_ENABLE_REQUEST_COMPRESSION": "ON",
+                "PUBNUB_ENABLE_RETRY": "ON",
+                "PUBNUB_ENABLE_SECURE_TRANSPORT": "ON",
+                "PUBNUB_ENABLE_ASAN": "ON",
+                "PUBNUB_ENABLE_UBSAN": "ON",
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        },
+        {
+            "name": "ci-lint",
+            "displayName": "CI Lint (real backends for already-landed providers)",
+            "description": "Generates compile_commands.json covering every real provider backend that has landed in the stack so far.  clang-tidy / cppcheck runs against this preset see the same include paths and compile flags the real build would see. Update this preset when a new provider backend lands.",
+            "inherits": "default",
+            "cacheVariables": {
+                "PUBNUB_PROFILE": "full",
+                "PUBNUB_BUILD_TESTS": "ON",
+                "PUBNUB_PROVIDER_TRANSPORT": "socket",
+                "CMAKE_BUILD_TYPE": "Debug"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "full",
+            "configurePreset": "full"
+        },
+        {
+            "name": "minimal",
+            "configurePreset": "minimal"
+        },
+        {
+            "name": "embedded",
+            "configurePreset": "embedded"
+        },
+        {
+            "name": "dev",
+            "configurePreset": "dev"
+        },
+        {
+            "name": "ci-lint",
+            "configurePreset": "ci-lint"
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "full",
+            "configurePreset": "full",
+            "output": { "outputOnFailure": true }
+        },
+        {
+            "name": "minimal",
+            "configurePreset": "minimal",
+            "output": { "outputOnFailure": true }
+        },
+        {
+            "name": "dev",
+            "configurePreset": "dev",
+            "output": { "outputOnFailure": true }
+        }
+    ]
+}

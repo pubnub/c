@@ -1,0 +1,31 @@
+menu "PubNub Arena Echo Example"
+
+config PUBNUB_EXAMPLE_HAS_RGB_LED
+    bool "Board has WS2812B RGB LED on GPIO 48"
+    default y if IDF_TARGET_ESP32S3
+    default n
+    help
+        Enable when the board has a WS2812B-compatible addressable RGB LED
+        wired to GPIO 48.  The ESP32-S3-DevKitC-1 board has one; other
+        boards may not.  When disabled all LED code is compiled out.
+
+config PUBNUB_EXAMPLE_WIFI_SSID
+    string "WiFi SSID"
+    default "ssid"
+    help
+        SSID (network name) for the example to connect to.
+
+config PUBNUB_EXAMPLE_WIFI_PASSWORD
+    string "WiFi Password"
+    default "pwd"
+    help
+        WiFi password (WPA or WPA2) for the example to connect to.
+
+config PUBNUB_EXAMPLE_TASK_STACK_SIZE
+    int "PubNub task stack size (bytes)"
+    default 12288
+    help
+        Stack for the PubNub cooperative loop task. 12KB minimum
+        recommended when TLS is enabled (mbedTLS handshake uses 5-6KB alone).
+
+endmenu
