@@ -1,0 +1,145 @@
+# Copyright (c) PubNub Inc.
+# See LICENSE in the root directory of this source tree.
+
+menu "PubNub C SDK"
+
+config PUBNUB
+    bool "PubNub C SDK"
+    default y
+    help
+      Enable the PubNub C SDK. Disabling this removes all PubNub symbols
+      from the build.
+
+if PUBNUB
+
+config PUBNUB_CFG_ARENA_POOL_SIZE
+    int "Arena pool size (bytes)"
+    default 40960
+    help
+      Size of the arena memory pool in bytes.
+
+      When PUBNUB_ARENA_POOL_OWNER=user (default for embedded profile), this
+      is the recommended size for the buffer you allocate and pass to
+      pubnub_arena_allocator_init(). The SDK does not allocate any memory of
+      this size itself.
+
+      When PUBNUB_ARENA_POOL_OWNER=sdk (hosted profiles), this controls the
+      size of the static BSS pool inside the SDK.
+
+      The SDK build system computes a minimum required size from your feature
+      set and concurrency limits. Check the CMake configure output for the
+      '[PubNub] Arena:' line, or use PUBNUB_ARENA_RECOMMENDED_POOL_SIZE from
+      allocator_arena.h. Reduce only if you see that value at configure time.
+
+config PUBNUB_ENABLE_SECURE_TRANSPORT
+    bool "Enable TLS secure transport"
+    default y
+    help
+      Enables TLS for all PubNub connections (HTTPS/WSS).
+
+      For CA certificate loading on NCS targets, also enable:
+        CONFIG_MBEDTLS_BUILTIN_ROOT_CERTIFICATES=y
+      This embeds the Mozilla root CA bundle in firmware flash and is
+      selected automatically by the PubNub echo app prj.conf. Without it,
+      TLS connections fail certificate verification at runtime and a
+      compile-time notice is emitted.
+
+      Requires: CONFIG_ENTROPY_HAS_DRIVER=y (for RNG seeding).
+
+config PUBNUB_ZEPHYR_CA_CERT_PATH
+    string "Filesystem path to PEM CA bundle (Zephyr only)"
+    default ""
+    depends on FILE_SYSTEM
+    help
+      When non-empty and CONFIG_FILE_SYSTEM=y, the SDK loads CA certificates
+      from this path instead of the embedded bundle. This allows OTA-updating
+      the CA bundle without reflashing firmware.
+
+      Example: "/lfs/pubnub_ca.pem" for a LittleFS mount at /lfs.
+
+      Leave empty to use the SDK's built-in bundle (Starfield Root CA G2,
+      Starfield Services Root CA G2, Amazon Root CA 1, Amazon Root CA 3).
+      The built-in bundle covers all current PubNub/AWS endpoint chains.
+
+config PUBNUB_ENABLE_CUSTOM_DNS
+    bool "Enable built-in UDP DNS resolver"
+    default n
+    help
+      Use the SDK's built-in UDP DNS resolver instead of the Zephyr native
+      resolver (dns_resolve_name). When enabled, the SDK sends its own DNS
+      queries over a UDP socket, discovers system DNS servers via DHCP, and
+      appends 8.8.8.8 / 1.1.1.1 as public fallbacks.
+
+      When disabled (default), DNS resolution delegates to Zephyr's
+      networking stack (dns_resolve_name), which is the recommended mode
+      for most deployments.
+
+      Enable when you need custom DNS servers via pubnub_set_dns_servers()
+      or want to bypass the system resolver.
+
+config PUBNUB_ENABLE_SUBSCRIBE
+    bool "Enable Subscribe feature"
+    default y
+    help
+      Enable real-time message subscription (long-poll).
+
+config PUBNUB_ENABLE_PRESENCE
+    bool "Enable Presence feature"
+    default n
+    depends on PUBNUB_ENABLE_SUBSCRIBE
+    help
+      Enable presence heartbeats and here-now queries.
+
+config PUBNUB_ENABLE_PUBLISH
+    bool "Enable Publish feature"
+    default y
+    help
+      Enable message publishing.
+
+config PUBNUB_ENABLE_SIGNAL
+    bool "Enable Signal feature"
+    default n
+    help
+      Enable lightweight signal publishing (< 64 bytes).
+
+config PUBNUB_ENABLE_HISTORY
+    bool "Enable History / Message Persistence feature"
+    default n
+    help
+      Enable fetch_messages and message_counts endpoints.
+
+config PUBNUB_ENABLE_MESSAGE_ACTIONS
+    bool "Enable Message Actions feature"
+    default n
+    help
+      Enable reactions and metadata on published messages.
+
+config PUBNUB_ENABLE_CHANNEL_GROUPS
+    bool "Enable Channel Groups feature"
+    default n
+    help
+      Enable channel group management (add/remove/list channels).
+
+config PUBNUB_ENABLE_OBJECTS
+    bool "Enable App Context (Objects) feature"
+    default n
+    help
+      Enable UUID and channel metadata management.
+
+config PUBNUB_ENABLE_FILES
+    bool "Enable File Share feature"
+    default n
+    help
+      Enable file upload and download.
+
+config PUBNUB_ENABLE_CRYPTO
+    bool "Enable Crypto provider"
+    default n
+    help
+      Enable AES-256-CBC payload encryption/decryption.
+      Requires mbedTLS (CONFIG_MBEDTLS=y). On NCS this is typically
+      also enabled by CONFIG_PUBNUB_ENABLE_SECURE_TRANSPORT=y.
+
+endif # PUBNUB
+
+endmenu

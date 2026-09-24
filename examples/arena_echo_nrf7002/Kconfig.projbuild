@@ -1,0 +1,30 @@
+# Copyright (c) PubNub Inc.
+# See LICENSE in the root directory of this source tree.
+
+menu "PubNub Arena Echo (nRF7002)"
+
+config PUBNUB_EXAMPLE_WIFI_SSID
+    string "WiFi SSID"
+    default "myssid"
+    help
+      SSID of the WiFi network to connect to.
+
+config PUBNUB_EXAMPLE_WIFI_PASSWORD
+    string "WiFi password"
+    default "mypassword"
+    help
+      Password for the WiFi network (WPA2/WPA3).
+
+config PUBNUB_EXAMPLE_PUBLISH_KEY
+    string "PubNub publish key"
+    default "demo"
+
+config PUBNUB_EXAMPLE_SUBSCRIBE_KEY
+    string "PubNub subscribe key"
+    default "demo"
+
+config PUBNUB_EXAMPLE_USER_ID
+    string "PubNub user ID"
+    default "nrf7002-echo"
+
+endmenu

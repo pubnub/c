@@ -1,0 +1,12 @@
+{
+  "name": "pubnub-cross-sdk-runner",
+  "version": "0.1.0",
+  "description": "Orchestrator for PubNub C SDK cross-SDK parity tests",
+  "main": "orchestrate.js",
+  "scripts": {
+    "test": "node orchestrate.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

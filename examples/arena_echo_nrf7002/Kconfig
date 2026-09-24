@@ -1,0 +1,37 @@
+# Copyright (c) PubNub Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+mainmenu "PubNub Arena Echo (nRF7002 DK)"
+
+source "Kconfig.zephyr"
+
+config PUBNUB_EXAMPLE_WIFI_SSID
+	string "WiFi network SSID"
+	default "YOUR_SSID_HERE"
+
+config PUBNUB_EXAMPLE_WIFI_PASSWORD
+	string "WiFi network password"
+	default ""
+
+config PUBNUB_EXAMPLE_PUBLISH_KEY
+	string "PubNub publish key"
+	default "demo"
+
+config PUBNUB_EXAMPLE_SUBSCRIBE_KEY
+	string "PubNub subscribe key"
+	default "demo"
+
+config PUBNUB_EXAMPLE_USER_ID
+	string "PubNub user ID"
+	default "nrf7002-echo"
+
+config APP_SKIP_POSIX_TIMERS
+	bool "Skip Zephyr POSIX timer compilation (picolibc workaround)"
+	default n
+	select TC_PROVIDES_POSIX_TIMERS
+	help
+	  Workaround for NCS v3.3.x: hostap selects POSIX_TIMERS but never
+	  calls timer_create(). Zephyr's lib/posix/options/timer.c fails to
+	  compile with picolibc because struct sigevent lacks the
+	  sigev_notify_function extension field. Selecting
+	  TC_PROVIDES_POSIX_TIMERS tells the build to skip timer.c.

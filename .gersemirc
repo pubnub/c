@@ -1,0 +1,7 @@
+line_length: 100
+indent: 4
+unsafe: false
+definitions:
+  - cmake
+  - src/providers/CMakeLists.txt
+  - tests/CMakeLists.txt

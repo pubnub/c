@@ -1,0 +1,7 @@
+# PubNub arena_echo_esp32 — ESP32-S3 default sdkconfig overrides.
+#
+# ESP-IDF certificate bundle provides the CA trust store used by
+# certs_esp.c (esp_crt_bundle_attach). Without it, TLS connections
+# to PubNub fail because no CA certificates are loaded.
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE_DEFAULT_FULL=y

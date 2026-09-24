@@ -1,0 +1,43 @@
+name: Release binary size report
+
+on:
+  release:
+    types: [ published ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version tag (e.g. 1.0.0)
+        required: true
+
+jobs:
+  size-report:
+    name: "Release binary size report"
+    runs-on:
+      group: organization/Default
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build binutils
+
+      - name: Build embedded (release size)
+        run: |
+          cmake -B build/rel-size -G Ninja \
+            -DPUBNUB_PROFILE=embedded \
+            -DPUBNUB_PROVIDER_PLATFORM=posix \
+            -DPUBNUB_PROVIDER_ALLOCATOR=stdlib \
+            -DPUBNUB_BUILD_TESTS=OFF \
+            -DCMAKE_BUILD_TYPE=MinSizeRel
+          cmake --build build/rel-size
+
+      - name: Report sizes
+        run: |
+          echo "## Release binary size" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          size build/rel-size/src/core/*.a >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          size build/rel-size/src/core/*.a

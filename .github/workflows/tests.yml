@@ -1,0 +1,776 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+    branches: [ phoenix ]
+  workflow_dispatch:
+  # schedule:           # Uncomment to enable nightly runs
+  #   - cron: '0 2 * * *'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit-tests:
+    name: "${{ matrix.os }} / ${{ matrix.preset }} / ${{ matrix.compiler }}"
+    runs-on:
+      group: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ organization/Default, macos-gh ]
+        preset: [ dev, full, minimal ]
+        compiler: [ gcc, clang ]
+        exclude:
+          # macOS: skip gcc (Apple ships clang only; gcc is an alias)
+          - os: macos-gh
+            compiler: gcc
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build \
+            libcurl4-openssl-dev libssl-dev libmbedtls-dev
+
+      - name: Set compiler
+        run: |
+          if [ "${{ matrix.compiler }}" = "gcc" ]; then
+            echo "CC=gcc" >> "$GITHUB_ENV"
+            echo "CXX=g++" >> "$GITHUB_ENV"
+          else
+            echo "CC=clang" >> "$GITHUB_ENV"
+            echo "CXX=clang++" >> "$GITHUB_ENV"
+          fi
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Test
+        run: ctest --preset ${{ matrix.preset }}
+
+  no-error-strings:
+    name: "Embedded build / no error strings"
+    runs-on:
+      group: organization/Default
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build binutils
+
+      - name: Configure embedded profile
+        run: |
+          cmake -B build/embedded -G Ninja \
+            -DPUBNUB_PROFILE=embedded \
+            -DPUBNUB_PROVIDER_PLATFORM=posix \
+            -DPUBNUB_PROVIDER_ALLOCATOR=stdlib \
+            -DPUBNUB_BUILD_TESTS=OFF
+
+      - name: Build
+        run: cmake --build build/embedded
+
+      - name: Verify error strings absent
+        run: ./tests/scripts/check_no_error_strings.sh build/embedded/libpubnub.a
+
+  socket-transport:
+    name: "Socket transport / ${{ matrix.os }} / ${{ matrix.compiler }}"
+    runs-on:
+      group: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ organization/Default, macos-gh ]
+        compiler: [ gcc, clang ]
+        exclude:
+          - os: macos-gh
+            compiler: gcc
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build \
+            libssl-dev libmbedtls-dev
+
+      - name: Set compiler
+        run: |
+          if [ "${{ matrix.compiler }}" = "gcc" ]; then
+            echo "CC=gcc" >> "$GITHUB_ENV"
+            echo "CXX=g++" >> "$GITHUB_ENV"
+          else
+            echo "CC=clang" >> "$GITHUB_ENV"
+            echo "CXX=clang++" >> "$GITHUB_ENV"
+          fi
+
+      - name: Configure (socket transport + OpenSSL TLS + proxy)
+        run: |
+          cmake -B build/socket -G Ninja \
+            -DPUBNUB_PROFILE=full \
+            -DPUBNUB_PROVIDER_TRANSPORT=socket \
+            -DPUBNUB_SOCKET_TLS_BACKEND=openssl \
+            -DPUBNUB_ENABLE_PROXY=ON \
+            -DPUBNUB_BUILD_TESTS=ON \
+            -DPUBNUB_TEST_NETWORK=ON \
+            -DPUBNUB_ENABLE_ASAN=ON \
+            -DPUBNUB_ENABLE_UBSAN=ON \
+            -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build build/socket
+
+      - name: Test (ASan + UBSan)
+        run: ctest --test-dir build/socket --output-on-failure
+
+  socket-transport-mbedtls:
+    name: "Socket transport / mbedTLS backend"
+    runs-on:
+      group: organization/Default
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build libmbedtls-dev
+
+      - name: Configure (socket transport + mbedTLS)
+        run: |
+          cmake -B build/socket-mbedtls -G Ninja \
+            -DPUBNUB_PROFILE=full \
+            -DPUBNUB_PROVIDER_TRANSPORT=socket \
+            -DPUBNUB_SOCKET_TLS_BACKEND=mbedtls \
+            -DPUBNUB_ENABLE_PROXY=ON \
+            -DPUBNUB_BUILD_TESTS=ON \
+            -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build build/socket-mbedtls
+
+      - name: Test
+        run: ctest --test-dir build/socket-mbedtls --output-on-failure
+
+  socket-transport-custom-dns:
+    name: "Socket transport / custom DNS resolver"
+    runs-on:
+      group: organization/Default
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build \
+            libssl-dev libmbedtls-dev
+
+      - name: Configure (socket transport + custom DNS + network tests)
+        run: |
+          cmake -B build/socket-custom-dns -G Ninja \
+            -DPUBNUB_PROFILE=full \
+            -DPUBNUB_PROVIDER_TRANSPORT=socket \
+            -DPUBNUB_SOCKET_TLS_BACKEND=openssl \
+            -DPUBNUB_ENABLE_CUSTOM_DNS=ON \
+            -DPUBNUB_BUILD_TESTS=ON \
+            -DPUBNUB_TEST_NETWORK=ON \
+            -DPUBNUB_ENABLE_ASAN=ON \
+            -DPUBNUB_ENABLE_UBSAN=ON \
+            -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build build/socket-custom-dns
+
+      - name: Test (ASan + UBSan)
+        run: ctest --test-dir build/socket-custom-dns --output-on-failure
+
+  socket-transport-no-ipv6:
+    name: "Socket transport / IPv6 disabled"
+    runs-on:
+      group: organization/Default
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build \
+            libssl-dev libmbedtls-dev
+
+      - name: Configure (socket transport + IPv6 OFF)
+        run: |
+          cmake -B build/socket-no-ipv6 -G Ninja \
+            -DPUBNUB_PROFILE=full \
+            -DPUBNUB_PROVIDER_TRANSPORT=socket \
+            -DPUBNUB_SOCKET_TLS_BACKEND=openssl \
+            -DPUBNUB_ENABLE_IPV6=OFF \
+            -DPUBNUB_BUILD_TESTS=ON \
+            -DPUBNUB_TEST_NETWORK=ON \
+            -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build build/socket-no-ipv6
+
+      - name: Test
+        run: ctest --test-dir build/socket-no-ipv6 --output-on-failure
+
+  custom-dependency-paths:
+    name: "Custom OpenSSL / mbedTLS dependency paths"
+    runs-on:
+      group: organization/Default
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build libssl-dev libcurl4-openssl-dev
+
+      - name: Create non-standard OpenSSL layout
+        run: |
+          # Simulate Unreal Engine-style directory layout where libraries
+          # live in a platform-specific subdirectory under the root.
+          mkdir -p /tmp/custom-openssl/include
+          mkdir -p /tmp/custom-openssl/lib/Linux/x86_64/Release
+          ln -s /usr/include/openssl /tmp/custom-openssl/include/openssl
+          for lib in libcrypto.so libssl.so libcrypto.a libssl.a; do
+            src="/usr/lib/x86_64-linux-gnu/$lib"
+            [ -e "$src" ] && ln -s "$src" /tmp/custom-openssl/lib/Linux/x86_64/Release/
+          done
+
+      - name: "Verify: OPENSSL_ROOT_DIR + PUBNUB_OPENSSL_LIB_DIR"
+        run: |
+          cmake -B build/ossl-custom -G Ninja \
+            -DPUBNUB_PROFILE=minimal \
+            -DPUBNUB_PROVIDER_TRANSPORT=socket \
+            -DPUBNUB_SOCKET_TLS_BACKEND=openssl \
+            -DOPENSSL_ROOT_DIR=/tmp/custom-openssl \
+            -DPUBNUB_OPENSSL_LIB_DIR=lib/Linux/x86_64/Release \
+            -DCMAKE_BUILD_TYPE=Release 2>&1 | tee /tmp/ossl-custom.log
+          grep -q '\[PubNub\] OpenSSL.*custom-openssl' /tmp/ossl-custom.log
+          cmake --build build/ossl-custom --target pubnub
+
+      - name: "Verify: explicit OPENSSL_CRYPTO_LIBRARY + OPENSSL_SSL_LIBRARY"
+        run: |
+          cmake -B build/ossl-explicit -G Ninja \
+            -DPUBNUB_PROFILE=minimal \
+            -DPUBNUB_PROVIDER_TRANSPORT=socket \
+            -DPUBNUB_SOCKET_TLS_BACKEND=openssl \
+            -DOPENSSL_CRYPTO_LIBRARY=/usr/lib/x86_64-linux-gnu/libcrypto.so \
+            -DOPENSSL_SSL_LIBRARY=/usr/lib/x86_64-linux-gnu/libssl.so \
+            -DCMAKE_BUILD_TYPE=Release 2>&1 | tee /tmp/ossl-explicit.log
+          grep -q '\[PubNub\] OpenSSL' /tmp/ossl-explicit.log
+          cmake --build build/ossl-explicit --target pubnub
+
+      - name: "Verify: mbedTLS FetchContent fallback (no system package)"
+        run: |
+          cmake -B build/mbedtls-fetch -G Ninja \
+            -DPUBNUB_PROFILE=minimal \
+            -DPUBNUB_PROVIDER_CRYPTO=mbedtls \
+            -DPUBNUB_PROVIDER_TRANSPORT=socket \
+            -DPUBNUB_SOCKET_TLS_BACKEND=mbedtls \
+            -DCMAKE_BUILD_TYPE=Release 2>&1 | tee /tmp/mbedtls-fetch.log
+          grep -q '\[PubNub\] System mbedTLS not found -- fetching' /tmp/mbedtls-fetch.log
+          cmake --build build/mbedtls-fetch --target pubnub
+
+  windows-socket:
+    name: "Windows / socket transport + proxy"
+    runs-on:
+      group: windows-gh
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Configure
+        run: |
+          cmake -B build/win-socket `
+            -DPUBNUB_PROFILE=full `
+            -DPUBNUB_PROVIDER_TRANSPORT=socket `
+            -DPUBNUB_PROVIDER_PLATFORM=windows `
+            -DPUBNUB_SOCKET_TLS_BACKEND=openssl `
+            -DPUBNUB_ENABLE_PROXY=ON `
+            -DPUBNUB_BUILD_TESTS=ON `
+            -DPUBNUB_TEST_NETWORK=ON `
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build/win-socket --config Release
+
+      - name: Test
+        run: ctest --test-dir build/win-socket -C Release --output-on-failure --timeout 60
+
+  windows-curl:
+    name: "Windows / curl unit tests"
+    runs-on:
+      group: windows-gh
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Configure
+        run: |
+          cmake -B build/win-curl `
+            -DPUBNUB_PROFILE=full `
+            -DPUBNUB_PROVIDER_TRANSPORT=curl `
+            -DPUBNUB_PROVIDER_PLATFORM=windows `
+            -DPUBNUB_BUILD_TESTS=ON `
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build/win-curl --config Release
+
+      - name: Test
+        run: ctest --test-dir build/win-curl -C Release --output-on-failure --timeout 60
+
+  res-str-disabled:
+    name: "Dev preset / PUBNUB_CFG_RES_STR=OFF"
+    runs-on:
+      group: organization/Default
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build \
+            libcurl4-openssl-dev libssl-dev
+
+      - name: Configure (RES_STR=OFF)
+        run: cmake --preset dev -DPUBNUB_CFG_RES_STR=OFF -B build/dev-no-resstr
+
+      - name: Build
+        run: cmake --build build/dev-no-resstr
+
+      - name: Test
+        run: ctest --test-dir build/dev-no-resstr --output-on-failure
+
+  sanitizers:
+    name: "ASan + UBSan / curl / ${{ matrix.os }}"
+    runs-on:
+      group: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ organization/Default, macos-gh ]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build \
+            libcurl4-openssl-dev libssl-dev
+
+      - name: Set OpenSSL path (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          OSSL="$(brew --prefix openssl@3 2>/dev/null || echo /usr/local/opt/openssl@3)"
+          echo "OPENSSL_ROOT_DIR=$OSSL" >> $GITHUB_ENV
+          # cmake/ninja are pre-installed; Apple Clang supports ASan/UBSan natively
+
+      - name: Configure (ASan + UBSan)
+        run: |
+          cmake --preset dev \
+            -DPUBNUB_ENABLE_ASAN=ON \
+            -DPUBNUB_ENABLE_UBSAN=ON \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -B build/asan
+      - name: Build
+        run: cmake --build build/asan -j$(nproc 2>/dev/null || sysctl -n hw.logicalcpu)
+      - name: Test
+        run: ctest --test-dir build/asan --output-on-failure
+
+  binary-size:
+    name: "Binary size / embedded / ${{ matrix.os }}"
+    runs-on:
+      group: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ organization/Default, macos-gh ]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build binutils
+
+      # cmake/ninja are pre-installed on GitHub Actions macOS runners
+
+      - name: Configure embedded profile
+        run: |
+          cmake -B build/embedded-size -G Ninja \
+            -DPUBNUB_PROFILE=embedded \
+            -DPUBNUB_PROVIDER_PLATFORM=posix \
+            -DPUBNUB_PROVIDER_ALLOCATOR=stdlib \
+            -DPUBNUB_BUILD_TESTS=OFF \
+            -DCMAKE_BUILD_TYPE=MinSizeRel
+      - name: Build
+        run: cmake --build build/embedded-size
+      - name: Report binary size
+        run: |
+          echo "## Binary size report" >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+          size build/embedded-size/libpubnub.a
+          size build/embedded-size/libpubnub.a >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+  tsan:
+    name: "TSan / curl / ${{ matrix.os }}"
+    runs-on:
+      group: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ organization/Default, macos-gh ]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build \
+            libcurl4-openssl-dev libssl-dev
+
+      - name: Set OpenSSL path (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          OSSL="$(brew --prefix openssl@3 2>/dev/null || echo /usr/local/opt/openssl@3)"
+          echo "OPENSSL_ROOT_DIR=$OSSL" >> $GITHUB_ENV
+          # cmake/ninja pre-installed; Apple Clang supports TSan natively
+
+      - name: Configure (TSan)
+        run: |
+          cmake --preset dev \
+            -DPUBNUB_CFG_THREAD_SAFETY=ON \
+            -DPUBNUB_ENABLE_TSAN=ON \
+            -DPUBNUB_ENABLE_ASAN=OFF \
+            -DPUBNUB_ENABLE_UBSAN=OFF \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -B build/tsan
+      - name: Build
+        run: cmake --build build/tsan -j$(nproc 2>/dev/null || sysctl -n hw.logicalcpu)
+      - name: Test
+        run: ctest --test-dir build/tsan --output-on-failure
+
+  valgrind:
+    name: "Valgrind / curl / Linux"
+    # macOS excluded: Valgrind does not support macOS ARM (Apple Silicon)
+    runs-on:
+      group: organization/Default
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build \
+            libcurl4-openssl-dev libssl-dev valgrind
+      - name: Configure
+        run: |
+          cmake --preset dev \
+            -DPUBNUB_ENABLE_ASAN=OFF \
+            -DPUBNUB_ENABLE_UBSAN=OFF \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -B build/valgrind
+      - name: Build
+        run: cmake --build build/valgrind -j$(nproc)
+      - name: Test (Valgrind)
+        run: |
+          VFLAGS="--error-exitcode=1 --leak-check=full --show-reachable=no"
+          find build/valgrind/tests -type f -executable -name 'test_*' | sort | \
+            while read -r bin; do
+              echo "=== $bin ==="
+              valgrind $VFLAGS "$bin" || exit 1
+            done
+
+  integration-tests:
+    name: "Integration tests / ${{ matrix.os }}"
+    runs-on:
+      group: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ organization/Default, macos-gh ]
+    env:
+      PUBNUB_PUBLISH_KEY: ${{ secrets.SDK_PUB_KEY }}
+      PUBNUB_SUBSCRIBE_KEY: ${{ secrets.SDK_SUB_KEY }}
+      PAM_PUBLISH_KEY: ${{ secrets.SDK_PAM_PUB_KEY }}
+      PAM_SUBSCRIBE_KEY: ${{ secrets.SDK_PAM_SUB_KEY }}
+      PAM_SECRET_KEY: ${{ secrets.SDK_PAM_SEC_KEY }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build \
+            libcurl4-openssl-dev libssl-dev
+
+      - name: Set OpenSSL path (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          OSSL="$(brew --prefix openssl@3 2>/dev/null || echo /usr/local/opt/openssl@3)"
+          echo "OPENSSL_ROOT_DIR=$OSSL" >> $GITHUB_ENV
+          # cmake/ninja pre-installed; curl uses macOS system framework
+
+      - name: Configure
+        run: |
+          cmake -B build/integration -G Ninja \
+            -DPUBNUB_PROFILE=full \
+            -DPUBNUB_PROVIDER_TRANSPORT=curl \
+            -DPUBNUB_BUILD_TESTS=ON \
+            -DPUBNUB_BUILD_INTEGRATION_TESTS=ON \
+            -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build/integration
+      - name: Run integration tests
+        run: |
+          ctest --test-dir build/integration -L integration \
+            --output-on-failure --timeout 300 --parallel 2
+
+  integration-tests-socket:
+    name: "Integration tests / socket / ${{ matrix.os }}"
+    runs-on:
+      group: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ organization/Default, macos-gh ]
+    env:
+      PUBNUB_PUBLISH_KEY: ${{ secrets.SDK_PUB_KEY }}
+      PUBNUB_SUBSCRIBE_KEY: ${{ secrets.SDK_SUB_KEY }}
+      PAM_PUBLISH_KEY: ${{ secrets.SDK_PAM_PUB_KEY }}
+      PAM_SUBSCRIBE_KEY: ${{ secrets.SDK_PAM_SUB_KEY }}
+      PAM_SECRET_KEY: ${{ secrets.SDK_PAM_SEC_KEY }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build \
+            libssl-dev
+
+      - name: Set OpenSSL path (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          OSSL="$(brew --prefix openssl@3 2>/dev/null || echo /usr/local/opt/openssl@3)"
+          echo "OPENSSL_ROOT_DIR=$OSSL" >> $GITHUB_ENV
+
+      - name: Configure
+        run: |
+          cmake -B build/socket-integ -G Ninja \
+            -DPUBNUB_PROFILE=full \
+            -DPUBNUB_PROVIDER_TRANSPORT=socket \
+            -DPUBNUB_SOCKET_TLS_BACKEND=openssl \
+            -DPUBNUB_BUILD_TESTS=ON \
+            -DPUBNUB_BUILD_INTEGRATION_TESTS=ON \
+            -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build/socket-integ
+      - name: Run integration tests
+        run: |
+          ctest --test-dir build/socket-integ -L integration \
+            --output-on-failure --timeout 300 --parallel 2
+
+  windows-integration:
+    name: "Integration tests / Windows / ${{ matrix.transport }}"
+    runs-on:
+      group: windows-gh
+    strategy:
+      fail-fast: false
+      matrix:
+        transport: [ curl, socket ]
+        include:
+          - transport: socket
+            extra_flags: >-
+              -DPUBNUB_SOCKET_TLS_BACKEND=openssl
+    env:
+      PUBNUB_PUBLISH_KEY: ${{ secrets.SDK_PUB_KEY }}
+      PUBNUB_SUBSCRIBE_KEY: ${{ secrets.SDK_SUB_KEY }}
+      PAM_PUBLISH_KEY: ${{ secrets.SDK_PAM_PUB_KEY }}
+      PAM_SUBSCRIBE_KEY: ${{ secrets.SDK_PAM_SUB_KEY }}
+      PAM_SECRET_KEY: ${{ secrets.SDK_PAM_SEC_KEY }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Configure
+        run: |
+          cmake -B build/win-integ `
+            -DPUBNUB_PROFILE=full `
+            -DPUBNUB_PROVIDER_TRANSPORT=${{ matrix.transport }} `
+            -DPUBNUB_PROVIDER_PLATFORM=windows `
+            -DPUBNUB_BUILD_TESTS=ON `
+            -DPUBNUB_BUILD_INTEGRATION_TESTS=ON `
+            -DCMAKE_BUILD_TYPE=Release `
+            ${{ matrix.extra_flags }}
+
+      - name: Build
+        run: cmake --build build/win-integ --config Release
+
+      - name: Run integration tests
+        run: ctest --test-dir build/win-integ -C Release -L integration --output-on-failure --timeout 300
+
+  fuzz:
+    # libFuzzer requires LLVM Clang; Apple Clang does not include the fuzzer
+    # runtime, so fuzz targets are only built and run on Linux.
+    name: "Fuzz (short campaign) / Linux"
+    runs-on:
+      group: organization/Default
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build \
+            libcurl4-openssl-dev libssl-dev clang
+
+      - name: Configure (fuzz)
+        run: |
+          cmake -B build/fuzz -G Ninja \
+            -DPUBNUB_PROFILE=full \
+            -DPUBNUB_BUILD_TESTS=OFF \
+            -DPUBNUB_BUILD_FUZZ_TESTS=ON \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER=clang
+        env:
+          CC: clang
+      - name: Build fuzz targets
+        run: |
+          # Build without naming targets: if PUBNUB_HAS_FUZZER is false (e.g.
+          # Apple Clang without libFuzzer runtime) the CMakeLists returns early
+          # and nothing is built — this step still exits 0 ("no work to do").
+          cmake --build build/fuzz \
+            -j$(nproc 2>/dev/null || sysctl -n hw.logicalcpu)
+      - name: Run short fuzz campaigns (60 seconds each)
+        run: |
+          for target in fuzz_service_error fuzz_serialization fuzz_url_encode \
+                        fuzz_publish_response fuzz_base64 fuzz_cbor_decode \
+                        fuzz_http_parse; do
+            bin="./build/fuzz/$target"
+            if [ ! -x "$bin" ]; then
+              echo "=== $target: skipped (libFuzzer not supported on this platform) ==="
+              continue
+            fi
+            echo "=== Fuzzing $target (60s) ==="
+            "$bin" -max_total_time=60 2>&1 | tail -5
+          done
+
+  cross-sdk:
+    name: "Cross-SDK parity / Linux"
+    if: github.event_name == 'workflow_dispatch'
+    runs-on:
+      group: organization/Default
+    env:
+      PUBNUB_PUBLISH_KEY: ${{ secrets.SDK_PUB_KEY }}
+      PUBNUB_SUBSCRIBE_KEY: ${{ secrets.SDK_SUB_KEY }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build \
+            libcurl4-openssl-dev libssl-dev nodejs npm
+      - name: Install JS companion deps
+        run: npm --prefix tests/cross_sdk/js_companion ci
+      - name: Install orchestrator deps
+        run: npm --prefix tests/cross_sdk/runner ci
+      - name: Configure
+        run: |
+          cmake -B build/cross-sdk -G Ninja \
+            -DPUBNUB_PROFILE=full \
+            -DPUBNUB_PROVIDER_TRANSPORT=curl \
+            -DPUBNUB_BUILD_TESTS=OFF \
+            -DCMAKE_BUILD_TYPE=Release
+      - name: Build C runner
+        run: cmake --build build/cross-sdk --target pubnub_cross_sdk_runner -j$(nproc)
+      - name: Run cross-SDK parity tests
+        run: |
+          node tests/cross_sdk/runner/orchestrate.js \
+            build/cross-sdk/tests/cross_sdk/c_runner/pubnub_cross_sdk_runner \
+            tests/cross_sdk/js_companion/companion.js \
+            --timeout 120
+        timeout-minutes: 5
+
+  # Aggregation gate: single required status check target. Depends on every
+  # job that runs unconditionally on push/PR. The on-demand cross-sdk job
+  # (workflow_dispatch only) is intentionally excluded — depending on it would
+  # skip this gate on normal runs.
+  all-tests:
+    name: Tests
+    needs:
+      - unit-tests
+      - no-error-strings
+      - socket-transport
+      - socket-transport-mbedtls
+      - socket-transport-custom-dns
+      - socket-transport-no-ipv6
+      - custom-dependency-paths
+      - windows-socket
+      - windows-curl
+      - res-str-disabled
+      - sanitizers
+      - binary-size
+      - tsan
+      - valgrind
+      - integration-tests
+      - integration-tests-socket
+      - windows-integration
+      - fuzz
+    runs-on:
+      group: organization/Default
+    steps:
+      - name: Tests summary
+        run: echo -e "\033[38;2;95;215;0m\033[1mAll tests successfully passed"

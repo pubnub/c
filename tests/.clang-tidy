@@ -1,0 +1,10 @@
+---
+# Test-specific overrides — inherits root config via InheritParentConfig.
+# Suppresses warnings caused by cmocka macro internals (int-to-ptr casts,
+# conditional cast expressions) that we cannot fix without patching the library.
+InheritParentConfig: true
+
+Checks: >
+  -performance-no-int-to-ptr,
+  -bugprone-casting-through-void,
+  -clang-analyzer-core.NullDereference,

@@ -1,0 +1,211 @@
+name: Validations
+
+on:
+  push:
+  pull_request:
+    branches: [ phoenix ]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pubnub-yml:
+    name: "Validate .pubnub.yml"
+    runs-on:
+      group: organization/Default
+    steps:
+      - name: Checkout project
+        uses: actions/checkout@v5
+      - name: Checkout validator action
+        uses: actions/checkout@v5
+        with:
+          repository: pubnub/client-engineering-deployment-tools
+          ref: v1
+          token: ${{ secrets.GH_TOKEN }}
+          path: .github/.release/actions
+      - name: "Run '.pubnub.yml' file validation"
+        uses: ./.github/.release/actions/actions/validators/pubnub-yml
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+      - name: Cancel workflow runs for commit on error
+        if: ${{ failure() }}
+        uses: ./.github/.release/actions/actions/utils/fast-jobs-failure
+  clang-tidy:
+    name: clang-tidy
+    runs-on:
+      group: organization/Default
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+      - name: Checkout validator action
+        uses: actions/checkout@v5
+        with:
+          repository: pubnub/client-engineering-deployment-tools
+          ref: v1
+          token: ${{ secrets.GH_TOKEN }}
+          path: .github/.release/actions
+      - name: Install LLVM 22
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+          sudo add-apt-repository -y "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-22 main"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build clang-tidy-22 clang-22 \
+            libcurl4-openssl-dev libmbedtls-dev
+      - name: Print clang-tidy version
+        run: clang-tidy-22 --version
+      - name: Configure (generate compile_commands.json)
+        env:
+          CC: clang-22
+        run: cmake --preset ci-lint
+      - name: Run clang-tidy
+        run: |
+          # Analyze only files that have entries in the compile DB so
+          # clang-tidy sees correct include paths and compile flags.
+          # Files belonging to inactive provider backends (e.g. curl
+          # transport when the DB was generated with socket transport)
+          # are excluded automatically — they would fail with spurious
+          # include-not-found errors otherwise.
+          # Analyze only production source files (src/ and include/) that have
+          # entries in the compile DB. Tests are excluded because:
+          #   - cmocka macros expand to multi-declarations (readability-isolate-declaration)
+          #   - boundary tests intentionally cast out-of-range values to enums
+          #   - mock stubs use non-const pointer parameters to match vtable signatures
+          jq -r '.[].file' build/ci-lint/compile_commands.json \
+            | grep -v '/_deps/' \
+            | grep -v '/tests/' \
+            | grep -E '\.(c)$' \
+            | sort -u \
+            | xargs clang-tidy-22 \
+                -p build/ci-lint \
+                --warnings-as-errors='*'
+      - name: Cancel workflow runs for commit on error
+        if: ${{ failure() }}
+        uses: ./.github/.release/actions/actions/utils/fast-jobs-failure
+
+  cppcheck:
+    name: cppcheck
+    runs-on:
+      group: organization/Default
+    steps:
+      - uses: actions/checkout@v5
+      - name: Checkout validator action
+        uses: actions/checkout@v5
+        with:
+          repository: pubnub/client-engineering-deployment-tools
+          ref: v1
+          token: ${{ secrets.GH_TOKEN }}
+          path: .github/.release/actions
+      - name: Install cppcheck 2.21
+        env:
+          CPPCHECK_VERSION: "2.21.0"
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake libcurl4-openssl-dev
+          wget -qO- "https://github.com/cppcheck-opensource/cppcheck/archive/refs/tags/${CPPCHECK_VERSION}.tar.gz" | tar xz
+          cmake -S "cppcheck-${CPPCHECK_VERSION}" -B cppcheck-build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DHAVE_RULES=OFF \
+            -DBUILD_TESTS=OFF \
+            -DBUILD_GUI=OFF
+          cmake --build cppcheck-build -j "$(nproc)"
+          sudo cmake --install cppcheck-build
+      - name: Print cppcheck version
+        run: cppcheck --version
+      - name: Configure (generate compile_commands.json)
+        run: cmake --preset ci-lint
+      - name: Run cppcheck
+        run: |
+          jq '[.[] | select(.file | (contains("/_deps/") or contains("/third_party/") or contains("/tests/")) | not)]' \
+            build/ci-lint/compile_commands.json > /tmp/compile_commands_filtered.json
+          FILE_COUNT=$(jq length /tmp/compile_commands_filtered.json)
+          echo "cppcheck: analyzing $FILE_COUNT source files"
+          if [ "$FILE_COUNT" -eq 0 ]; then
+            echo "::error::No source files found for cppcheck — filter may be wrong"
+            exit 1
+          fi
+          cppcheck \
+            --project=/tmp/compile_commands_filtered.json \
+            --error-exitcode=1 \
+            --enable=warning,performance,portability \
+            --suppress=missingIncludeSystem \
+            --inline-suppr
+      - name: Cancel workflow runs for commit on error
+        if: ${{ failure() }}
+        uses: ./.github/.release/actions/actions/utils/fast-jobs-failure
+
+  clang-format:
+    name: clang-format
+    runs-on:
+      group: organization/Default
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+      - name: Checkout validator action
+        uses: actions/checkout@v5
+        with:
+          repository: pubnub/client-engineering-deployment-tools
+          ref: v1
+          token: ${{ secrets.GH_TOKEN }}
+          path: .github/.release/actions
+      - name: Install clang-format
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+          sudo add-apt-repository -y "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-19 main"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang-format-19
+      - name: Check formatting
+        run: |
+          find include/ src/ tests/ \
+            -type f \( -name '*.c' -o -name '*.h' \) \
+            -not -path '*/build/*' \
+            -not -path '*/_deps/*' \
+            -not -name '*.h.in' \
+            | xargs clang-format-19 --dry-run --Werror
+      - name: Cancel workflow runs for commit on error
+        if: ${{ failure() }}
+        uses: ./.github/.release/actions/actions/utils/fast-jobs-failure
+
+  gersemi:
+    name: gersemi
+    runs-on:
+      group: organization/Default
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+      - name: Checkout validator action
+        uses: actions/checkout@v5
+        with:
+          repository: pubnub/client-engineering-deployment-tools
+          ref: v1
+          token: ${{ secrets.GH_TOKEN }}
+          path: .github/.release/actions
+      - name: Install gersemi
+        run: pip install gersemi==0.27.4
+      - name: Check CMake formatting
+        run: |
+          find . \( -name 'CMakeLists.txt' -o -name '*.cmake' \) \
+            -not -path '*/build/*' \
+            -not -path '*/_deps/*' \
+            | xargs gersemi --check
+      - name: Cancel workflow runs for commit on error
+        if: ${{ failure() }}
+        uses: ./.github/.release/actions/actions/utils/fast-jobs-failure
+
+  # Aggregation gate: single required status check target for code validation.
+  all-validations:
+    name: Validations
+    needs:
+      - pubnub-yml
+      - clang-tidy
+      - cppcheck
+      - clang-format
+      - gersemi
+    runs-on:
+      group: organization/Default
+    steps:
+      - name: Validations summary
+        run: echo -e "\033[38;2;95;215;0m\033[1mAll validations passed"

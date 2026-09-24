@@ -1,0 +1,145 @@
+menu "PubNub Kitchensink Configuration"
+
+menu "WiFi"
+
+config PUBNUB_KS_WIFI_SSID
+    string "WiFi SSID"
+    default ""
+    help
+        SSID (network name) for the device to connect to.
+        Must be set before building.
+
+config PUBNUB_KS_WIFI_PASSWORD
+    string "WiFi Password"
+    default ""
+    help
+        WiFi password (WPA2) for the device to connect to.
+        Must be set before building.
+
+endmenu
+
+menu "PubNub Keys"
+
+config PUBNUB_KS_SUB_KEY
+    string "Subscribe Key"
+    default ""
+    help
+        PubNub subscribe key. Must be set before building.
+
+config PUBNUB_KS_PUB_KEY
+    string "Publish Key"
+    default ""
+    help
+        PubNub publish key. Must be set before building.
+
+config PUBNUB_KS_CIPHER_KEY
+    string "Cipher Key (optional)"
+    default ""
+    help
+        AES cipher key for crypto module tests.
+        Leave empty to skip crypto encryption tests.
+
+config PUBNUB_KS_USER_ID
+    string "User ID"
+    default "esp32-ks-device"
+    help
+        PubNub user ID for this device.
+
+endmenu
+
+menu "Features"
+
+config PUBNUB_KS_ENABLE_PRESENCE
+    bool "Presence"
+    default y
+    help
+        Enable presence tests (here_now, where_now, heartbeat).
+
+config PUBNUB_KS_ENABLE_HISTORY
+    bool "History (Message Persistence)"
+    default y
+    help
+        Enable history / message persistence tests.
+
+config PUBNUB_KS_ENABLE_MESSAGE_ACTIONS
+    bool "Message Actions"
+    default y
+    help
+        Enable message action add/get/remove tests.
+
+config PUBNUB_KS_ENABLE_SIGNAL
+    bool "Signal"
+    default y
+    help
+        Enable signal send/receive tests.
+
+config PUBNUB_KS_ENABLE_CHANNEL_GROUPS
+    bool "Channel Groups"
+    default y
+    help
+        Enable channel group management tests.
+
+config PUBNUB_KS_ENABLE_APP_CONTEXT
+    bool "App Context (Objects v2)"
+    default y
+    help
+        Enable App Context (users, channels, memberships) tests.
+
+config PUBNUB_KS_ENABLE_CRYPTO
+    bool "Crypto"
+    default y
+    help
+        Enable crypto module encrypt/decrypt tests.
+
+config PUBNUB_KS_ENABLE_FILES
+    bool "Files (S3 upload/download)"
+    default y
+    help
+        Enable file upload/download tests (3-phase S3 operation).
+        Disable for a lighter "core" build variant.
+
+config PUBNUB_KS_ENABLE_COMPRESSION
+    bool "Response Compression"
+    default y
+    help
+        Enable compressed response handling tests.
+
+config PUBNUB_KS_ENABLE_PAM
+    bool "PAM / Access Manager"
+    default n
+    help
+        PAM requires a secret key which must NEVER be in device
+        firmware. This option exists only to produce a clear
+        FATAL_ERROR if accidentally enabled. Do not enable.
+
+endmenu
+
+menu "Test Behavior"
+
+config PUBNUB_KS_TASK_STACK_SIZE
+    int "Task stack size (bytes)"
+    default 16384
+    range 8192 65536
+    help
+        Stack for the kitchensink FreeRTOS task. 16KB recommended
+        when TLS + crypto are both enabled (mbedTLS handshake
+        alone uses 5-6KB).
+
+config PUBNUB_KS_TEST_TIMEOUT_MS
+    int "Per-test timeout (ms)"
+    default 15000
+    help
+        Maximum time each individual test may take before it is
+        reported as a timeout failure.
+
+config PUBNUB_KS_COMPANION_TIMEOUT_MS
+    int "Companion handshake timeout (ms)"
+    default 30000
+    help
+        How long to wait for the companion workstation to respond
+        to the handshake message. Tests that require a companion
+        are skipped when the handshake times out.
+
+endmenu
+
+endmenu

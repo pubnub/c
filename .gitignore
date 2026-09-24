@@ -1,0 +1,101 @@
+# Build outputs
+build/
+cmake-build-*/
+build_*/
+out/
+
+# Object files and libraries
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.lib
+*.exe
+
+# CMake generated (CMakeUserPresets.json is for local overrides, not committed)
+CMakeUserPresets.json
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+compile_commands.json
+CTestTestfile.cmake
+Testing/
+_deps/
+install_manifest.txt
+
+.clangd
+
+# IDE — JetBrains (CLion)
+.idea/
+*.iml
+
+# IDE — Visual Studio / MSVC
+*.sln
+*.vcxproj
+*.vcxproj.*
+*.suo
+*.user
+*.sdf
+*.opensdf
+*.opendb
+*.db
+*.ipch
+.vs/
+x64/
+x86/
+Debug/
+Release/
+MinSizeRel/
+RelWithDebInfo/
+
+# Release automation folder — the build-output patterns above (case-insensitive
+# on some filesystems) otherwise swallow it.
+!.github/workflows/release/
+
+# IDE — VS Code
+.vscode/
+
+# IDE — Xcode
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+
+# Editor temp files
+*.swp
+*.swo
+*~
+\#*\#
+.#*
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Claude Code
+.claude/
+CLAUDE.md
+
+# Node.js
+node_modules/
+
+# Cross-SDK test run artifacts
+tests/cross_sdk/runner/results.json
+
+# ESP-IDF build artifacts and local configuration
+sdkconfig
+sdkconfig.old
+.cache/
+dependencies.lock
+managed_components/
+
+# Local working notes (per-contributor scratch; never committed)
+next_steps.md
+review.md
+SUMMARY.md
+docs/

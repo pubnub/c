@@ -1,0 +1,4 @@
+name: pubnub-c-sdk
+build:
+  cmake: cmake/zephyr
+  kconfig: cmake/zephyr/Kconfig
