@@ -26,7 +26,9 @@ static int has_any_permission(const pubnub_grant_token_opts_t* opts)
 {
     return (0 != opts->channel_count || 0 != opts->group_count
             || 0 != opts->uuid_count || 0 != opts->channel_pattern_count
-            || 0 != opts->group_pattern_count || 0 != opts->uuid_pattern_count);
+            || 0 != opts->group_pattern_count || 0 != opts->uuid_pattern_count
+            || 0 != opts->channels_category_permissions
+            || 0 != opts->uuids_category_permissions);
 }
 
 /**
@@ -93,6 +95,11 @@ pubnub_future_t pubnub_grant_token(pubnub_context_t*                ctx,
     }
 
     if (!has_any_permission(opts)) {
+        return pn_failed_future(PUBNUB_ERR_INVALID_ARGUMENT);
+    }
+
+    if (0 != (opts->channels_category_permissions & ~PUBNUB_ACCESS_GET)
+        || 0 != (opts->uuids_category_permissions & ~PUBNUB_ACCESS_GET)) {
         return pn_failed_future(PUBNUB_ERR_INVALID_ARGUMENT);
     }
 

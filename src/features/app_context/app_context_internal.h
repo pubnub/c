@@ -17,16 +17,10 @@
 #include "pubnub/providers/serialization.h"
 #include "pubnub/providers/transport_types.h"
 
+#include "core/runtime/request_internal.h"
+
 #include <stddef.h>
 #include <stdint.h>
-
-/** Forward declarations. */
-struct pn_request;
-typedef struct pn_request pn_request_t;
-struct pn_pending_entry;
-typedef struct pn_pending_entry pn_pending_entry_t;
-struct pubnub_config;
-typedef struct pubnub_config pubnub_config_t;
 
 #ifdef __cplusplus
 // clang-format off
@@ -251,7 +245,8 @@ pubnub_res_t pn_app_context_add_count_param(pubnub_http_request_t* request,
  * @brief Attach a "custom" JSON field to an object node.
  *
  * Handles both the pre-built value-tree path and the raw-string path.
- * On failure, destroys @p custom_value (if non-NULL) before returning.
+ * Always consumes @p custom_value: it is attached on success and
+ * destroyed on failure.
  * No-op (returns PUBNUB_OK) when both custom inputs are NULL.
  *
  * @param serial        Serialization provider (borrowed).
@@ -267,6 +262,37 @@ pubnub_res_t pn_app_context_set_custom_field(pubnub_serialization_provider_t* se
                                              pubnub_json_value_t* custom_value,
                                              const char*          custom_raw,
                                              size_t custom_raw_len);
+
+/**
+ * @brief Destroy a caller-provided custom tree that was never attached.
+ *
+ * No-op when @p custom_value is NULL. When @p serial is NULL or lacks
+ * @c value_destroy the tree cannot be freed and is left to the caller.
+ *
+ * @param serial        Serialization provider (borrowed, may be NULL).
+ * @param custom_value  Tree to destroy (consumed, may be NULL).
+ */
+void pn_app_context_discard_custom(pubnub_serialization_provider_t* serial,
+                                   pubnub_json_value_t* custom_value);
+
+/**
+ * @brief Destroy the @c custom_value tree of every set item.
+ *
+ * Works on both @c pubnub_membership_input_t and
+ * @c pubnub_member_input_t arrays (identical layout). Use when the
+ * body builder was never reached, so no item has been consumed.
+ *
+ * @note @p items must point to a @c pubnub_membership_input_t or
+ *       @c pubnub_member_input_t array; no other type is valid.
+ *
+ * @param serial  Serialization provider (borrowed, may be NULL).
+ * @param items   Array of membership or member inputs (borrowed, may be
+ *                NULL when @p count is 0).
+ * @param count   Number of entries in @p items.
+ */
+void pn_app_context_discard_relation_customs(pubnub_serialization_provider_t* serial,
+                                             const void* items,
+                                             size_t      count);
 
 /**
  * @brief Response validator probe for App Context endpoints.
@@ -297,6 +323,23 @@ pubnub_res_t pn_app_context_response_validator(const uint8_t* body,
 pubnub_res_t pn_app_context_parse_page(pubnub_serialization_provider_t* serial,
                                        const pubnub_json_value_t*       tree,
                                        pubnub_app_context_page_t* out_page);
+
+/**
+ * @brief Set string value for object key.
+ *
+ * @param serial  Serialization provider (borrowed).
+ * @param obj     Object tree where @c value should be set for @c key (borrowed).
+ * @param key     Key under which @c value should be stored.
+ * @param key_len Length of the @c key string.
+ * @param value   String value that should be stored in the JSON tree.
+ * @return PUBNUB_OK on success, PUBNUB_ERR_OUT_OF_MEMORY when out of memory,
+ *         other error codes from the underlying serializer.
+ */
+pubnub_res_t pn_app_context_set_string_field(pubnub_serialization_provider_t* serial,
+                                             pubnub_json_value_t* obj,
+                                             const char*          key,
+                                             size_t               key_len,
+                                             const char*          value);
 
 /**
  * @brief Get the "data" array from the response envelope.
@@ -361,7 +404,8 @@ pubnub_res_t pn_uuid_metadata_build_path_single(pubnub_http_request_t* request,
  *
  * @param serial   Serialization provider (borrowed).
  * @param alloc    Allocator for buffer growth (borrowed, may be NULL).
- * @param opts     Set UUID metadata options (borrowed).
+ * @param opts     Set UUID metadata options (borrowed); its
+ *                 @c custom_value is consumed on every path.
  * @param body_buf Buffer to receive serialized body. Must have
  *                 non-NULL data and non-zero cap on entry;
  *                 len is set on success.
@@ -428,7 +472,8 @@ pubnub_res_t pn_channel_metadata_build_path_single(pubnub_http_request_t* reques
  *
  * @param serial   Serialization provider (borrowed).
  * @param alloc    Allocator for buffer growth (borrowed, may be NULL).
- * @param opts     Set channel metadata options (borrowed).
+ * @param opts     Set channel metadata options (borrowed); its
+ *                 @c custom_value is consumed on every path.
  * @param body_buf Buffer to receive serialized body. Must have
  *                 non-NULL data and non-zero cap on entry;
  *                 len is set on success.
@@ -502,6 +547,8 @@ pubnub_res_t pn_members_build_path(pubnub_http_request_t*       request,
  * items include the channel identifier and optional status/type/custom.
  * Remove items include only the channel identifier. The buffer is
  * grown via @p alloc when the initial capacity is insufficient.
+ * Only the ID of a remove entry is read; its other fields, including
+ * @c custom_value, are ignored and never freed.
  *
  * @param serial       Serialization provider (borrowed).
  * @param alloc        Allocator for buffer growth (borrowed, may be NULL).
@@ -529,6 +576,8 @@ pubnub_res_t pn_memberships_build_body(pubnub_serialization_provider_t* serial,
  * items include the UUID identifier and optional status/type/custom.
  * Remove items include only the UUID identifier. The buffer is grown
  * via @p alloc when the initial capacity is insufficient.
+ * Only the ID of a remove entry is read; its other fields, including
+ * @c custom_value, are ignored and never freed.
  *
  * @param serial       Serialization provider (borrowed).
  * @param alloc        Allocator for buffer growth (borrowed, may be NULL).

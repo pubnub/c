@@ -80,18 +80,28 @@ pubnub_future_t pubnub_set_channel_members(pubnub_context_t* ctx,
     char*                            encoded  = NULL;
     pubnub_res_t                     rc;
     size_t                           i;
+    int                              builder_owns = 0;
 
-    if (NULL == opts || NULL == opts->channel || '\0' == opts->channel[0]) {
+    if (NULL == opts) {
         return pn_failed_future(PUBNUB_ERR_INVALID_ARGUMENT);
     }
 
-    if (0 == opts->set_count && 0 == opts->remove_count) {
-        return pn_failed_future(PUBNUB_ERR_INVALID_ARGUMENT);
+    /* The SDK owns every set[i].custom_value on every return path; the
+     * body builder takes them over, so they are only discarded here
+     * while builder_owns is 0. */
+    serial = pn_context_serialization(ctx);
+
+    if (NULL == opts->channel || '\0' == opts->channel[0]
+        || (0 == opts->set_count && 0 == opts->remove_count)) {
+        goto reject;
     }
 
+    if (opts->set_count > 0 && NULL == opts->set) {
+        goto reject;
+    }
     for (i = 0; i < opts->set_count; ++i) {
         if (NULL != opts->set[i].custom && NULL != opts->set[i].custom_value) {
-            return pn_failed_future(PUBNUB_ERR_INVALID_ARGUMENT);
+            goto reject;
         }
     }
 
@@ -104,11 +114,10 @@ pubnub_future_t pubnub_set_channel_members(pubnub_context_t* ctx,
                             opts->timeout_ms,
                             &prep);
     if (PUBNUB_OK != rc) {
-        return pn_failed_future(rc);
+        goto reject_rc;
     }
     state = (pn_app_context_state_t*)prep.state;
 
-    serial = pn_context_serialization(ctx);
     if (NULL == serial || NULL == serial->serialize) {
         rc = PUBNUB_ERR_PROVIDER_MISSING;
         goto cleanup;
@@ -121,7 +130,8 @@ pubnub_future_t pubnub_set_channel_members(pubnub_context_t* ctx,
     }
     state->owned_body_buf = body_buf;
 
-    rc = pn_members_build_body(serial,
+    builder_owns = 1;
+    rc           = pn_members_build_body(serial,
                                prep.allocator,
                                opts->set,
                                opts->set_count,
@@ -165,6 +175,15 @@ pubnub_future_t pubnub_set_channel_members(pubnub_context_t* ctx,
 cleanup:
     pn_feature_prep_release(ctx, &prep);
     PN_LOG_ERROR_ENTRY(ctx, (int)rc, pubnub_res_str(rc), NULL);
+    if (0 == builder_owns) {
+        pn_app_context_discard_relation_customs(serial, opts->set, opts->set_count);
+    }
+    return pn_failed_future(rc);
+
+reject:
+    rc = PUBNUB_ERR_INVALID_ARGUMENT;
+reject_rc:
+    pn_app_context_discard_relation_customs(serial, opts->set, opts->set_count);
     return pn_failed_future(rc);
 }
 

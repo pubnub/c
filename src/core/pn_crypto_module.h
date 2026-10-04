@@ -30,7 +30,7 @@ extern "C" {
  * @brief Crypto module: manages a default cryptor and fallback
  *        cryptors for encrypt/decrypt dispatch.
  */
-typedef struct pubnub_crypto_module {
+struct pubnub_crypto_module {
     /** Default cryptor for encryption (always non-NULL). */
     pubnub_crypto_provider_t* default_cryptor;
 
@@ -45,7 +45,7 @@ typedef struct pubnub_crypto_module {
 
     /** Allocator stored at creation for use by destroy. */
     pubnub_allocator_provider_t* alloc;
-} pubnub_crypto_module_t;
+};
 
 PUBNUB_STATIC_ASSERT(
     PUBNUB_CFG_CRYPTO_MAX_FALLBACK_CRYPTORS >= 1,

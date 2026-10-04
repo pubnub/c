@@ -124,14 +124,14 @@ if(PUBNUB_PROVIDER_TRANSPORT STREQUAL "socket")
         )
         # platform_posix.c is included directly; give it the same feature-test macros
         # that src/providers/platform/posix/CMakeLists.txt sets on the library target.
-        # _DARWIN_C_SOURCE is required on macOS to keep BSD symbols (INADDR_LOOPBACK
+        # _DARWIN_C_SOURCE is required on Apple platforms to keep BSD symbols (INADDR_LOOPBACK
         # etc.) visible when _POSIX_C_SOURCE is explicitly set.
         target_compile_definitions(
             test_provider_transport_socket_dns_resolver
             PRIVATE
-                _POSIX_C_SOURCE=200809L
-                _DEFAULT_SOURCE
-                $<$<PLATFORM_ID:Darwin>:_DARWIN_C_SOURCE>
+                $<$<NOT:$<PLATFORM_ID:Windows>>:_POSIX_C_SOURCE=200809L>
+                $<$<NOT:$<PLATFORM_ID:Windows>>:_DEFAULT_SOURCE>
+                $<$<BOOL:${APPLE}>:_DARWIN_C_SOURCE>
                 $<$<BOOL:${PUBNUB_TEST_NETWORK}>:PUBNUB_TEST_NETWORK=1>
         )
 
@@ -149,9 +149,9 @@ if(PUBNUB_PROVIDER_TRANSPORT STREQUAL "socket")
         target_compile_definitions(
             test_provider_transport_socket_dns_rotation
             PRIVATE
-                _POSIX_C_SOURCE=200809L
-                _DEFAULT_SOURCE
-                $<$<PLATFORM_ID:Darwin>:_DARWIN_C_SOURCE>
+                $<$<NOT:$<PLATFORM_ID:Windows>>:_POSIX_C_SOURCE=200809L>
+                $<$<NOT:$<PLATFORM_ID:Windows>>:_DEFAULT_SOURCE>
+                $<$<BOOL:${APPLE}>:_DARWIN_C_SOURCE>
         )
     endif()
 
@@ -170,9 +170,9 @@ if(PUBNUB_PROVIDER_TRANSPORT STREQUAL "socket")
         target_compile_definitions(
             test_provider_transport_socket_dns_native
             PRIVATE
-                _POSIX_C_SOURCE=200809L
-                _DEFAULT_SOURCE
-                $<$<PLATFORM_ID:Darwin>:_DARWIN_C_SOURCE>
+                $<$<NOT:$<PLATFORM_ID:Windows>>:_POSIX_C_SOURCE=200809L>
+                $<$<NOT:$<PLATFORM_ID:Windows>>:_DEFAULT_SOURCE>
+                $<$<BOOL:${APPLE}>:_DARWIN_C_SOURCE>
         )
         if(NOT PUBNUB_TEST_NETWORK)
             set_tests_properties(test_provider_transport_socket_dns_native PROPERTIES DISABLED TRUE)
@@ -315,7 +315,7 @@ if(PUBNUB_PROVIDER_TRANSPORT STREQUAL "socket")
             LIBS pubnub
         )
         # Give each test the same feature-test macros that platform_posix.c needs.
-        # _DARWIN_C_SOURCE keeps BSD symbols visible on macOS when _POSIX_C_SOURCE is set.
+        # _DARWIN_C_SOURCE keeps BSD symbols visible on Apple platforms when _POSIX_C_SOURCE is set.
         set(_pn_posix_tests
             test_provider_transport_socket_high_fd
             test_provider_transport_socket_ipv6_fallback
@@ -328,9 +328,9 @@ if(PUBNUB_PROVIDER_TRANSPORT STREQUAL "socket")
             target_compile_definitions(
                 ${_pn_posix_test}
                 PRIVATE
-                    _POSIX_C_SOURCE=200809L
-                    _DEFAULT_SOURCE
-                    $<$<PLATFORM_ID:Darwin>:_DARWIN_C_SOURCE>
+                    $<$<NOT:$<PLATFORM_ID:Windows>>:_POSIX_C_SOURCE=200809L>
+                    $<$<NOT:$<PLATFORM_ID:Windows>>:_DEFAULT_SOURCE>
+                    $<$<BOOL:${APPLE}>:_DARWIN_C_SOURCE>
             )
         endforeach()
     endif()
@@ -389,7 +389,7 @@ if(PUBNUB_PROVIDER_TRANSPORT STREQUAL "socket")
                 $<$<BOOL:${PUBNUB_TEST_NETWORK}>:PUBNUB_TEST_NETWORK=1>
                 $<$<NOT:$<PLATFORM_ID:Windows>>:_POSIX_C_SOURCE=200809L>
                 $<$<NOT:$<PLATFORM_ID:Windows>>:_DEFAULT_SOURCE>
-                $<$<PLATFORM_ID:Darwin>:_DARWIN_C_SOURCE>
+                $<$<BOOL:${APPLE}>:_DARWIN_C_SOURCE>
         )
         # The offline regression tests drive OpenSSL directly (thread error
         # queue, socketpair), so the test TU needs the OpenSSL headers/libs
@@ -421,7 +421,7 @@ if(PUBNUB_PROVIDER_TRANSPORT STREQUAL "socket")
                 $<$<BOOL:${PUBNUB_TEST_NETWORK}>:PUBNUB_TEST_NETWORK=1>
                 $<$<NOT:$<PLATFORM_ID:Windows>>:_POSIX_C_SOURCE=200809L>
                 $<$<NOT:$<PLATFORM_ID:Windows>>:_DEFAULT_SOURCE>
-                $<$<PLATFORM_ID:Darwin>:_DARWIN_C_SOURCE>
+                $<$<BOOL:${APPLE}>:_DARWIN_C_SOURCE>
         )
         if(NOT PUBNUB_TEST_NETWORK)
             set_tests_properties(

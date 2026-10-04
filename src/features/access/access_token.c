@@ -270,6 +270,20 @@ pubnub_res_t pn_access_parse_token_impl(const char*                  token,
         out->result.uuid_pattern_count    = (uint32_t)count_map_entries(uuid);
     }
 
+    pn_cbor_value_t* cat_node = pn_cbor_map_get(root, "cat", 3);
+    if (NULL != cat_node && PN_CBOR_MAP == cat_node->type) {
+        pn_cbor_value_t* chan = pn_cbor_map_get(cat_node, "chan", 4);
+        pn_cbor_value_t* uuid = pn_cbor_map_get(cat_node, "uuid", 4);
+
+        if (NULL != chan && PN_CBOR_UINT == chan->type) {
+            out->result.channels_category_permissions =
+                (uint32_t)chan->data.uint_val;
+        }
+        if (NULL != uuid && PN_CBOR_UINT == uuid->type) {
+            out->result.uuids_category_permissions = (uint32_t)uuid->data.uint_val;
+        }
+    }
+
     /*
      * Transfer ownership: the decoded buffer must remain alive because
      * CBOR string/bytes nodes alias it. Store both in the output state.

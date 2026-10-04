@@ -77,89 +77,80 @@ pubnub_res_t pn_uuid_metadata_build_path_single(pubnub_http_request_t* request,
     return PUBNUB_OK;
 }
 
-static pubnub_res_t set_string_field(pubnub_serialization_provider_t* serial,
-                                     pubnub_json_value_t*             obj,
-                                     const char*                      key,
-                                     size_t                           key_len,
-                                     const char*                      value)
-{
-    pubnub_json_value_t* val =
-        serial->value_create_string(serial, value, strlen(value));
-    if (NULL == val) {
-        return PUBNUB_ERR_OUT_OF_MEMORY;
-    }
-    pubnub_res_t rc = serial->object_set(serial, obj, key, key_len, val);
-    if (PUBNUB_OK != rc) {
-        serial->value_destroy(serial, val);
-    }
-    return rc;
-}
-
 pubnub_res_t pn_uuid_metadata_build_body(pubnub_serialization_provider_t* serial,
                                          pubnub_allocator_provider_t* alloc,
                                          const pubnub_set_uuid_metadata_opts_t* opts,
                                          pubnub_buffer_t* body_buf)
 {
+    /* The builder owns custom_value from entry; cleared once attached. */
+    pubnub_json_value_t* pending = (NULL != opts) ? opts->custom_value : NULL;
+    pubnub_json_value_t* obj     = NULL;
+    pubnub_res_t         rc      = PUBNUB_OK;
+
     if (NULL == serial || NULL == opts || NULL == body_buf
         || NULL == body_buf->data || 0 == body_buf->cap) {
-        return PUBNUB_ERR_INVALID_ARGUMENT;
+        rc = PUBNUB_ERR_INVALID_ARGUMENT;
+        goto cleanup;
     }
     if (NULL == serial->value_create_object || NULL == serial->object_set
         || NULL == serial->value_create_string || NULL == serial->serialize
         || NULL == serial->value_destroy) {
-        return PUBNUB_ERR_SERIALIZATION;
+        rc = PUBNUB_ERR_SERIALIZATION;
+        goto cleanup;
     }
 
-    pubnub_json_value_t* obj = serial->value_create_object(serial);
+    obj = serial->value_create_object(serial);
     if (NULL == obj) {
-        return PUBNUB_ERR_OUT_OF_MEMORY;
+        rc = PUBNUB_ERR_OUT_OF_MEMORY;
+        goto cleanup;
     }
-
-    pubnub_res_t rc = PUBNUB_OK;
 
     if (NULL != opts->name) {
-        rc = set_string_field(serial, obj, "name", 4, opts->name);
+        rc = pn_app_context_set_string_field(serial, obj, "name", 4, opts->name);
         if (PUBNUB_OK != rc) {
             goto cleanup;
         }
     }
 
     if (NULL != opts->external_id) {
-        rc = set_string_field(serial, obj, "externalId", 10, opts->external_id);
+        rc = pn_app_context_set_string_field(
+            serial, obj, "externalId", 10, opts->external_id);
         if (PUBNUB_OK != rc) {
             goto cleanup;
         }
     }
 
     if (NULL != opts->profile_url) {
-        rc = set_string_field(serial, obj, "profileUrl", 10, opts->profile_url);
+        rc = pn_app_context_set_string_field(
+            serial, obj, "profileUrl", 10, opts->profile_url);
         if (PUBNUB_OK != rc) {
             goto cleanup;
         }
     }
 
     if (NULL != opts->email) {
-        rc = set_string_field(serial, obj, "email", 5, opts->email);
+        rc = pn_app_context_set_string_field(serial, obj, "email", 5, opts->email);
         if (PUBNUB_OK != rc) {
             goto cleanup;
         }
     }
 
     if (NULL != opts->type) {
-        rc = set_string_field(serial, obj, "type", 4, opts->type);
+        rc = pn_app_context_set_string_field(serial, obj, "type", 4, opts->type);
         if (PUBNUB_OK != rc) {
             goto cleanup;
         }
     }
 
     if (NULL != opts->status) {
-        rc = set_string_field(serial, obj, "status", 6, opts->status);
+        rc = pn_app_context_set_string_field(serial, obj, "status", 6, opts->status);
         if (PUBNUB_OK != rc) {
             goto cleanup;
         }
     }
 
-    rc = pn_app_context_set_custom_field(
+    pending = NULL;
+    rc      = pn_app_context_set_custom_field(
         serial, obj, opts->custom_value, opts->custom, opts->custom_len);
     if (PUBNUB_OK != rc) {
         goto cleanup;
@@ -168,7 +159,10 @@ pubnub_res_t pn_uuid_metadata_build_body(pubnub_serialization_provider_t* serial
     rc = pn_buf_serialize_grow(alloc, serial, obj, body_buf);
 
 cleanup:
-    serial->value_destroy(serial, obj);
+    pn_app_context_discard_custom(serial, pending);
+    if (NULL != obj) {
+        serial->value_destroy(serial, obj);
+    }
     return rc;
 }
 

@@ -99,7 +99,7 @@ if(PUBNUB_CFG_THREAD_SAFETY AND PUBNUB_ENABLE_PUBLISH)
             PRIVATE
                 $<$<NOT:$<PLATFORM_ID:Windows>>:_POSIX_C_SOURCE=200809L>
                 $<$<NOT:$<PLATFORM_ID:Windows>>:_DEFAULT_SOURCE>
-                $<$<PLATFORM_ID:Darwin>:_DARWIN_C_SOURCE>
+                $<$<BOOL:${APPLE}>:_DARWIN_C_SOURCE>
         )
     endforeach()
 endif()
@@ -112,6 +112,6 @@ if(PUBNUB_CFG_THREAD_SAFETY AND PUBNUB_ENABLE_SUBSCRIBE)
         PRIVATE
             $<$<NOT:$<PLATFORM_ID:Windows>>:_POSIX_C_SOURCE=200809L>
             $<$<NOT:$<PLATFORM_ID:Windows>>:_DEFAULT_SOURCE>
-            $<$<PLATFORM_ID:Darwin>:_DARWIN_C_SOURCE>
+            $<$<BOOL:${APPLE}>:_DARWIN_C_SOURCE>
     )
 endif()

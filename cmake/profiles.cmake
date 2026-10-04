@@ -60,6 +60,9 @@ set(_PN_PROFILE_TRACKED_VARS
     PUBNUB_CFG_URL_BUFFER_SIZE
     PUBNUB_CFG_ORIGIN
     PUBNUB_CFG_MAX_SUBSCRIBE_CHANNELS
+    PUBNUB_CFG_MAX_SUBSCRIPTIONS
+    PUBNUB_CFG_MAX_SUBSCRIPTION_SETS
+    PUBNUB_CFG_MAX_SUBSCRIPTIONS_PER_SET
     PUBNUB_CFG_MAX_SUBSCRIBE_LISTENERS
     PUBNUB_CFG_SUBSCRIBE_MAX_BATCH_SIZE
     PUBNUB_CFG_MAX_POLL_MS
@@ -212,6 +215,9 @@ function(pubnub_apply_profile)
         _pn_profile_set(PUBNUB_CFG_URL_BUFFER_SIZE "2048")
         _pn_profile_set(PUBNUB_CFG_ORIGIN "ps.pndsn.com")
         _pn_profile_set(PUBNUB_CFG_MAX_SUBSCRIBE_CHANNELS "64")
+        _pn_profile_set(PUBNUB_CFG_MAX_SUBSCRIPTIONS "128")
+        _pn_profile_set(PUBNUB_CFG_MAX_SUBSCRIPTION_SETS "16")
+        _pn_profile_set(PUBNUB_CFG_MAX_SUBSCRIPTIONS_PER_SET "32")
         _pn_profile_set(PUBNUB_CFG_MAX_SUBSCRIBE_LISTENERS "8")
         _pn_profile_set(PUBNUB_CFG_SUBSCRIBE_MAX_BATCH_SIZE "100")
         _pn_profile_set(PUBNUB_CFG_MAX_POLL_MS "100")
@@ -317,6 +323,9 @@ function(pubnub_apply_profile)
         _pn_profile_set(PUBNUB_CFG_URL_BUFFER_SIZE "2048")
         _pn_profile_set(PUBNUB_CFG_ORIGIN "ps.pndsn.com")
         _pn_profile_set(PUBNUB_CFG_MAX_SUBSCRIBE_CHANNELS "64")
+        _pn_profile_set(PUBNUB_CFG_MAX_SUBSCRIPTIONS "64")
+        _pn_profile_set(PUBNUB_CFG_MAX_SUBSCRIPTION_SETS "8")
+        _pn_profile_set(PUBNUB_CFG_MAX_SUBSCRIPTIONS_PER_SET "16")
         _pn_profile_set(PUBNUB_CFG_MAX_SUBSCRIBE_LISTENERS "8")
         _pn_profile_set(PUBNUB_CFG_SUBSCRIBE_MAX_BATCH_SIZE "32")
         _pn_profile_set(PUBNUB_CFG_MAX_POLL_MS "100")
@@ -418,6 +427,9 @@ function(pubnub_apply_profile)
         _pn_profile_set(PUBNUB_CFG_URL_BUFFER_SIZE "512")
         _pn_profile_set(PUBNUB_CFG_ORIGIN "ps.pndsn.com")
         _pn_profile_set(PUBNUB_CFG_MAX_SUBSCRIBE_CHANNELS "8")
+        _pn_profile_set(PUBNUB_CFG_MAX_SUBSCRIPTIONS "8")
+        _pn_profile_set(PUBNUB_CFG_MAX_SUBSCRIPTION_SETS "2")
+        _pn_profile_set(PUBNUB_CFG_MAX_SUBSCRIPTIONS_PER_SET "8")
         _pn_profile_set(PUBNUB_CFG_MAX_SUBSCRIBE_LISTENERS "4")
         _pn_profile_set(PUBNUB_CFG_SUBSCRIBE_MAX_BATCH_SIZE "8")
         _pn_profile_set(PUBNUB_CFG_MAX_POLL_MS "100")

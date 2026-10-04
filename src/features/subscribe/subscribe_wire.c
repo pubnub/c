@@ -136,26 +136,6 @@ pubnub_res_t pn_subscribe_build_receive(pubnub_http_request_t* request,
         request, inputs, cursor->timetoken, cursor->region);
 }
 
-/** @brief Length of the `-pnpres` suffix. */
-#define PN_PNPRES_SUFFIX_LEN 7
-
-/**
- * @brief Check whether a string view ends with `-pnpres`.
- *
- * @param view String view to check.
- * @return 1 if the suffix is present, 0 otherwise.
- */
-static int has_pnpres_suffix(pubnub_string_view_t view)
-{
-    if (view.len < PN_PNPRES_SUFFIX_LEN || NULL == view.ptr) {
-        return 0;
-    }
-    return 0
-        == memcmp(view.ptr + view.len - PN_PNPRES_SUFFIX_LEN,
-                  "-pnpres",
-                  PN_PNPRES_SUFFIX_LEN);
-}
-
 /**
  * @brief Extract a cursor (timetoken + region) from a JSON object
  *        node with shape `{"t": "<digits>", "r": <int>}`.
@@ -170,27 +150,29 @@ static pubnub_res_t parse_cursor_object(pubnub_serialization_provider_t* serial,
                                         const pubnub_json_value_t* cursor_obj,
                                         pn_subscribe_cursor_t*     out)
 {
+    const pubnub_json_value_t* tt_node;
+    const pubnub_json_value_t* r_node;
+    const char*                tt_ptr;
+    size_t                     tt_len = 0;
+
     if (NULL == cursor_obj || NULL == serial->object_get
         || NULL == serial->value_as_string || NULL == serial->value_as_int) {
         return PUBNUB_ERR_SERIALIZATION;
     }
 
     /* "t" field — timetoken string. */
-    const pubnub_json_value_t* tt_node = serial->object_get(cursor_obj, "t", 1);
+    tt_node = serial->object_get(cursor_obj, "t", 1);
     if (NULL == tt_node) {
         return PUBNUB_ERR_SERIALIZATION;
     }
 
-    size_t      tt_len = 0;
-    const char* tt_ptr = serial->value_as_string(tt_node, &tt_len);
+    tt_ptr = serial->value_as_string(tt_node, &tt_len);
     if (NULL == tt_ptr || 0 == tt_len || tt_len >= sizeof(out->timetoken)) {
         return PUBNUB_ERR_SERIALIZATION;
     }
 
-    /* A compromised or MITM server could return a short non-numeric
-     * string that would later be spliced verbatim into the tt= query
-     * param. Reject any non-digit so only numeric timetokens advance;
-     * a parse error drops the batch and the EE retries with tt=0. */
+    /* Reject non-digits: the timetoken is spliced verbatim into the tt=
+     * query param, so only numeric values may advance. */
     {
         size_t i;
         for (i = 0; i < tt_len; ++i) {
@@ -205,7 +187,7 @@ static pubnub_res_t parse_cursor_object(pubnub_serialization_provider_t* serial,
     out->timetoken_len     = (uint8_t)tt_len;
 
     /* "r" field — region integer (optional, default 0). */
-    const pubnub_json_value_t* r_node = serial->object_get(cursor_obj, "r", 1);
+    r_node = serial->object_get(cursor_obj, "r", 1);
     if (NULL != r_node) {
         int region_val = 0;
         if (PUBNUB_OK == serial->value_as_int(r_node, &region_val)) {
@@ -217,106 +199,126 @@ static pubnub_res_t parse_cursor_object(pubnub_serialization_provider_t* serial,
 }
 
 /**
- * @brief Parse a single message element from the "m" array.
+ * @brief Parse one message element from the "m" array.
+ *
+ * A missing/non-string/empty "c" channel cannot be routed, so the element
+ * is rejected and the caller drops the whole batch.
  *
  * @param serial Serialization provider.
  * @param elem   JSON object for one message.
- * @param entry  Output dispatch entry to populate.
+ * @param event  Output event, written only when valid.
+ * @retval 1 Usable channel found; @p event populated.
+ * @retval 0 No usable channel; @p event untouched.
  */
-static void parse_single_message(pubnub_serialization_provider_t* serial,
-                                 const pubnub_json_value_t*       elem,
-                                 pn_subscribe_dispatch_entry_t*   entry)
+static int parse_single_message(pubnub_serialization_provider_t* serial,
+                                const pubnub_json_value_t*       elem,
+                                pubnub_subscribe_event_t*        event)
 {
-    /* Default entry_index to UINT16_MAX (unresolved). The emit_message
-     * dispatcher will fall back to name-based lookup if needed. */
-    entry->entry_index = UINT16_MAX;
+    const pubnub_json_value_t* e_node;
+    const pubnub_json_value_t* f_node;
+    const pubnub_json_value_t* c_node;
+    const pubnub_json_value_t* b_node;
+    const pubnub_json_value_t* i_node;
+    const pubnub_json_value_t* cmt_node;
+    const pubnub_json_value_t* p_node;
+    const pubnub_json_value_t* tt_node;
+    const char*                str_ptr;
+    size_t                     str_len;
+    int                        int_val;
+
+    /* "c" — channel (required); reject when missing, non-string, or empty. */
+    c_node = serial->object_get(elem, "c", 1);
+    if (NULL == c_node) {
+        return 0;
+    }
+    str_len = 0;
+    str_ptr = serial->value_as_string(c_node, &str_len);
+    if (NULL == str_ptr || 0 == str_len) {
+        return 0;
+    }
+    event->channel = (pubnub_string_view_t){str_ptr, str_len};
 
     /* "e" — event type (default 0 = message). */
-    const pubnub_json_value_t* e_node = serial->object_get(elem, "e", 1);
+    e_node = serial->object_get(elem, "e", 1);
     if (NULL != e_node) {
-        int e_val = 0;
-        if (PUBNUB_OK == serial->value_as_int(e_node, &e_val)) {
-            entry->event.type = (pubnub_subscribe_message_type_t)e_val;
+        int_val = 0;
+        if (PUBNUB_OK == serial->value_as_int(e_node, &int_val)) {
+            event->type = (pubnub_subscribe_message_type_t)int_val;
         }
     }
 
     /* "f" — flags. */
-    const pubnub_json_value_t* f_node = serial->object_get(elem, "f", 1);
+    f_node = serial->object_get(elem, "f", 1);
     if (NULL != f_node) {
-        int f_val = 0;
-        if (PUBNUB_OK == serial->value_as_int(f_node, &f_val)) {
-            entry->event.flags = (uint32_t)f_val;
+        int_val = 0;
+        if (PUBNUB_OK == serial->value_as_int(f_node, &int_val)) {
+            event->flags = (uint32_t)int_val;
         }
     }
 
-    /* "c" — channel. */
-    const pubnub_json_value_t* c_node = serial->object_get(elem, "c", 1);
-    if (NULL != c_node) {
-        size_t      c_len = 0;
-        const char* c_ptr = serial->value_as_string(c_node, &c_len);
-        if (NULL != c_ptr) {
-            entry->event.channel = (pubnub_string_view_t){c_ptr, c_len};
-        }
-    }
-
-    /* "b" — subscription match. */
-    const pubnub_json_value_t* b_node = serial->object_get(elem, "b", 1);
+    /* "b" — subscription match (wildcard or channel-group name), kept
+     * verbatim including any -pnpres suffix. */
+    b_node = serial->object_get(elem, "b", 1);
     if (NULL != b_node) {
-        size_t      b_len = 0;
-        const char* b_ptr = serial->value_as_string(b_node, &b_len);
-        if (NULL != b_ptr) {
-            entry->event.subscription = (pubnub_string_view_t){b_ptr, b_len};
+        str_len = 0;
+        str_ptr = serial->value_as_string(b_node, &str_len);
+        if (NULL != str_ptr) {
+            event->subscription = (pubnub_string_view_t){str_ptr, str_len};
         }
     }
-
-    /* Presence detection: channel ending with -pnpres overrides type. */
-    if (has_pnpres_suffix(entry->event.channel)) {
-        entry->event.type = PUBNUB_SUBSCRIBE_PRESENCE;
-        entry->event.channel.len -= PN_PNPRES_SUFFIX_LEN;
+    /* Fall back to the raw channel (before -pnpres narrowing) when "b" is
+     * absent or empty. */
+    if (0 == event->subscription.len) {
+        event->subscription = event->channel;
     }
-    if (has_pnpres_suffix(entry->event.subscription)) {
-        entry->event.subscription.len -= PN_PNPRES_SUFFIX_LEN;
+
+    /* Presence channel: narrow the view to its base (shrink length, keep
+     * pointer). */
+    if (pn_pnpres_has_suffix(event->channel.ptr, event->channel.len)) {
+        event->type = PUBNUB_SUBSCRIBE_PRESENCE;
+        event->channel.len -= PN_PNPRES_SUFFIX_LEN;
     }
 
     /* "i" — publisher UUID. */
-    const pubnub_json_value_t* i_node = serial->object_get(elem, "i", 1);
+    i_node = serial->object_get(elem, "i", 1);
     if (NULL != i_node) {
-        size_t      i_len = 0;
-        const char* i_ptr = serial->value_as_string(i_node, &i_len);
-        if (NULL != i_ptr) {
-            entry->event.publisher = (pubnub_string_view_t){i_ptr, i_len};
+        str_len = 0;
+        str_ptr = serial->value_as_string(i_node, &str_len);
+        if (NULL != str_ptr) {
+            event->publisher = (pubnub_string_view_t){str_ptr, str_len};
         }
     }
 
     /* "cmt" — custom message type. */
-    const pubnub_json_value_t* cmt_node = serial->object_get(elem, "cmt", 3);
+    cmt_node = serial->object_get(elem, "cmt", 3);
     if (NULL != cmt_node) {
-        size_t      cmt_len = 0;
-        const char* cmt_ptr = serial->value_as_string(cmt_node, &cmt_len);
-        if (NULL != cmt_ptr) {
-            entry->event.custom_message_type =
-                (pubnub_string_view_t){cmt_ptr, cmt_len};
+        str_len = 0;
+        str_ptr = serial->value_as_string(cmt_node, &str_len);
+        if (NULL != str_ptr) {
+            event->custom_message_type = (pubnub_string_view_t){str_ptr, str_len};
         }
     }
 
     /* "d" — payload node. Stored unconditionally for accessor use. */
-    entry->event.payload = serial->object_get(elem, "d", 1);
+    event->payload = serial->object_get(elem, "d", 1);
 
     /* "u" — user metadata node. */
-    entry->event.user_metadata = serial->object_get(elem, "u", 1);
+    event->user_metadata = serial->object_get(elem, "u", 1);
 
     /* "p" — publish timetoken. */
-    const pubnub_json_value_t* p_node = serial->object_get(elem, "p", 1);
+    p_node = serial->object_get(elem, "p", 1);
     if (NULL != p_node) {
-        const pubnub_json_value_t* tt_node = serial->object_get(p_node, "t", 1);
+        tt_node = serial->object_get(p_node, "t", 1);
         if (NULL != tt_node) {
-            size_t      tt_len = 0;
-            const char* tt_ptr = serial->value_as_string(tt_node, &tt_len);
-            if (NULL != tt_ptr) {
-                entry->event.timetoken = (pubnub_string_view_t){tt_ptr, tt_len};
+            str_len = 0;
+            str_ptr = serial->value_as_string(tt_node, &str_len);
+            if (NULL != str_ptr) {
+                event->timetoken = (pubnub_string_view_t){str_ptr, str_len};
             }
         }
     }
+
+    return 1;
 }
 
 pubnub_res_t pn_subscribe_parse_response(pubnub_serialization_provider_t* serial,
@@ -324,6 +326,13 @@ pubnub_res_t pn_subscribe_parse_response(pubnub_serialization_provider_t* serial
                                          size_t         body_len,
                                          pn_subscribe_parsed_response_t* out)
 {
+    pubnub_json_value_t*       root;
+    const pubnub_json_value_t* t_obj;
+    const pubnub_json_value_t* m_arr;
+    pubnub_res_t               rc;
+    size_t                     total;
+    size_t                     count;
+
     if (NULL == out) {
         return PUBNUB_ERR_INVALID_ARGUMENT;
     }
@@ -339,7 +348,7 @@ pubnub_res_t pn_subscribe_parse_response(pubnub_serialization_provider_t* serial
         return PUBNUB_ERR_SERIALIZATION;
     }
 
-    pubnub_json_value_t* root = serial->parse(serial, body, body_len);
+    root = serial->parse(serial, body, body_len);
     if (NULL == root) {
         return PUBNUB_ERR_SERIALIZATION;
     }
@@ -351,20 +360,20 @@ pubnub_res_t pn_subscribe_parse_response(pubnub_serialization_provider_t* serial
     }
 
     /* "t" — cursor object with shape {"t":"<tt>", "r":<region>}. */
-    const pubnub_json_value_t* t_obj = serial->object_get(root, "t", 1);
+    t_obj = serial->object_get(root, "t", 1);
     if (NULL == t_obj) {
         serial->value_destroy(serial, root);
         return PUBNUB_ERR_SERIALIZATION;
     }
 
-    pubnub_res_t rc = parse_cursor_object(serial, t_obj, &out->cursor);
+    rc = parse_cursor_object(serial, t_obj, &out->cursor);
     if (PUBNUB_OK != rc) {
         serial->value_destroy(serial, root);
         return rc;
     }
 
     /* "m" — messages array. */
-    const pubnub_json_value_t* m_arr = serial->object_get(root, "m", 1);
+    m_arr = serial->object_get(root, "m", 1);
     if (NULL == m_arr || PUBNUB_JSON_ARRAY != serial->value_type(m_arr)) {
         /* A valid response may have no "m" array (empty batch).
          * Store the tree for cursor extraction and return success. */
@@ -372,8 +381,8 @@ pubnub_res_t pn_subscribe_parse_response(pubnub_serialization_provider_t* serial
         return PUBNUB_OK;
     }
 
-    const size_t total = serial->array_size(m_arr);
-    size_t       count = total;
+    total = serial->array_size(m_arr);
+    count = total;
     if (count > PUBNUB_CFG_SUBSCRIBE_MAX_BATCH_SIZE) {
         count          = PUBNUB_CFG_SUBSCRIBE_MAX_BATCH_SIZE;
         out->truncated = 1;
@@ -386,11 +395,16 @@ pubnub_res_t pn_subscribe_parse_response(pubnub_serialization_provider_t* serial
         if (serial->array_iter_init(m_arr, &iter)) {
             while (i < count && serial->array_iter_next(&iter, &elem)) {
                 i++;
-                if (NULL == elem) {
-                    continue;
+                /* A non-object/NULL element or one without a usable
+                 * channel drops the whole batch; only the cursor survives
+                 * so the next request steps over it. */
+                if (NULL == elem || PUBNUB_JSON_OBJECT != serial->value_type(elem)
+                    || !parse_single_message(
+                        serial, elem, &out->messages[out->message_count])) {
+                    out->message_count = 0;
+                    out->malformed     = 1;
+                    break;
                 }
-                parse_single_message(
-                    serial, elem, &out->messages[out->message_count]);
                 out->message_count++;
             }
         }

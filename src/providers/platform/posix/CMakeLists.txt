@@ -2,7 +2,7 @@
 # See LICENSE in the root directory of this source tree.
 #
 # posix platform: clock_gettime + nanosleep + getentropy/urandom + pthreads
-# backed provider for hosted profiles (Linux, macOS, BSDs).
+# backed provider for hosted profiles (Linux, macOS, iOS, BSDs).
 
 include(sources.cmake)
 
@@ -11,7 +11,13 @@ find_package(Threads REQUIRED)
 _pn_sdk_library(pubnub_provider_platform)
 target_sources(pubnub_provider_platform PRIVATE ${PN_PROVIDER_PLATFORM_POSIX_SOURCES})
 
-target_compile_definitions(pubnub_provider_platform PRIVATE _POSIX_C_SOURCE=200809L _DEFAULT_SOURCE)
+target_compile_definitions(
+    pubnub_provider_platform
+    PRIVATE
+        $<$<NOT:$<PLATFORM_ID:Windows>>:_POSIX_C_SOURCE=200809L>
+        $<$<NOT:$<PLATFORM_ID:Windows>>:_DEFAULT_SOURCE>
+        $<$<BOOL:${APPLE}>:_DARWIN_C_SOURCE>
+)
 
 target_link_libraries(pubnub_provider_platform PUBLIC pubnub_public_headers Threads::Threads)
 

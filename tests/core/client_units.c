@@ -2465,7 +2465,7 @@ static void process_should_call_transport_poll_with_zero_timeout(void** state)
 /* ======================================================================== */
 
 /* The full set of committed pubnub_res_t values, range-coded. Range gaps
- * (e.g. value 5, 35, 47) are intentional growth slack and MUST NOT be
+ * (e.g. value 5, 36, 47) are intentional growth slack and MUST NOT be
  * iterated as if they were valid values -- the old loop test used a
  * dense PUBNUB_ERR__COUNT sentinel which no longer exists. */
 static const pubnub_res_t pn_committed_res_values[] = {PUBNUB_OK,
@@ -2478,6 +2478,7 @@ static const pubnub_res_t pn_committed_res_values[] = {PUBNUB_OK,
                                                        PUBNUB_ERR_OUT_OF_MEMORY,
                                                        PUBNUB_ERR_BUFFER_TOO_SMALL,
                                                        PUBNUB_ERR_QUEUE_FULL,
+                                                       PUBNUB_ERR_LIMIT_REACHED,
                                                        PUBNUB_ERR_TIMEOUT,
                                                        PUBNUB_ERR_TRANSPORT,
                                                        PUBNUB_ERR_SERVER,
@@ -2514,7 +2515,7 @@ static void res_str_should_return_unknown_for_gap_values(void** state)
     const pubnub_res_t gaps[] = {
         (pubnub_res_t)5,  /* gap 3..15 between completion class and arg class */
         (pubnub_res_t)25, /* gap 20..31 inside arg/lifecycle class */
-        (pubnub_res_t)45, /* gap 35..47 inside memory/capacity class */
+        (pubnub_res_t)45, /* gap 36..47 inside memory/capacity class */
         (pubnub_res_t)100, /* gap 98..111 inside payload class */
         (pubnub_res_t)200 /* gap 112..239 between payload and invariant classes */
     };
@@ -2588,7 +2589,24 @@ static void res_str_should_return_correct_strings_for_known_codes(void** state)
     assert_string_equal(pubnub_res_str(PUBNUB_ERR_TIMEOUT), "Operation timed out");
     assert_string_equal(pubnub_res_str(PUBNUB_IN_PROGRESS), "Operation in progress");
 }
+
+static void res_str_should_label_limit_reached_distinct_from_queue_full(void** state)
+{
+    (void)state;
+    assert_string_equal(pubnub_res_str(PUBNUB_ERR_LIMIT_REACHED),
+                        "Compile-time limit reached");
+    assert_string_not_equal(pubnub_res_str(PUBNUB_ERR_LIMIT_REACHED),
+                            pubnub_res_str(PUBNUB_ERR_QUEUE_FULL));
+}
 #endif
+
+static void limit_reached_should_be_in_memory_capacity_class(void** state)
+{
+    (void)state;
+    assert_true(32 <= (int)PUBNUB_ERR_LIMIT_REACHED);
+    assert_true(47 >= (int)PUBNUB_ERR_LIMIT_REACHED);
+    assert_int_equal(35, (int)PUBNUB_ERR_LIMIT_REACHED);
+}
 
 #if !PUBNUB_CFG_RES_STR
 static void res_str_should_return_empty_when_disabled(void** state)
@@ -3646,6 +3664,7 @@ int main(void)
         cmocka_unit_test(process_should_call_transport_poll_with_zero_timeout),
 
         /* pubnub_res_str */
+        cmocka_unit_test(limit_reached_should_be_in_memory_capacity_class),
         cmocka_unit_test(res_str_should_return_non_null_for_all_committed_codes),
         cmocka_unit_test(res_str_should_return_unknown_for_gap_values),
         cmocka_unit_test(res_str_should_return_fallback_for_out_of_range),
@@ -3654,6 +3673,7 @@ int main(void)
 #if PUBNUB_CFG_RES_STR
         cmocka_unit_test(res_str_should_return_label_for_pubnub_ok),
         cmocka_unit_test(res_str_should_return_correct_strings_for_known_codes),
+        cmocka_unit_test(res_str_should_label_limit_reached_distinct_from_queue_full),
 #else
         cmocka_unit_test(res_str_should_return_empty_when_disabled),
 #endif

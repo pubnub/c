@@ -12,15 +12,13 @@
 #endif
 
 #include "subscribe_internal.h"
+#include "subscribe_manager_internal.h"
 
 #ifdef __cplusplus
 // clang-format off
 extern "C" {
 // clang-format on
 #endif
-
-/** Forward declaration — full definition in subscribe_manager_internal.h */
-typedef struct pn_subscribe_manager pn_subscribe_manager_t;
 
 /**
  * @brief Execute a single effect produced by the event engine.

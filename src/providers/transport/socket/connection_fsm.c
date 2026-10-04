@@ -1010,6 +1010,7 @@ static void conn_handle_connected(pn_socket_connection_t* conn,
         transport->ops, conn->socket, &transport->keepalive_config);
     rc = conn_transition_after_connect(conn, transport);
     if (1 == rc) {
+#ifdef PN_DEBUG_SOCKET_OPS
         uint64_t pn_now    = conn_now_ms(transport);
         uint64_t pn_budget = (pn_now < conn->connect_deadline_ms)
                                ? (conn->connect_deadline_ms - pn_now)
@@ -1022,6 +1023,7 @@ static void conn_handle_connected(pn_socket_connection_t* conn,
                    (unsigned)pn_budget);
         (void)pn_now;
         (void)pn_budget;
+#endif
         conn->state = PN_CONN_CONNECTING;
     } else if (rc < 0) {
         /* Permanent failure (e.g. no TLS backend) — fail closed, not

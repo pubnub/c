@@ -1,306 +1,257 @@
+![PubNub C SDK header: a publish call sends Hello world! to the hello_world channel](assets/c-header.png)
+
 # PubNub C SDK
 
-A next-generation C client for the [PubNub](https://www.pubnub.com/) real-time
-network. The SDK is a **platform-neutral C11 core** (with a C99 compatibility
-mode) that runs unchanged from cloud servers down to bare-metal
-microcontrollers. Everything the core touches — HTTP transport, JSON
-serialization, payload crypto, memory allocation, logging, and OS primitives —
-is supplied by a **pluggable provider**, so the same application code targets
-libcurl-on-Linux and a raw socket stack on an ESP32 without change.
+[![GitHub release](https://img.shields.io/github/v/release/pubnub/c)](https://github.com/pubnub/c/releases)
 
-Official documentation: https://www.pubnub.com/docs/sdks/c
+PubNub provides global infrastructure for real-time, interactive applications.
 
-## Highlights
+Publish and receive messages in C. Use this SDK for native and embedded C applications on Linux,
+macOS, Windows, FreeRTOS, ESP-IDF, and Zephyr.
 
-- **Modular provider architecture** — six provider families (transport,
-  serialization, crypto, allocator, logger, platform); pick a backend per family
-  at build time, or supply your own.
-- **One unified request flow, three completion modes** — every asynchronous
-  operation returns a `pubnub_future_t` that you consume by **cooperative
-  polling** (no threads), **blocking await**, or an **async callback**. No
-  separate sync/async API surfaces.
-- **Multi-context** — any number of independent client contexts in one process,
-  with no static or global per-context state.
-- **Runs where you run** — hosted heap model for servers/desktops, and a
-  **no-heap embedded model** with a preallocated arena allocator for constrained
-  devices.
-- **Secure by default** — TLS is compiled in by default (OpenSSL or mbedTLS);
-  plaintext requires an explicit opt-out.
-- **Bounded and deterministic** — configurable in-flight concurrency, explicit
-  backpressure, and a global → endpoint → per-request timeout hierarchy.
-- **Full PubNub feature set** — Publish, Subscribe (event-engine), Presence,
-  Message Persistence, Channel Groups, Message Actions, Signals, Files, App
-  Context, Access Manager v3, Mobile Push, and payload encryption.
+[Documentation](https://www.pubnub.com/docs/sdks/c) · [API reference](https://www.pubnub.com/docs/sdks/c/api-reference/publish-and-subscribe) · [Changelog](https://www.pubnub.com/docs/sdks/c/changelog) · [Support](https://support.pubnub.com/)
 
 ## Requirements
 
-- A C11 compiler (GCC, Clang, MSVC) — or C99 with `PUBNUB_CFG_C99_COMPAT=ON`.
-- CMake ≥ 3.16.
-- Hosted builds: libcurl and OpenSSL (for the default transport and TLS).
-- Embedded builds: a BSD-socket layer and mbedTLS (for the socket transport).
+| Requirement                 | Supported version or setup                                                                                                                                         |
+|-----------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| CMake and C compiler        | [CMake 3.16+ and a C11-capable compiler; C99 compatibility is available with `PUBNUB_CFG_C99_COMPAT=ON`](https://www.pubnub.com/docs/sdks/c)                       |
+| Hosted and embedded targets | [Linux, macOS, Windows, FreeRTOS 10, ESP-IDF 5.2+, and Zephyr](https://www.pubnub.com/docs/sdks/c/platform-support)                                                |
+| Hosted dependencies         | The full hosted profile uses `libcurl`, `OpenSSL`, and `cJSON`. CMake may fetch dependencies on first configure, so initial configuration requires network access. |
 
-## Integrate into your project
+## Installation
 
-The SDK is consumed as a CMake subproject. Linking the `pubnub` target pulls in
-the public include path automatically, so `#include "pubnub/pubnub.h"` just
-works.
-
-### With `add_subdirectory`
-
-Vendor this repository into your project (e.g. as a git submodule or a
-copy), then point `add_subdirectory` at wherever you placed it — the path
-below is only an example location:
+Vendor the SDK source and add it as a CMake subdirectory:
 
 ```cmake
-add_subdirectory(third_party/pubnub-c)     # path to your copy of this repo
+# Select a build profile (full | minimal | embedded) BEFORE adding the SDK. A profile only
+# supplies defaults for features and providers; explicit -D options still win.
+# See "Build profiles and presets": https://www.pubnub.com/docs/sdks/c/environment-setup
+set(PUBNUB_PROFILE full CACHE STRING "")
+add_subdirectory(third_party/pubnub-c)
+
+add_executable(my_app main.c)
 target_link_libraries(my_app PRIVATE pubnub)
 ```
 
-### With `FetchContent`
+For other installation methods,
+see [environment setup](https://www.pubnub.com/docs/sdks/c/environment-setup).
+
+## Quickstart
+
+This example runs in the hosted `full` CMake profile. It subscribes to `hello_world`, publishes one
+message, and prints the received text.
+
+### Get your keys
+
+1. Open the [PubNub Admin Portal](https://admin.pubnub.com/).
+2. Create an app and a keyset for development, or select an existing development keyset.
+3. Copy its publish key and subscribe key.
+
+If Access Manager is enabled, obtain a token from your trusted backend and call
+`pubnub_set_auth_token(ctx, token)`. Keep the secret key on the backend.
+
+### Send and receive a message
+
+Create `hello_world.c` and link it against the `pubnub` target from your `CMakeLists.txt`:
 
 ```cmake
-include(FetchContent)
-FetchContent_Declare(
-    pubnub
-    GIT_REPOSITORY https://github.com/pubnub/c.git
-    GIT_TAG        1.0.0
-)
-FetchContent_MakeAvailable(pubnub)
-target_link_libraries(my_app PRIVATE pubnub)
+cmake_minimum_required(VERSION 3.16)
+project(hello_world C)
+
+# The full profile enables every feature and the hosted providers (libcurl, OpenSSL, cJSON).
+# See "Build profiles and presets": https://www.pubnub.com/docs/sdks/c/environment-setup
+set(PUBNUB_PROFILE full CACHE STRING "")
+add_subdirectory(third_party/pubnub-c)
+
+add_executable(hello_world hello_world.c)
+target_link_libraries(hello_world PRIVATE pubnub)
 ```
 
-### Selecting features, providers, and a profile
+The example below adds a listener, subscribes to `hello_world`, waits for the connection, publishes
+one message, and waits for it to arrive.
 
-Set cache variables **before** pulling the SDK in. Only Publish, Subscribe,
-secure transport, and retry are enabled by default; every other feature is
-opt-in.
-
-```cmake
-set(PUBNUB_PROFILE            full    CACHE STRING "")  # full | minimal | embedded
-set(PUBNUB_PROVIDER_TRANSPORT curl    CACHE STRING "")  # curl | socket
-set(PUBNUB_PROVIDER_PLATFORM  posix   CACHE STRING "")  # posix | windows | freertos | zephyr
-set(PUBNUB_ENABLE_PRESENCE    ON      CACHE BOOL   "")
-set(PUBNUB_ENABLE_HISTORY     ON      CACHE BOOL   "")
-set(PUBNUB_ENABLE_CRYPTO      ON      CACHE BOOL   "")
-```
-
-### Building the SDK standalone
-
-Configure/build presets are provided for the common profiles (`full`,
-`minimal`, `embedded`, `dev`):
-
-```sh
-cmake --preset full
-cmake --build --preset full
-```
-
-## Getting started
-
-Create a context from a configuration, then issue requests against it.
+Replace the key placeholders. Use a User ID that identifies the user or device in your app.
 
 ```c
-#include "pubnub/pubnub.h"
+#include <pubnub/pubnub.h>
 
-pubnub_config_t cfg = pubnub_config_defaults();
-cfg.subscribe_key = "sub-c-...";
-cfg.publish_key   = "pub-c-...";
-cfg.user_id       = "my-user-id";
+#include <stdio.h>
+#include <unistd.h>
 
-pubnub_context_t* ctx = pubnub_create(&cfg);   /* hosted heap model */
-/* ... use ctx ... */
-pubnub_destroy(ctx);
-```
+static volatile int connected = 0;
+static volatile int received  = 0;
 
-Two lifecycle models are available:
-
-- **Hosted:** `pubnub_create()` / `pubnub_destroy()` — allocates the context for
-  you and deep-copies config strings.
-- **Caller-provided:** `pubnub_init()` / `pubnub_deinit()` — you provide a buffer
-  of `pubnub_context_size()` bytes; config strings are borrowed. This is the only
-  model available in the no-heap embedded profile (`PUBNUB_CFG_NO_HEAP=ON`).
-
-## The unified request flow
-
-Every asynchronous API call follows the same contract:
-
-```
-issue → wait / poll → check status → read result → release
-```
-
-The call returns a stack-allocated `pubnub_future_t`. You choose **one** of
-three completion modes, then read typed results with
-`pubnub_<feature>_result_*` accessors. **Release each future exactly once** with
-`pubnub_future_release` — results are valid only until release, and on embedded
-targets a leaked future exhausts the fixed slot pool.
-
-### Cooperative polling (no threads, no sync primitives)
-
-```c
-pubnub_future_t fut = pubnub_publish(ctx, &(pubnub_publish_opts_t){
-    .channel = "my-channel",
-    .message = "\"hello world\"",
-});
-while (!pubnub_future_is_ready(fut)) {
-    pubnub_process(ctx);               /* drive I/O one non-blocking tick */
-}
-if (PUBNUB_OK == pubnub_future_status(fut)) {
-    pubnub_timetoken_t tt = pubnub_publish_result_timetoken(fut);
-}
-pubnub_future_release(fut);
-```
-
-### Blocking await (needs platform sync primitives)
-
-```c
-pubnub_future_t fut = pubnub_publish(ctx, &(pubnub_publish_opts_t){
-    .channel = "my-channel", .message = "\"hello world\"" });
-
-if (PUBNUB_OK == pubnub_await(fut)) {
-    pubnub_timetoken_t tt = pubnub_publish_result_timetoken(fut);
-}
-pubnub_future_release(fut);
-```
-
-### Async callback
-
-```c
-static void on_publish(pubnub_future_t fut, pubnub_res_t status, void* ud)
+static void on_status(const pubnub_subscribe_status_event_t* event, void* user_data)
 {
-    if (PUBNUB_OK == status) {
-        pubnub_timetoken_t tt = pubnub_publish_result_timetoken(fut);
-    }
-    pubnub_future_release(fut);         /* safe to release inside the callback */
-}
-
-pubnub_future_t fut = pubnub_publish(ctx, &(pubnub_publish_opts_t){
-    .channel = "my-channel", .message = "\"hello world\"" });
-pubnub_async(fut, on_publish, NULL);
-```
-
-The same three modes apply to `pubnub_here_now`, `pubnub_fetch_messages`,
-`pubnub_time`, and every other request-style API. In-flight requests can be
-cancelled with `pubnub_future_cancel`.
-
-## Subscribe
-
-Subscribe delivers events through listener callbacks rather than a future.
-Register a listener, create a subscription from an entity, and drive the event
-loop (via `pubnub_process` cooperatively, or a background thread when
-`PUBNUB_CFG_THREAD_SAFETY=ON`).
-
-```c
-static void on_message(const pubnub_subscribe_event_t* ev, void* ud)
-{
-    pubnub_context_t*          ctx = ud;
-    pubnub_subscribe_message_t msg;
-    if (PUBNUB_OK == pubnub_subscribe_event_message(ctx, ev, &msg)) {
-        /* msg.channel is a string view; msg.payload is a parsed JSON tree
-         * (see pubnub/json.h for value accessors). */
-        printf("%.*s received a message\n", (int)msg.channel.len, msg.channel.ptr);
+    if (PUBNUB_SUBSCRIBE_STATUS_CONNECTED == event->status) {
+        connected = 1;
     }
 }
 
-pubnub_subscribe_listener_t listener = { .on_message = on_message, .user_data = ctx };
-pubnub_add_listener(ctx, &listener);
+static void on_message(const pubnub_subscribe_event_t* event, void* user_data)
+{
+    pubnub_context_t*                ctx = (pubnub_context_t*)user_data;
+    pubnub_subscribe_message_event_t msg;
+    size_t                           len = 0;
 
-pubnub_entity_t       entity = pubnub_channel(ctx, "my-channel");
-pubnub_subscription_t sub    = pubnub_subscription_create(entity, NULL);
-pubnub_subscription_subscribe(sub);
+    pubnub_subscribe_event_message(ctx, event, &msg);
 
-/* Cooperative mode (PUBNUB_CFG_THREAD_SAFETY=OFF): you must pump the context
- * to drive I/O and deliver events. When PUBNUB_CFG_THREAD_SAFETY=ON, a
- * background thread does this for you and this loop is not needed — just keep
- * the program alive and do your own work. */
-for (;;) {
-    pubnub_process(ctx);
+    const char* text = pubnub_serialization(ctx)->value_as_string(msg.message, &len);
+
+    printf("%.*s\n", (int)len, text);
+    received = 1;
+}
+
+int main(void)
+{
+    pubnub_config_t cfg = pubnub_config_defaults();
+    cfg.publish_key     = "YOUR_PUBLISH_KEY";
+    cfg.subscribe_key   = "YOUR_SUBSCRIBE_KEY";
+    cfg.user_id         = "hello-world-user";
+
+    pubnub_context_t* ctx = pubnub_create(&cfg);
+
+    pubnub_subscribe_listener_t listener = {
+        .on_status  = on_status,
+        .on_message = on_message,
+        .user_data  = ctx,
+    };
+    pubnub_listener_handle_t handle = pubnub_add_listener(ctx, &listener);
+
+    pubnub_entity_t       channel      = pubnub_channel(ctx, "hello_world");
+    pubnub_subscription_t subscription = pubnub_subscription_create(channel, NULL);
+    pubnub_entity_destroy(channel);
+    pubnub_subscription_subscribe(subscription);
+
+    while (!connected) {
+        pubnub_process(ctx);
+        usleep(10000);
+    }
+
+    pubnub_future_t publish = pubnub_publish(
+        ctx,
+        &(pubnub_publish_opts_t){
+            .channel = "hello_world",
+            .message = "\"Hello world\"",
+        }
+    );
+    pubnub_await(publish);
+    pubnub_future_release(publish);
+
+    while (!received) {
+        pubnub_process(ctx);
+        usleep(10000);
+    }
+
+    pubnub_subscription_unsubscribe(subscription);
+    pubnub_subscription_destroy(subscription);
+    pubnub_remove_listener(ctx, handle);
+    pubnub_destroy(ctx);
+
+    return 0;
 }
 ```
 
-A single listener struct can handle messages, signals, presence, message
-actions, files, App Context changes, and connection-status events by setting the
-relevant `on_*` callback.
+> [!NOTE]
+> The example is shortened for readability:
+>
+> - It omits error checks. In production code, check every `pubnub_res_t` result and every
+>   returned handle (`pubnub_create`, `pubnub_add_listener`, `pubnub_channel`,
+>   `pubnub_subscription_create`), and bound the waiting loops with a timeout.
+> - It targets Linux and macOS. `usleep()` comes from `<unistd.h>`; on Windows, include
+>   `<windows.h>` and use `Sleep(10)` instead.
+>
+> For a complete version with error handling and cleanup on every path, see the
+> [getting started example](https://github.com/pubnub/c/blob/master/examples/getting_started/getting_started.c).
 
-## Capabilities
-
-| Feature | API |
-|---|---|
-| Publish | `pubnub_publish` (sync/async, GET/POST, store+TTL, metadata, raw JSON, compression, file messages) |
-| Subscribe | `pubnub_subscription_*`, listeners for message / signal / presence / message-action / file / App Context / status |
-| Presence | here-now, where-now, get/set state, heartbeat |
-| Message Persistence | fetch messages (with meta / actions / file / type / uuid), delete, message counts |
-| Channel Groups | add / remove channels, list channels, remove group |
-| Message Actions | add / get / remove reactions |
-| Signal | `pubnub_signal` |
-| Files | send / list / download / delete / URL / publish file message |
-| App Context | UUID & channel metadata, memberships, channel members (Objects v2) |
-| Access Manager | grant / parse / set / revoke v3 tokens |
-| Mobile Push | add / remove / list device channels, remove device (APNS2, FCM) |
-| Time | `pubnub_time` |
-| Crypto | AES-256-CBC (random IV) and legacy cryptors; transparent payload encryption |
-
-The machine-readable capability and platform matrix lives in
-[`.pubnub.yml`](.pubnub.yml).
-
-## Providers and profiles
-
-Select exactly one backend per provider family via CMake:
-
-| Family | Options | Default |
-|---|---|---|
-| transport | `curl`, `socket` | `curl` |
-| serialization | `cjson`, `jsmn` | `cjson` |
-| crypto | `openssl`, `mbedtls` | `openssl` |
-| allocator | `stdlib`, `arena` | `stdlib` |
-| platform | `posix`, `windows`, `freertos`, `zephyr` | *(set explicitly)* |
-| logger | `stdout`, `none` | `none` |
-
-Named profiles bundle sensible defaults and memory/latency budgets:
-
-- **full** — all features, hosted providers.
-- **minimal** — core messaging only.
-- **embedded** — core features, arena allocator, no-heap mode, tight buffers.
-
-TLS is **not** a provider — it is the compile-time toggle
-`PUBNUB_ENABLE_SECURE_TRANSPORT` (ON by default), which controls whether the
-selected transport compiles in its TLS stack.
-
-## Memory model
-
-- **Hosted (heap):** `stdlib` allocator, `pubnub_create`/`pubnub_destroy`.
-- **Embedded (no-heap):** `arena` allocator with preallocated per-context/request
-  pools, `pubnub_init`/`pubnub_deinit`, and `PUBNUB_CFG_NO_HEAP=ON`. The total
-  per-context memory budget is deterministic at compile time and sized for
-  `PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS` concurrent requests.
-
-## Thread-safety
-
-Separate contexts are always safe to use concurrently. Concurrent use of the
-**same** context requires external synchronization, or enable
-`PUBNUB_CFG_THREAD_SAFETY=ON` to run a background I/O thread with an internal
-per-context lock (completion callbacks and `pubnub_await` are then driven by that
-thread).
-
-## Repository layout
+### Run the example
 
 ```
-include/pubnub/            Public API headers (pubnub/pubnub.h is the umbrella)
-include/pubnub/providers/  Provider vtable contracts
-src/core/                  Platform-neutral core: context, futures, pipeline
-src/features/<feature>/    Feature modules (publish, subscribe, presence, ...)
-src/providers/<family>/    Provider backends (curl, socket, cjson, arena, ...)
-cmake/                     Profiles, feature/provider selection, toolchains
-tests/ , examples/         Test suite and runnable examples
+cmake -B build
+cmake --build build
+./build/hello_world
 ```
 
-## Versioning and license
+The terminal should show:
 
-Releases follow [Semantic Versioning](https://semver.org/); tags carry no `v`
-prefix (e.g. `1.0.0`). See [`CHANGELOG.md`](CHANGELOG.md) for release notes.
+```
+Hello world
+```
 
-This SDK is distributed under the PubNub Software Development Kit License
-Agreement — see [`LICENSE`](LICENSE).
+The SDK may also print its own log lines around this output.
 
-## Support
+Unsubscribe with `pubnub_subscription_unsubscribe()`, destroy the subscription with
+`pubnub_subscription_destroy()`, remove the listener with `pubnub_remove_listener()`, destroy the
+context with `pubnub_destroy()`, and release every returned `pubnub_future_t` exactly once with
+`pubnub_future_release()`.
 
-Direct all support questions to support@pubnub.com or visit the
-[PubNub support portal](https://support.pubnub.com/).
+For a complete application, see the [getting started guide](https://www.pubnub.com/docs/sdks/c).
+
+## Next steps
+
+| Task                                 | Documentation                                                                                 |
+|--------------------------------------|-----------------------------------------------------------------------------------------------|
+| Configure the client                 | [Configuration](https://www.pubnub.com/docs/sdks/c/api-reference/configuration)               |
+| Work with subscriptions and messages | [Publish & Subscribe](https://www.pubnub.com/docs/sdks/c/api-reference/publish-and-subscribe) |
+| Check channel occupancy              | [Presence](https://www.pubnub.com/docs/sdks/c/api-reference/presence)                         |
+| Read message history                 | [Message Persistence](https://www.pubnub.com/docs/sdks/c/api-reference/storage-and-playback)  |
+
+## Build with an AI coding assistant
+
+The [PubNub MCP server](https://www.pubnub.com/docs/ai/pubnub-mcp-server) gives an AI coding
+assistant access to PubNub SDK documentation and PubNub APIs. Connect the assistant to the hosted
+server at `https://mcp.pubnub.com`, or run `npx @pubnub/mcp@latest` locally.
+
+The [server repository](https://github.com/pubnub/pubnub-mcp-server) has setup steps for VS Code,
+Cursor, Claude Code, Claude Desktop, Codex, Gemini CLI, and OpenCode.
+
+## Before production
+
+Use [Access Manager](https://www.pubnub.com/docs/sdks/c/api-reference/access-manager) to grant each
+client the permissions it needs. Keep the secret key on your backend. Never include it in a
+distributed client.
+
+Keep `pubnub_context_t` alive for the required client lifetime. Clean up subscriptions with
+`pubnub_subscription_unsubscribe()` and `pubnub_subscription_destroy()`, remove listeners with
+`pubnub_remove_listener()`, destroy the context with `pubnub_destroy()`, and release every future
+exactly once with `pubnub_future_release()`.
+
+Live delivery through PubNub SDKs is at-most-once. A subscriber can miss messages while disconnected
+or if its buffer overflows. For longer-gap recovery,
+see [Message Persistence](https://www.pubnub.com/docs/sdks/c/api-reference/storage-and-playback).
+
+## Troubleshooting
+
+| Symptom                                                           | Check                                                                                                                                                                                                                                  |
+|-------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| CMake cannot configure the SDK dependencies                       | Use CMake 3.16+ and satisfy the dependencies required by the selected build profile. The first configure may require network access for FetchContent. See [C Environment Setup](https://www.pubnub.com/docs/sdks/c/environment-setup). |
+| A publish succeeds but no message appears                         | Check the message handler, subscription readiness, keyset, and channel name.                                                                                                                                                           |
+| A hosted build fails to compile or link networking or TLS support | Verify the networking/TLS dependencies for the selected platform and profile. See [C Platform Support](https://www.pubnub.com/docs/sdks/c/platform-support) and [Troubleshooting](https://www.pubnub.com/docs/sdks/c/troubleshooting). |
+| Extra clients or duplicate messages during development            | Do not create additional contexts, subscriptions, listeners, or futures without releasing their previous owners. Every subscription, listener, context, and future must follow its documented lifetime.                                |
+
+For setup help, see [troubleshooting](https://www.pubnub.com/docs/sdks/c/troubleshooting).
+Check [network status](https://status.pubnub.com/) for service incidents.
+
+## Releases
+
+Read the [changelog](https://www.pubnub.com/docs/sdks/c/changelog) before upgrading.
+
+Applications migrating from C-Core v7 should
+follow [Migrating from C-Core v7](https://www.pubnub.com/docs/sdks/c/migration-guides/migrating-from-c-core-v7).
+The new C SDK is a full rewrite rather than an incremental version upgrade.
+
+## Support and contributions
+
+For setup or account help, contact [PubNub Support](https://support.pubnub.com/).
+
+For a reproducible SDK bug, use [GitHub Issues](https://github.com/pubnub/c/issues). Include the SDK
+version, runtime, and a small reproduction with credentials removed.
+
+Build the affected CMake profile, run the repository test suite, and include tests for behavioral
+changes before opening a pull request.
+
+## License
+
+See
+the [PubNub Software Development Kit License Agreement](https://github.com/pubnub/c/blob/master/LICENSE).

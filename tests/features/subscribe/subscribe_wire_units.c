@@ -14,6 +14,8 @@
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* cmocka must come after the std headers. */
@@ -29,20 +31,12 @@
 /* Provided by the linked serialization provider. */
 extern pubnub_serialization_provider_t* pn_serialization_default(void);
 
-/* ================================================================== */
-/* Helpers                                                              */
-/* ================================================================== */
-
 static pubnub_http_request_t make_request(void)
 {
     pubnub_http_request_t req;
     memset(&req, 0, sizeof(req));
     return req;
 }
-
-/* ================================================================== */
-/* Tests: handshake builder                                            */
-/* ================================================================== */
 
 static void test_build_handshake_basic(void** state)
 {
@@ -169,10 +163,6 @@ static void test_build_handshake_with_heartbeat(void** state)
     assert_int_equal(1, found);
 }
 
-/* ================================================================== */
-/* Tests: receive builder                                              */
-/* ================================================================== */
-
 static void test_build_receive_with_cursor(void** state)
 {
     (void)state;
@@ -246,10 +236,6 @@ static void test_build_receive_zero_region_omits_tr(void** state)
     }
 }
 
-/* ================================================================== */
-/* Tests: null/invalid inputs                                          */
-/* ================================================================== */
-
 static void test_build_handshake_null_request(void** state)
 {
     (void)state;
@@ -319,10 +305,6 @@ static void test_build_receive_empty_timetoken(void** state)
                      pn_subscribe_build_receive(&request, &inputs, &cursor));
 }
 
-/* ================================================================== */
-/* Tests: response validator                                           */
-/* ================================================================== */
-
 static void test_response_validator_valid_object(void** state)
 {
     (void)state;
@@ -379,10 +361,6 @@ static void test_response_validator_leading_whitespace(void** state)
         PUBNUB_OK, pn_subscribe_response_validator(body, sizeof(body) - 1, 200));
 }
 
-/* ================================================================== */
-/* Tests: response parser (requires real serialization provider)        */
-/* ================================================================== */
-
 static void test_parse_response_basic_envelope(void** state)
 {
     (void)state;
@@ -425,18 +403,18 @@ static void test_parse_response_with_messages(void** state)
     assert_int_equal(1, out.message_count);
 
     /* Verify first message fields. */
-    assert_int_equal(PUBNUB_SUBSCRIBE_MESSAGE, out.messages[0].event.type);
-    assert_int_equal(4, out.messages[0].event.channel.len);
-    assert_memory_equal(out.messages[0].event.channel.ptr, "chat", 4);
-    assert_non_null(out.messages[0].event.payload);
+    assert_int_equal(PUBNUB_SUBSCRIBE_MESSAGE, out.messages[0].type);
+    assert_int_equal(4, out.messages[0].channel.len);
+    assert_memory_equal(out.messages[0].channel.ptr, "chat", 4);
+    assert_non_null(out.messages[0].payload);
     size_t      msg_len = 0;
     const char* msg_str =
-        serial->value_as_string(out.messages[0].event.payload, &msg_len);
+        serial->value_as_string(out.messages[0].payload, &msg_len);
     assert_non_null(msg_str);
     assert_int_equal(5, msg_len);
     assert_memory_equal(msg_str, "hello", 5);
-    assert_int_equal(5, out.messages[0].event.publisher.len);
-    assert_memory_equal(out.messages[0].event.publisher.ptr, "user1", 5);
+    assert_int_equal(5, out.messages[0].publisher.len);
+    assert_memory_equal(out.messages[0].publisher.ptr, "user1", 5);
 
     serial->value_destroy(serial, out._tree);
 }
@@ -465,7 +443,7 @@ static void test_parse_response_all_event_fields(void** state)
     assert_int_equal(PUBNUB_OK, rc);
     assert_int_equal(1, out.message_count);
 
-    const pubnub_subscribe_event_t* ev = &out.messages[0].event;
+    const pubnub_subscribe_event_t* ev = &out.messages[0];
     assert_int_equal(PUBNUB_SUBSCRIBE_MESSAGE, ev->type);
     assert_int_equal(513, ev->flags);
     assert_int_equal(7, ev->channel.len);
@@ -504,7 +482,7 @@ static void parse_and_assert_type(const char*                     body,
 
     assert_int_equal(PUBNUB_OK, rc);
     assert_int_equal(1, out.message_count);
-    assert_int_equal(expected, out.messages[0].event.type);
+    assert_int_equal(expected, out.messages[0].type);
 
     serial->value_destroy(serial, out._tree);
 }
@@ -567,13 +545,15 @@ static void test_parse_response_missing_optional_fields(void** state)
     assert_int_equal(PUBNUB_OK, rc);
     assert_int_equal(1, out.message_count);
 
-    const pubnub_subscribe_event_t* ev = &out.messages[0].event;
+    const pubnub_subscribe_event_t* ev = &out.messages[0];
     assert_int_equal(PUBNUB_SUBSCRIBE_MESSAGE, ev->type);
     assert_int_equal(0, ev->flags);
     assert_int_equal(7, ev->channel.len);
     assert_memory_equal(ev->channel.ptr, "bare-ch", 7);
-    /* Absent optional views default to zero-length; user_metadata NULL. */
-    assert_int_equal(0, ev->subscription.len);
+    /* "b" absent: subscription falls back to the raw channel value. */
+    assert_int_equal(7, ev->subscription.len);
+    assert_memory_equal(ev->subscription.ptr, "bare-ch", 7);
+    /* Other absent optional views default to zero-length. */
     assert_int_equal(0, ev->publisher.len);
     assert_int_equal(0, ev->custom_message_type.len);
     assert_int_equal(0, ev->timetoken.len);
@@ -624,9 +604,9 @@ static void test_parse_response_multiple_messages(void** state)
 
     assert_int_equal(PUBNUB_OK, rc);
     assert_int_equal(3, out.message_count);
-    assert_memory_equal(out.messages[0].event.channel.ptr, "ch-a", 4);
-    assert_memory_equal(out.messages[1].event.channel.ptr, "ch-b", 4);
-    assert_memory_equal(out.messages[2].event.channel.ptr, "ch-c", 4);
+    assert_memory_equal(out.messages[0].channel.ptr, "ch-a", 4);
+    assert_memory_equal(out.messages[1].channel.ptr, "ch-b", 4);
+    assert_memory_equal(out.messages[2].channel.ptr, "ch-c", 4);
 
     serial->value_destroy(serial, out._tree);
 }
@@ -650,7 +630,7 @@ static void test_parse_response_channel_distinct_from_subscription(void** state)
     assert_int_equal(PUBNUB_OK, rc);
     assert_int_equal(1, out.message_count);
 
-    const pubnub_subscribe_event_t* ev = &out.messages[0].event;
+    const pubnub_subscribe_event_t* ev = &out.messages[0];
     assert_int_equal(10, ev->channel.len);
     assert_memory_equal(ev->channel.ptr, "room.lobby", 10);
     assert_int_equal(6, ev->subscription.len);
@@ -667,8 +647,8 @@ static void test_parse_response_presence_channel(void** state)
     pubnub_serialization_provider_t* serial = pn_serialization_default();
     assert_non_null(serial);
 
-    /* Channel ending with -pnpres should override type to PRESENCE
-     * and strip the suffix from the channel view. */
+    /* Presence channel: type becomes PRESENCE and the channel view loses
+     * the suffix; with "b" absent, subscription keeps the raw channel. */
     const char body[] = "{\"t\":{\"t\":\"17001234567890125\",\"r\":0},"
                         "\"m\":[{\"c\":\"chat-pnpres\",\"d\":\"join\"}]}";
 
@@ -678,10 +658,64 @@ static void test_parse_response_presence_channel(void** state)
 
     assert_int_equal(PUBNUB_OK, rc);
     assert_int_equal(1, out.message_count);
-    assert_int_equal(PUBNUB_SUBSCRIBE_PRESENCE, out.messages[0].event.type);
+    assert_int_equal(PUBNUB_SUBSCRIBE_PRESENCE, out.messages[0].type);
     /* Channel is "chat" with -pnpres stripped. */
-    assert_int_equal(4, out.messages[0].event.channel.len);
-    assert_memory_equal(out.messages[0].event.channel.ptr, "chat", 4);
+    assert_int_equal(4, out.messages[0].channel.len);
+    assert_memory_equal(out.messages[0].channel.ptr, "chat", 4);
+    /* Subscription keeps the raw "chat-pnpres" (b<-c fallback, no strip). */
+    assert_int_equal(11, out.messages[0].subscription.len);
+    assert_memory_equal(out.messages[0].subscription.ptr, "chat-pnpres", 11);
+
+    serial->value_destroy(serial, out._tree);
+}
+
+/* Presence event with an explicit wildcard "b" keeps the raw subscription
+ * (including -pnpres) while the channel view is narrowed to its base. */
+static void test_parse_response_presence_subscription_raw(void** state)
+{
+    (void)state;
+    pubnub_serialization_provider_t* serial = pn_serialization_default();
+    assert_non_null(serial);
+
+    const char body[] = "{\"t\":{\"t\":\"17001234567890126\",\"r\":0},"
+                        "\"m\":[{\"c\":\"room-pnpres\",\"b\":\"room.*-pnpres\","
+                        "\"d\":\"join\"}]}";
+
+    pn_subscribe_parsed_response_t out = {0};
+    pubnub_res_t                   rc  = pn_subscribe_parse_response(
+        serial, (const uint8_t*)body, strlen(body), &out);
+
+    assert_int_equal(PUBNUB_OK, rc);
+    assert_int_equal(1, out.message_count);
+    assert_int_equal(PUBNUB_SUBSCRIBE_PRESENCE, out.messages[0].type);
+    assert_int_equal(4, out.messages[0].channel.len);
+    assert_memory_equal(out.messages[0].channel.ptr, "room", 4);
+    assert_int_equal(13, out.messages[0].subscription.len);
+    assert_memory_equal(out.messages[0].subscription.ptr, "room.*-pnpres", 13);
+
+    serial->value_destroy(serial, out._tree);
+}
+
+/* An exact-length "-pnpres" channel (no base) is NOT treated as a presence
+ * suffix: the base must be non-empty (len > 7). */
+static void test_parse_response_bare_pnpres_not_stripped(void** state)
+{
+    (void)state;
+    pubnub_serialization_provider_t* serial = pn_serialization_default();
+    assert_non_null(serial);
+
+    const char body[] = "{\"t\":{\"t\":\"17001234567890127\",\"r\":0},"
+                        "\"m\":[{\"c\":\"-pnpres\",\"d\":\"x\"}]}";
+
+    pn_subscribe_parsed_response_t out = {0};
+    pubnub_res_t                   rc  = pn_subscribe_parse_response(
+        serial, (const uint8_t*)body, strlen(body), &out);
+
+    assert_int_equal(PUBNUB_OK, rc);
+    assert_int_equal(1, out.message_count);
+    assert_int_equal(PUBNUB_SUBSCRIBE_MESSAGE, out.messages[0].type);
+    assert_int_equal(7, out.messages[0].channel.len);
+    assert_memory_equal(out.messages[0].channel.ptr, "-pnpres", 7);
 
     serial->value_destroy(serial, out._tree);
 }
@@ -812,7 +846,374 @@ static void test_parse_response_null_out(void** state)
     assert_int_equal(PUBNUB_ERR_INVALID_ARGUMENT, rc);
 }
 
-/* ================================================================== */
+/* A message without a usable "c" marks the whole batch malformed: PUBNUB_OK,
+ * no messages, malformed set, cursor kept, tree still returned to destroy. */
+static void test_parse_response_missing_channel_marks_malformed(void** state)
+{
+    (void)state;
+    pubnub_serialization_provider_t* serial = pn_serialization_default();
+    assert_non_null(serial);
+
+    const char body[] = "{\"t\":{\"t\":\"17001234567890400\",\"r\":2},"
+                        "\"m\":[{\"d\":\"x\"}]}";
+
+    pn_subscribe_parsed_response_t out = {0};
+    pubnub_res_t                   rc  = pn_subscribe_parse_response(
+        serial, (const uint8_t*)body, strlen(body), &out);
+
+    assert_int_equal(PUBNUB_OK, rc);
+    assert_int_equal(0, out.message_count);
+    assert_int_equal(1, out.malformed);
+    assert_non_null(out._tree);
+    /* Cursor still extracted so the next request steps over the batch. */
+    assert_int_equal(17, out.cursor.timetoken_len);
+    assert_memory_equal(out.cursor.timetoken, "17001234567890400", 17);
+    assert_int_equal(2, out.cursor.region);
+
+    serial->value_destroy(serial, out._tree);
+}
+
+/* One bad message between good ones drops the whole batch (whole-bulk
+ * drop): no event survives, only the cursor. */
+static void test_parse_response_good_bad_good_drops_all(void** state)
+{
+    (void)state;
+    pubnub_serialization_provider_t* serial = pn_serialization_default();
+    assert_non_null(serial);
+
+    const char body[] = "{\"t\":{\"t\":\"17001234567890401\",\"r\":0},"
+                        "\"m\":[{\"c\":\"ch-a\",\"d\":\"a\"},"
+                        "{\"d\":\"b\"},"
+                        "{\"c\":\"ch-c\",\"d\":\"c\"}]}";
+
+    pn_subscribe_parsed_response_t out = {0};
+    pubnub_res_t                   rc  = pn_subscribe_parse_response(
+        serial, (const uint8_t*)body, strlen(body), &out);
+
+    assert_int_equal(PUBNUB_OK, rc);
+    assert_int_equal(0, out.message_count);
+    assert_int_equal(1, out.malformed);
+    assert_int_equal(17, out.cursor.timetoken_len);
+
+    serial->value_destroy(serial, out._tree);
+}
+
+/* An empty-string "c" cannot route and is treated as malformed. */
+static void test_parse_response_empty_channel_marks_malformed(void** state)
+{
+    (void)state;
+    pubnub_serialization_provider_t* serial = pn_serialization_default();
+    assert_non_null(serial);
+
+    const char body[] = "{\"t\":{\"t\":\"17001234567890402\",\"r\":0},"
+                        "\"m\":[{\"c\":\"\",\"d\":\"x\"}]}";
+
+    pn_subscribe_parsed_response_t out = {0};
+    pubnub_res_t                   rc  = pn_subscribe_parse_response(
+        serial, (const uint8_t*)body, strlen(body), &out);
+
+    assert_int_equal(PUBNUB_OK, rc);
+    assert_int_equal(0, out.message_count);
+    assert_int_equal(1, out.malformed);
+
+    serial->value_destroy(serial, out._tree);
+}
+
+/* A non-string "c" (number) cannot be read as a name — malformed. */
+static void test_parse_response_numeric_channel_marks_malformed(void** state)
+{
+    (void)state;
+    pubnub_serialization_provider_t* serial = pn_serialization_default();
+    assert_non_null(serial);
+
+    const char body[] = "{\"t\":{\"t\":\"17001234567890403\",\"r\":0},"
+                        "\"m\":[{\"c\":42,\"d\":\"x\"}]}";
+
+    pn_subscribe_parsed_response_t out = {0};
+    pubnub_res_t                   rc  = pn_subscribe_parse_response(
+        serial, (const uint8_t*)body, strlen(body), &out);
+
+    assert_int_equal(PUBNUB_OK, rc);
+    assert_int_equal(0, out.message_count);
+    assert_int_equal(1, out.malformed);
+
+    serial->value_destroy(serial, out._tree);
+}
+
+/* A non-string "c" (object) is malformed. */
+static void test_parse_response_object_channel_marks_malformed(void** state)
+{
+    (void)state;
+    pubnub_serialization_provider_t* serial = pn_serialization_default();
+    assert_non_null(serial);
+
+    const char body[] = "{\"t\":{\"t\":\"17001234567890404\",\"r\":0},"
+                        "\"m\":[{\"c\":{\"x\":1},\"d\":\"x\"}]}";
+
+    pn_subscribe_parsed_response_t out = {0};
+    pubnub_res_t                   rc  = pn_subscribe_parse_response(
+        serial, (const uint8_t*)body, strlen(body), &out);
+
+    assert_int_equal(PUBNUB_OK, rc);
+    assert_int_equal(0, out.message_count);
+    assert_int_equal(1, out.malformed);
+
+    serial->value_destroy(serial, out._tree);
+}
+
+/* A JSON null "c" is malformed. */
+static void test_parse_response_null_channel_marks_malformed(void** state)
+{
+    (void)state;
+    pubnub_serialization_provider_t* serial = pn_serialization_default();
+    assert_non_null(serial);
+
+    const char body[] = "{\"t\":{\"t\":\"17001234567890405\",\"r\":0},"
+                        "\"m\":[{\"c\":null,\"d\":\"x\"}]}";
+
+    pn_subscribe_parsed_response_t out = {0};
+    pubnub_res_t                   rc  = pn_subscribe_parse_response(
+        serial, (const uint8_t*)body, strlen(body), &out);
+
+    assert_int_equal(PUBNUB_OK, rc);
+    assert_int_equal(0, out.message_count);
+    assert_int_equal(1, out.malformed);
+
+    serial->value_destroy(serial, out._tree);
+}
+
+/* A non-object element in "m" (number) is malformed. */
+static void test_parse_response_numeric_element_marks_malformed(void** state)
+{
+    (void)state;
+    pubnub_serialization_provider_t* serial = pn_serialization_default();
+    assert_non_null(serial);
+
+    const char body[] = "{\"t\":{\"t\":\"17001234567890406\",\"r\":0},"
+                        "\"m\":[42]}";
+
+    pn_subscribe_parsed_response_t out = {0};
+    pubnub_res_t                   rc  = pn_subscribe_parse_response(
+        serial, (const uint8_t*)body, strlen(body), &out);
+
+    assert_int_equal(PUBNUB_OK, rc);
+    assert_int_equal(0, out.message_count);
+    assert_int_equal(1, out.malformed);
+
+    serial->value_destroy(serial, out._tree);
+}
+
+/* A non-object element in "m" (array) is malformed. */
+static void test_parse_response_array_element_marks_malformed(void** state)
+{
+    (void)state;
+    pubnub_serialization_provider_t* serial = pn_serialization_default();
+    assert_non_null(serial);
+
+    const char body[] = "{\"t\":{\"t\":\"17001234567890407\",\"r\":0},"
+                        "\"m\":[[1,2,3]]}";
+
+    pn_subscribe_parsed_response_t out = {0};
+    pubnub_res_t                   rc  = pn_subscribe_parse_response(
+        serial, (const uint8_t*)body, strlen(body), &out);
+
+    assert_int_equal(PUBNUB_OK, rc);
+    assert_int_equal(0, out.message_count);
+    assert_int_equal(1, out.malformed);
+
+    serial->value_destroy(serial, out._tree);
+}
+
+/* A non-object element in "m" (string) is malformed. */
+static void test_parse_response_string_element_marks_malformed(void** state)
+{
+    (void)state;
+    pubnub_serialization_provider_t* serial = pn_serialization_default();
+    assert_non_null(serial);
+
+    const char body[] = "{\"t\":{\"t\":\"17001234567890408\",\"r\":0},"
+                        "\"m\":[\"not-an-object\"]}";
+
+    pn_subscribe_parsed_response_t out = {0};
+    pubnub_res_t                   rc  = pn_subscribe_parse_response(
+        serial, (const uint8_t*)body, strlen(body), &out);
+
+    assert_int_equal(PUBNUB_OK, rc);
+    assert_int_equal(0, out.message_count);
+    assert_int_equal(1, out.malformed);
+
+    serial->value_destroy(serial, out._tree);
+}
+
+/* A JSON null element in "m" is malformed. */
+static void test_parse_response_null_element_marks_malformed(void** state)
+{
+    (void)state;
+    pubnub_serialization_provider_t* serial = pn_serialization_default();
+    assert_non_null(serial);
+
+    const char body[] = "{\"t\":{\"t\":\"17001234567890409\",\"r\":0},"
+                        "\"m\":[null]}";
+
+    pn_subscribe_parsed_response_t out = {0};
+    pubnub_res_t                   rc  = pn_subscribe_parse_response(
+        serial, (const uint8_t*)body, strlen(body), &out);
+
+    assert_int_equal(PUBNUB_OK, rc);
+    assert_int_equal(0, out.message_count);
+    assert_int_equal(1, out.malformed);
+
+    serial->value_destroy(serial, out._tree);
+}
+
+/* A present "b" with a missing "c" is still malformed — the channel is
+ * what routes, not the subscription match. */
+static void test_parse_response_b_present_c_missing_marks_malformed(void** state)
+{
+    (void)state;
+    pubnub_serialization_provider_t* serial = pn_serialization_default();
+    assert_non_null(serial);
+
+    const char body[] = "{\"t\":{\"t\":\"17001234567890410\",\"r\":0},"
+                        "\"m\":[{\"b\":\"the-group\",\"d\":\"x\"}]}";
+
+    pn_subscribe_parsed_response_t out = {0};
+    pubnub_res_t                   rc  = pn_subscribe_parse_response(
+        serial, (const uint8_t*)body, strlen(body), &out);
+
+    assert_int_equal(PUBNUB_OK, rc);
+    assert_int_equal(0, out.message_count);
+    assert_int_equal(1, out.malformed);
+
+    serial->value_destroy(serial, out._tree);
+}
+
+/* An empty-string "b" with a valid "c" is NOT malformed: the subscription
+ * falls back to the raw channel and the message is kept. */
+static void test_parse_response_empty_b_falls_back_to_channel(void** state)
+{
+    (void)state;
+    pubnub_serialization_provider_t* serial = pn_serialization_default();
+    assert_non_null(serial);
+
+    const char body[] = "{\"t\":{\"t\":\"17001234567890411\",\"r\":0},"
+                        "\"m\":[{\"c\":\"room\",\"b\":\"\",\"d\":\"x\"}]}";
+
+    pn_subscribe_parsed_response_t out = {0};
+    pubnub_res_t                   rc  = pn_subscribe_parse_response(
+        serial, (const uint8_t*)body, strlen(body), &out);
+
+    assert_int_equal(PUBNUB_OK, rc);
+    assert_int_equal(0, out.malformed);
+    assert_int_equal(1, out.message_count);
+    assert_int_equal(4, out.messages[0].channel.len);
+    assert_memory_equal(out.messages[0].channel.ptr, "room", 4);
+    assert_int_equal(4, out.messages[0].subscription.len);
+    assert_memory_equal(out.messages[0].subscription.ptr, "room", 4);
+
+    serial->value_destroy(serial, out._tree);
+}
+
+/* A presence channel "x-pnpres" with no "b": channel narrows to "x",
+ * subscription keeps the raw suffixed value. */
+static void test_parse_response_presence_no_b_keeps_raw(void** state)
+{
+    (void)state;
+    pubnub_serialization_provider_t* serial = pn_serialization_default();
+    assert_non_null(serial);
+
+    const char body[] = "{\"t\":{\"t\":\"17001234567890412\",\"r\":0},"
+                        "\"m\":[{\"c\":\"x-pnpres\",\"d\":\"join\"}]}";
+
+    pn_subscribe_parsed_response_t out = {0};
+    pubnub_res_t                   rc  = pn_subscribe_parse_response(
+        serial, (const uint8_t*)body, strlen(body), &out);
+
+    assert_int_equal(PUBNUB_OK, rc);
+    assert_int_equal(0, out.malformed);
+    assert_int_equal(1, out.message_count);
+    assert_int_equal(PUBNUB_SUBSCRIBE_PRESENCE, out.messages[0].type);
+    assert_int_equal(1, out.messages[0].channel.len);
+    assert_memory_equal(out.messages[0].channel.ptr, "x", 1);
+    assert_int_equal(8, out.messages[0].subscription.len);
+    assert_memory_equal(out.messages[0].subscription.ptr, "x-pnpres", 8);
+
+    serial->value_destroy(serial, out._tree);
+}
+
+/* Build a batch body with `good` well-formed messages, optionally
+ * followed by one channel-less (bad) message. Caller frees. */
+static char* build_batch_body(size_t good, int trailing_bad)
+{
+    size_t cap = 128 + good * 24;
+    char*  buf = (char*)malloc(cap);
+    size_t off;
+    size_t i;
+
+    assert_non_null(buf);
+    off = (size_t)snprintf(
+        buf, cap, "{\"t\":{\"t\":\"17009999999999999\",\"r\":0},\"m\":[");
+    for (i = 0; i < good; ++i) {
+        off += (size_t)snprintf(buf + off,
+                                cap - off,
+                                "%s{\"c\":\"ch\",\"d\":\"x\"}",
+                                (0 == i) ? "" : ",");
+    }
+    if (trailing_bad) {
+        off += (size_t)snprintf(
+            buf + off, cap - off, "%s{\"d\":\"x\"}", (0 == good) ? "" : ",");
+    }
+    snprintf(buf + off, cap - off, "]}");
+    return buf;
+}
+
+/* Exactly MAX_BATCH_SIZE good messages parse fully with no truncation and
+ * no malformed flag. */
+static void test_parse_response_full_batch_no_truncation(void** state)
+{
+    (void)state;
+    pubnub_serialization_provider_t* serial = pn_serialization_default();
+    assert_non_null(serial);
+
+    char* body = build_batch_body(PUBNUB_CFG_SUBSCRIBE_MAX_BATCH_SIZE, 0);
+
+    pn_subscribe_parsed_response_t out = {0};
+    pubnub_res_t                   rc  = pn_subscribe_parse_response(
+        serial, (const uint8_t*)body, strlen(body), &out);
+
+    assert_int_equal(PUBNUB_OK, rc);
+    assert_int_equal(0, out.malformed);
+    assert_int_equal(0, out.truncated);
+    assert_int_equal(PUBNUB_CFG_SUBSCRIBE_MAX_BATCH_SIZE, out.message_count);
+
+    serial->value_destroy(serial, out._tree);
+    free(body);
+}
+
+/* A bad element located ONLY beyond the batch cap is never inspected:
+ * the response truncates (malformed stays 0, count == cap). */
+static void test_parse_response_bad_beyond_cap_not_inspected(void** state)
+{
+    (void)state;
+    pubnub_serialization_provider_t* serial = pn_serialization_default();
+    assert_non_null(serial);
+
+    /* cap good messages + 1 trailing bad == cap+1 elements; the bad one
+     * sits at index cap, outside [0,cap). */
+    char* body = build_batch_body(PUBNUB_CFG_SUBSCRIBE_MAX_BATCH_SIZE, 1);
+
+    pn_subscribe_parsed_response_t out = {0};
+    pubnub_res_t                   rc  = pn_subscribe_parse_response(
+        serial, (const uint8_t*)body, strlen(body), &out);
+
+    assert_int_equal(PUBNUB_OK, rc);
+    assert_int_equal(0, out.malformed);
+    assert_int_equal(1, out.truncated);
+    assert_int_equal(PUBNUB_CFG_SUBSCRIBE_MAX_BATCH_SIZE, out.message_count);
+
+    serial->value_destroy(serial, out._tree);
+    free(body);
+}
 
 int main(void)
 {
@@ -854,6 +1255,8 @@ int main(void)
         cmocka_unit_test(test_parse_response_multiple_messages),
         cmocka_unit_test(test_parse_response_channel_distinct_from_subscription),
         cmocka_unit_test(test_parse_response_presence_channel),
+        cmocka_unit_test(test_parse_response_presence_subscription_raw),
+        cmocka_unit_test(test_parse_response_bare_pnpres_not_stripped),
         cmocka_unit_test(test_parse_response_malformed_body),
         cmocka_unit_test(test_parse_response_missing_cursor),
         cmocka_unit_test(test_parse_response_rejects_non_digit_cursor),
@@ -862,6 +1265,22 @@ int main(void)
         cmocka_unit_test(test_parse_response_null_serial),
         cmocka_unit_test(test_parse_response_null_body),
         cmocka_unit_test(test_parse_response_null_out),
+        /* Malformed-batch handling (whole-bulk drop). */
+        cmocka_unit_test(test_parse_response_missing_channel_marks_malformed),
+        cmocka_unit_test(test_parse_response_good_bad_good_drops_all),
+        cmocka_unit_test(test_parse_response_empty_channel_marks_malformed),
+        cmocka_unit_test(test_parse_response_numeric_channel_marks_malformed),
+        cmocka_unit_test(test_parse_response_object_channel_marks_malformed),
+        cmocka_unit_test(test_parse_response_null_channel_marks_malformed),
+        cmocka_unit_test(test_parse_response_numeric_element_marks_malformed),
+        cmocka_unit_test(test_parse_response_array_element_marks_malformed),
+        cmocka_unit_test(test_parse_response_string_element_marks_malformed),
+        cmocka_unit_test(test_parse_response_null_element_marks_malformed),
+        cmocka_unit_test(test_parse_response_b_present_c_missing_marks_malformed),
+        cmocka_unit_test(test_parse_response_empty_b_falls_back_to_channel),
+        cmocka_unit_test(test_parse_response_presence_no_b_keeps_raw),
+        cmocka_unit_test(test_parse_response_full_batch_no_truncation),
+        cmocka_unit_test(test_parse_response_bad_beyond_cap_not_inspected),
     };
 
     return cmocka_run_group_tests(tests, NULL, NULL);

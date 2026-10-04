@@ -358,6 +358,179 @@ static void handshake_success_applies_cursor(void** state)
     pubnub_destroy(ctx);
 }
 
+/* Count delivered messages so a dropped (malformed) batch is observable
+ * as zero listener invocations. */
+typedef struct {
+    int message_count;
+} effects_cb_record_t;
+
+static void effects_cb_on_message(const pubnub_subscribe_event_t* event, void* ud)
+{
+    effects_cb_record_t* rec = (effects_cb_record_t*)ud;
+    (void)event;
+    rec->message_count++;
+}
+
+/** Install a single global listener that counts message deliveries. */
+static void install_counting_listener(pn_subscribe_manager_t* mgr,
+                                      effects_cb_record_t*    rec)
+{
+    memset(&mgr->listeners[0], 0, sizeof(mgr->listeners[0]));
+    mgr->listeners[0].active           = 1;
+    mgr->listeners[0].bound_slot_index = UINT16_MAX;
+    mgr->listeners[0].bound_set_index  = UINT16_MAX;
+    mgr->listeners[0].on_message       = effects_cb_on_message;
+    mgr->listeners[0].user_data        = rec;
+    mgr->listener_count                = 1;
+}
+
+/** Point the manager's active slot at a fresh ready body for reuse. */
+static void rearm_slot_body(pubnub_context_t*       ctx,
+                            pn_subscribe_manager_t* mgr,
+                            const char*             body,
+                            size_t                  body_len)
+{
+    pn_request_pool_t* pool = pn_context_request_pool(ctx);
+    pn_request_t*      slot = pn_request_pool_get(pool, mgr->active_slot_id);
+
+    assert_non_null(slot);
+    slot->state                  = PN_REQUEST_COMPLETE;
+    slot->http_response.body     = (uint8_t*)body;
+    slot->http_response.body_len = body_len;
+    PUBNUB_ATOMIC_STORE_U8(&slot->ready, 1);
+}
+
+/** @return 1 if the event queue holds a RECEIVE_FAILURE event. */
+static int queue_has_receive_failure(pn_subscribe_manager_t* mgr)
+{
+    pn_subscribe_ee_event_t evt;
+    int                     found = 0;
+
+    while (pn_subscribe_event_queue_pop(&mgr->event_queue, &evt)) {
+        if (PN_SUB_EVENT_RECEIVE_FAILURE == evt.type) {
+            found = 1;
+        }
+    }
+    return found;
+}
+
+/* A batch whose only message lacks a channel is dropped: no listener
+ * fires, but the cursor still advances past it (the hard safety
+ * invariant — otherwise the batch replays forever). */
+static void malformed_batch_drops_all_and_advances_cursor(void** state)
+{
+    (void)state;
+    pubnub_context_t* ctx = create_ctx();
+    assert_non_null(ctx);
+
+    pn_subscribe_manager_t* mgr =
+        pn_subscribe_manager_create(ctx, pn_test_allocator());
+    assert_non_null(mgr);
+
+    effects_cb_record_t rec = {0};
+    install_counting_listener(mgr, &rec);
+
+    mgr->ee_state = PN_SUBSCRIBE_STATE_RECEIVING;
+    seed_cursor(mgr, "17001234567890123", 42);
+
+    static const char body[] =
+        "{\"t\":{\"t\":\"17009999999999999\",\"r\":7},\"m\":[{\"d\":\"x\"}]}";
+    attach_ready_slot(ctx, mgr, body, sizeof(body) - 1);
+
+    emit_messages(mgr);
+
+    assert_int_equal(0, rec.message_count);
+    assert_int_equal(17, mgr->cursor.timetoken_len);
+    assert_memory_equal("17009999999999999", mgr->cursor.timetoken, 17);
+    assert_int_equal(7, mgr->cursor.region);
+    assert_int_equal(1, mgr->consecutive_malformed);
+    assert_int_equal(0, queue_has_receive_failure(mgr));
+
+    pn_subscribe_manager_cleanup(mgr, pn_test_allocator());
+    pubnub_destroy(ctx);
+}
+
+/* A clean batch between malformed ones resets the run counter, so the
+ * failure escalation never fires. */
+static void clean_batch_resets_malformed_counter(void** state)
+{
+    (void)state;
+    pubnub_context_t* ctx = create_ctx();
+    assert_non_null(ctx);
+
+    pn_subscribe_manager_t* mgr =
+        pn_subscribe_manager_create(ctx, pn_test_allocator());
+    assert_non_null(mgr);
+
+    effects_cb_record_t rec = {0};
+    install_counting_listener(mgr, &rec);
+
+    mgr->ee_state = PN_SUBSCRIBE_STATE_RECEIVING;
+    seed_cursor(mgr, "17001234567890123", 42);
+
+    static const char bad[] =
+        "{\"t\":{\"t\":\"17009999999999999\",\"r\":7},\"m\":[{\"d\":\"x\"}]}";
+    static const char good[] = "{\"t\":{\"t\":\"17009999999999998\",\"r\":7},"
+                               "\"m\":[{\"c\":\"ch\",\"d\":\"x\"}]}";
+    uint8_t           k;
+
+    attach_ready_slot(ctx, mgr, bad, sizeof(bad) - 1);
+
+    /* K-1 malformed batches: still below the ceiling, no failure. */
+    for (k = 0; k + 1 < PN_SUBSCRIBE_MALFORMED_CEILING; ++k) {
+        rearm_slot_body(ctx, mgr, bad, sizeof(bad) - 1);
+        emit_messages(mgr);
+    }
+    assert_int_equal(PN_SUBSCRIBE_MALFORMED_CEILING - 1, mgr->consecutive_malformed);
+
+    rearm_slot_body(ctx, mgr, good, sizeof(good) - 1);
+    emit_messages(mgr);
+
+    assert_int_equal(0, mgr->consecutive_malformed);
+    assert_int_equal(1, rec.message_count);
+    assert_int_equal(0, queue_has_receive_failure(mgr));
+
+    pn_subscribe_manager_cleanup(mgr, pn_test_allocator());
+    pubnub_destroy(ctx);
+}
+
+/* The K-th consecutive malformed batch escalates: a RECEIVE_FAILURE event
+ * is pushed and the run counter resets. */
+static void malformed_run_escalates_to_receive_failure(void** state)
+{
+    (void)state;
+    pubnub_context_t* ctx = create_ctx();
+    assert_non_null(ctx);
+
+    pn_subscribe_manager_t* mgr =
+        pn_subscribe_manager_create(ctx, pn_test_allocator());
+    assert_non_null(mgr);
+
+    effects_cb_record_t rec = {0};
+    install_counting_listener(mgr, &rec);
+
+    mgr->ee_state = PN_SUBSCRIBE_STATE_RECEIVING;
+    seed_cursor(mgr, "17001234567890123", 42);
+
+    static const char bad[] =
+        "{\"t\":{\"t\":\"17009999999999999\",\"r\":7},\"m\":[{\"d\":\"x\"}]}";
+    uint8_t k;
+
+    attach_ready_slot(ctx, mgr, bad, sizeof(bad) - 1);
+
+    for (k = 0; k < PN_SUBSCRIBE_MALFORMED_CEILING; ++k) {
+        rearm_slot_body(ctx, mgr, bad, sizeof(bad) - 1);
+        emit_messages(mgr);
+    }
+
+    assert_int_equal(0, rec.message_count);
+    assert_int_equal(0, mgr->consecutive_malformed);
+    assert_int_equal(1, queue_has_receive_failure(mgr));
+
+    pn_subscribe_manager_cleanup(mgr, pn_test_allocator());
+    pubnub_destroy(ctx);
+}
+
 #endif /* !PUBNUB_CFG_NO_HEAP */
 
 int main(void)
@@ -370,6 +543,9 @@ int main(void)
         cmocka_unit_test(raw_cursor_fallback_advances_cursor),
         cmocka_unit_test(well_formed_receive_advances_cursor),
         cmocka_unit_test(handshake_success_applies_cursor),
+        cmocka_unit_test(malformed_batch_drops_all_and_advances_cursor),
+        cmocka_unit_test(clean_batch_resets_malformed_counter),
+        cmocka_unit_test(malformed_run_escalates_to_receive_failure),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 #else
