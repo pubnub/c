@@ -1,4 +1,4 @@
-![PubNub C SDK header: a publish call sends Hello world! to the hello_world channel](assets/c-header.png)
+<img width="1920" height="600" alt="PubNub C SDK header: a publish call sends Hello world! to the hello_world channel" src="https://github.com/user-attachments/assets/0971165c-96ab-47b2-836c-a83bdcbdcd2b" />
 
 # PubNub C SDK
 
