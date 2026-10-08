@@ -1402,6 +1402,8 @@ static void test_emit_message_match_is_race_free(void** state)
         assert_int_equal(before + 1, s_msg_race_rec.message_count);
     }
 
+    pn_subscription_set_destroy(&mgr, set_idx);
+
     alloc = pn_context_allocator(ctx);
     for (i = 0; i < PUBNUB_CFG_MAX_SUBSCRIBE_CHANNELS; ++i) {
         if (mgr.entries[i].occupied) {
