@@ -19,6 +19,16 @@ PUBNUB_STATIC_ASSERT(PUBNUB_CFG_HTTP_MAX_PATH_SEGMENTS >= 5,
 PUBNUB_STATIC_ASSERT(PUBNUB_CFG_HTTP_SCRATCH_SIZE >= 128,
                      "Middleware query params require >= 128B scratch");
 
+/** Outcome of parsing one element of the "m" array. */
+typedef enum pn_parse_msg_result {
+    /** Element parsed; the event is populated. */
+    PN_PARSE_MSG_OK = 0,
+    /** No usable channel; the caller drops the whole batch. */
+    PN_PARSE_MSG_REJECT,
+    /** Unknown or undecodable event type; only this element is skipped. */
+    PN_PARSE_MSG_SKIP
+} pn_parse_msg_result_t;
+
 /**
  * @brief Populate shared path segments and query parameters for both
  *        handshake and receive requests.
@@ -199,20 +209,66 @@ static pubnub_res_t parse_cursor_object(pubnub_serialization_provider_t* serial,
 }
 
 /**
+ * @brief Decode the "e" event-type node, logging unknown values at debug.
+ *
+ * A non-integer node is logged as a fixed literal (server bytes are never
+ * echoed); an integer outside the known range is logged numerically.
+ *
+ * @param serial   Serialization provider.
+ * @param log      Logger provider; may be NULL.
+ * @param e_node   The "e" JSON node (non-NULL).
+ * @param out_type Decoded type; written only when the function returns 1.
+ * @retval 1 Known event type decoded.
+ * @retval 0 Unknown event type; the element should be skipped.
+ */
+static int decode_event_type(pubnub_serialization_provider_t* serial,
+                             pubnub_logger_provider_t*        log,
+                             const pubnub_json_value_t*       e_node,
+                             pubnub_subscribe_message_type_t* out_type)
+{
+    int int_val = 0;
+
+    (void)log;
+
+    if (PUBNUB_OK != serial->value_as_int(e_node, &int_val)) {
+        PUBNUB_LOG(log,
+                   PUBNUB_LOG_LEVEL_DEBUG,
+                   "Unknown event type (%s) has been received",
+                   "non-numeric");
+        return 0;
+    }
+    if (int_val < PUBNUB_SUBSCRIBE_MESSAGE || int_val > PUBNUB_SUBSCRIBE_FILE) {
+        PUBNUB_LOG(log,
+                   PUBNUB_LOG_LEVEL_DEBUG,
+                   "Unknown event type (%d) has been received",
+                   int_val);
+        return 0;
+    }
+    *out_type = (pubnub_subscribe_message_type_t)int_val;
+    return 1;
+}
+
+/**
  * @brief Parse one message element from the "m" array.
  *
  * A missing/non-string/empty "c" channel cannot be routed, so the element
- * is rejected and the caller drops the whole batch.
+ * is rejected and the caller drops the whole batch. A present "e" that is
+ * non-numeric or outside the known event types skips just this element.
+ * A known "e" decides the type; without "e" a -pnpres channel suffix
+ * selects presence, otherwise the type stays message.
  *
  * @param serial Serialization provider.
+ * @param log    Logger provider used for the unknown-type debug line; may
+ *               be NULL.
  * @param elem   JSON object for one message.
- * @param event  Output event, written only when valid.
- * @retval 1 Usable channel found; @p event populated.
- * @retval 0 No usable channel; @p event untouched.
+ * @param event  Output event; may be partially written on SKIP, so the
+ *               caller must re-zero it before reuse.
+ * @return PN_PARSE_MSG_OK, PN_PARSE_MSG_REJECT or PN_PARSE_MSG_SKIP.
  */
-static int parse_single_message(pubnub_serialization_provider_t* serial,
-                                const pubnub_json_value_t*       elem,
-                                pubnub_subscribe_event_t*        event)
+static pn_parse_msg_result_t parse_single_message(pubnub_serialization_provider_t* serial,
+                                                  pubnub_logger_provider_t* log,
+                                                  const pubnub_json_value_t* elem,
+                                                  pubnub_subscribe_event_t* event)
 {
     const pubnub_json_value_t* e_node;
     const pubnub_json_value_t* f_node;
@@ -229,23 +285,14 @@ static int parse_single_message(pubnub_serialization_provider_t* serial,
     /* "c" — channel (required); reject when missing, non-string, or empty. */
     c_node = serial->object_get(elem, "c", 1);
     if (NULL == c_node) {
-        return 0;
+        return PN_PARSE_MSG_REJECT;
     }
     str_len = 0;
     str_ptr = serial->value_as_string(c_node, &str_len);
     if (NULL == str_ptr || 0 == str_len) {
-        return 0;
+        return PN_PARSE_MSG_REJECT;
     }
     event->channel = (pubnub_string_view_t){str_ptr, str_len};
-
-    /* "e" — event type (default 0 = message). */
-    e_node = serial->object_get(elem, "e", 1);
-    if (NULL != e_node) {
-        int_val = 0;
-        if (PUBNUB_OK == serial->value_as_int(e_node, &int_val)) {
-            event->type = (pubnub_subscribe_message_type_t)int_val;
-        }
-    }
 
     /* "f" — flags. */
     f_node = serial->object_get(elem, "f", 1);
@@ -272,9 +319,15 @@ static int parse_single_message(pubnub_serialization_provider_t* serial,
         event->subscription = event->channel;
     }
 
-    /* Presence channel: narrow the view to its base (shrink length, keep
-     * pointer). */
-    if (pn_pnpres_has_suffix(event->channel.ptr, event->channel.len)) {
+    /* "e" — event type; when present it is decisive. */
+    e_node = serial->object_get(elem, "e", 1);
+    if (NULL != e_node) {
+        if (!decode_event_type(serial, log, e_node, &event->type)) {
+            return PN_PARSE_MSG_SKIP;
+        }
+    } else if (pn_pnpres_has_suffix(event->channel.ptr, event->channel.len)) {
+        /* No "e": the suffix implies presence; narrow the view to the base
+         * channel (shrink length, keep pointer). */
         event->type = PUBNUB_SUBSCRIBE_PRESENCE;
         event->channel.len -= PN_PNPRES_SUFFIX_LEN;
     }
@@ -318,20 +371,77 @@ static int parse_single_message(pubnub_serialization_provider_t* serial,
         }
     }
 
-    return 1;
+    return PN_PARSE_MSG_OK;
+}
+
+/**
+ * @brief Parse the "m" array into @p out->messages.
+ *
+ * A rejected element drops the whole batch (message_count = 0, malformed
+ * = 1); a skipped element is omitted without affecting the others.
+ *
+ * @param serial Serialization provider.
+ * @param log    Logger provider; may be NULL.
+ * @param m_arr  JSON array node ("m").
+ * @param out    Parsed response; messages, message_count, truncated and
+ *               malformed are updated.
+ */
+static void parse_message_array(pubnub_serialization_provider_t* serial,
+                                pubnub_logger_provider_t*        log,
+                                const pubnub_json_value_t*       m_arr,
+                                pn_subscribe_parsed_response_t*  out)
+{
+    pubnub_json_array_iter_t iter;
+    pubnub_json_value_t*     elem = NULL;
+    size_t                   count;
+    size_t                   i = 0;
+
+    count = serial->array_size(m_arr);
+    if (count > PUBNUB_CFG_SUBSCRIBE_MAX_BATCH_SIZE) {
+        count          = PUBNUB_CFG_SUBSCRIBE_MAX_BATCH_SIZE;
+        out->truncated = 1;
+    }
+
+    if (!serial->array_iter_init(m_arr, &iter)) {
+        return;
+    }
+    while (i < count && serial->array_iter_next(&iter, &elem)) {
+        pn_parse_msg_result_t pr;
+        i++;
+        /* A non-object/NULL element or one without a usable channel drops
+         * the whole batch; only the cursor survives so the next request
+         * steps over it. */
+        if (NULL == elem || PUBNUB_JSON_OBJECT != serial->value_type(elem)) {
+            pr = PN_PARSE_MSG_REJECT;
+        } else {
+            /* Re-zero the target slot so fields written by a skipped
+             * element cannot leak into the next one. */
+            pubnub_subscribe_event_t* slot = &out->messages[out->message_count];
+            memset(slot, 0, sizeof(*slot));
+            pr = parse_single_message(serial, log, elem, slot);
+        }
+        if (PN_PARSE_MSG_REJECT == pr) {
+            out->message_count = 0;
+            out->malformed     = 1;
+            break;
+        }
+        if (PN_PARSE_MSG_SKIP == pr) {
+            continue;
+        }
+        out->message_count++;
+    }
 }
 
 pubnub_res_t pn_subscribe_parse_response(pubnub_serialization_provider_t* serial,
-                                         const uint8_t* body,
-                                         size_t         body_len,
+                                         pubnub_logger_provider_t* log,
+                                         const uint8_t*            body,
+                                         size_t                    body_len,
                                          pn_subscribe_parsed_response_t* out)
 {
     pubnub_json_value_t*       root;
     const pubnub_json_value_t* t_obj;
     const pubnub_json_value_t* m_arr;
     pubnub_res_t               rc;
-    size_t                     total;
-    size_t                     count;
 
     if (NULL == out) {
         return PUBNUB_ERR_INVALID_ARGUMENT;
@@ -372,42 +482,11 @@ pubnub_res_t pn_subscribe_parse_response(pubnub_serialization_provider_t* serial
         return rc;
     }
 
-    /* "m" — messages array. */
+    /* "m" — messages array. A valid response may have no "m" array (empty
+     * batch); the tree is still stored for cursor extraction. */
     m_arr = serial->object_get(root, "m", 1);
-    if (NULL == m_arr || PUBNUB_JSON_ARRAY != serial->value_type(m_arr)) {
-        /* A valid response may have no "m" array (empty batch).
-         * Store the tree for cursor extraction and return success. */
-        out->_tree = root;
-        return PUBNUB_OK;
-    }
-
-    total = serial->array_size(m_arr);
-    count = total;
-    if (count > PUBNUB_CFG_SUBSCRIBE_MAX_BATCH_SIZE) {
-        count          = PUBNUB_CFG_SUBSCRIBE_MAX_BATCH_SIZE;
-        out->truncated = 1;
-    }
-
-    {
-        pubnub_json_array_iter_t iter;
-        pubnub_json_value_t*     elem = NULL;
-        size_t                   i    = 0;
-        if (serial->array_iter_init(m_arr, &iter)) {
-            while (i < count && serial->array_iter_next(&iter, &elem)) {
-                i++;
-                /* A non-object/NULL element or one without a usable
-                 * channel drops the whole batch; only the cursor survives
-                 * so the next request steps over it. */
-                if (NULL == elem || PUBNUB_JSON_OBJECT != serial->value_type(elem)
-                    || !parse_single_message(
-                        serial, elem, &out->messages[out->message_count])) {
-                    out->message_count = 0;
-                    out->malformed     = 1;
-                    break;
-                }
-                out->message_count++;
-            }
-        }
+    if (NULL != m_arr && PUBNUB_JSON_ARRAY == serial->value_type(m_arr)) {
+        parse_message_array(serial, log, m_arr, out);
     }
 
     out->_tree = root;

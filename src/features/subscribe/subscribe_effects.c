@@ -27,7 +27,7 @@
 /** @brief Consecutive malformed batches tolerated before RECEIVE_FAILURE. */
 #define PN_SUBSCRIBE_MALFORMED_CEILING ((uint8_t)3)
 
-#if PUBNUB_CFG_LOG_LEVEL_COMPILED || (PUBNUB_CFG_MAX_LOG_MESSAGE_SIZE > 0)
+#if PUBNUB_CFG_MAX_LOG_MESSAGE_SIZE > 0
 /** @brief Human-readable name for an EE state (debug logging). */
 static const char* pn_sub_state_str(pn_subscribe_ee_state_t s)
 {
@@ -88,7 +88,7 @@ static const char* pn_sub_status_str(pn_subscribe_ee_status_t s)
     default: return "?";
     }
 }
-#endif /* PUBNUB_CFG_LOG_LEVEL_COMPILED || MAX_LOG_MESSAGE_SIZE > 0 */
+#endif /* PUBNUB_CFG_MAX_LOG_MESSAGE_SIZE > 0 */
 
 #if PUBNUB_ENABLE_CRYPTO
 /* Forward declaration — avoids cross-feature include coupling.
@@ -239,6 +239,7 @@ static int apply_response_cursor(pn_subscribe_manager_t*     mgr,
 
     memset(&parsed, 0, sizeof(parsed));
     prc = pn_subscribe_parse_response(serial,
+                                      pn_context_logger(mgr->ctx),
                                       request->http_response.body,
                                       request->http_response.body_len,
                                       &parsed);
@@ -908,6 +909,51 @@ static void handle_malformed_batch(pn_subscribe_manager_t*          mgr,
 }
 
 /**
+ * @brief Handle a failed full parse of the subscribe response.
+ *
+ * Tries zero-alloc cursor extraction to step past the batch; when that also
+ * fails, pushes a receive-failure event so the state machine reconnects
+ * with a fresh cursor instead of replaying the stale one.
+ *
+ * @param mgr      Subscribe manager (non-NULL).
+ * @param slot     Completed request slot holding the response body.
+ * @param platform Platform provider used for the context lock.
+ * @param lock     Context lock memory.
+ */
+static void handle_parse_failure(pn_subscribe_manager_t*     mgr,
+                                 const pn_request_t*         slot,
+                                 pubnub_platform_provider_t* platform,
+                                 pubnub_lock_t*              lock)
+{
+    pn_subscribe_cursor_t fallback_cursor;
+    memset(&fallback_cursor, 0, sizeof(fallback_cursor));
+    if (PUBNUB_OK
+        == pn_subscribe_extract_cursor_raw(slot->http_response.body,
+                                           slot->http_response.body_len,
+                                           &fallback_cursor)) {
+        PN_LOG_ERROR_ENTRY(
+            mgr->ctx,
+            (int)PUBNUB_ERR_SERIALIZATION,
+            "subscribe batch dropped: parse OOM, cursor advanced",
+            NULL);
+        pn_ctx_lock(platform, lock);
+        mgr->cursor = fallback_cursor;
+        pn_ctx_unlock(platform, lock);
+    } else {
+        pn_subscribe_ee_event_t fail_evt;
+        PN_LOG_ERROR_ENTRY(
+            mgr->ctx,
+            (int)PUBNUB_ERR_SERIALIZATION,
+            "subscribe parse failed, cursor extraction also failed",
+            NULL);
+        memset(&fail_evt, 0, sizeof(fail_evt));
+        fail_evt.type           = PN_SUB_EVENT_RECEIVE_FAILURE;
+        fail_evt.failure_reason = PUBNUB_ERR_SERIALIZATION;
+        pn_subscribe_push_event_or_report(mgr, &fail_evt);
+    }
+}
+
+/**
  * @brief Process messages from the completed subscribe response.
  *
  * Parses the response body, updates the cursor, and dispatches each message
@@ -961,41 +1007,14 @@ static void emit_messages(pn_subscribe_manager_t* mgr)
         return;
     }
 
-    rc = pn_subscribe_parse_response(
-        serial, slot->http_response.body, slot->http_response.body_len, &parsed);
+    rc = pn_subscribe_parse_response(serial,
+                                     pn_context_logger(mgr->ctx),
+                                     slot->http_response.body,
+                                     slot->http_response.body_len,
+                                     &parsed);
 
     if (PUBNUB_OK != rc) {
-        /* Full parse failed. Attempt zero-alloc cursor extraction
-         * to advance past this batch. */
-        pn_subscribe_cursor_t fallback_cursor;
-        memset(&fallback_cursor, 0, sizeof(fallback_cursor));
-        if (PUBNUB_OK
-            == pn_subscribe_extract_cursor_raw(slot->http_response.body,
-                                               slot->http_response.body_len,
-                                               &fallback_cursor)) {
-            PN_LOG_ERROR_ENTRY(
-                mgr->ctx,
-                (int)PUBNUB_ERR_SERIALIZATION,
-                "subscribe batch dropped: parse OOM, cursor advanced",
-                NULL);
-            pn_ctx_lock(platform, lock);
-            mgr->cursor = fallback_cursor;
-            pn_ctx_unlock(platform, lock);
-        } else {
-            /* Even raw cursor extraction failed — push failure event
-             * so the EE transitions to RECEIVE_FAILED and breaks the
-             * stale-cursor loop via reconnect (tt=0). */
-            pn_subscribe_ee_event_t fail_evt;
-            PN_LOG_ERROR_ENTRY(
-                mgr->ctx,
-                (int)PUBNUB_ERR_SERIALIZATION,
-                "subscribe parse failed, cursor extraction also failed",
-                NULL);
-            memset(&fail_evt, 0, sizeof(fail_evt));
-            fail_evt.type           = PN_SUB_EVENT_RECEIVE_FAILURE;
-            fail_evt.failure_reason = PUBNUB_ERR_SERIALIZATION;
-            pn_subscribe_push_event_or_report(mgr, &fail_evt);
-        }
+        handle_parse_failure(mgr, slot, platform, lock);
         return;
     }
 

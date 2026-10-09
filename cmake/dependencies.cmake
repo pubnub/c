@@ -12,6 +12,14 @@ set(BUILD_SHARED_LIBS OFF)
 
 include(FetchContent)
 
+set(PUBNUB_OPENSSL_LIB_DIR
+    ""
+    CACHE STRING
+    "Directory with the OpenSSL libraries (for non-standard layouts): absolute,
+or relative to OPENSSL_ROOT_DIR (which is then required). When set, bypasses
+FindOpenSSL and takes precedence over OPENSSL_CRYPTO_LIBRARY / OPENSSL_SSL_LIBRARY."
+)
+
 # Set policy to CMP0169 to suppress the warning because of
 # FetchContent_Populate() with declared details usage as it has been
 # deprecated in favor of FetchContent_MakeAvailable().
@@ -106,58 +114,290 @@ function(pubnub_resolve_jsmn)
 endfunction()
 
 # ---------------------------------------------------------------------------
-# pubnub_resolve_openssl()
+# pubnub_resolve_openssl([OPTIONAL])
 #
-# Resolves OpenSSL via find_package(OpenSSL REQUIRED).  When OPENSSL_ROOT_DIR
-# and PUBNUB_OPENSSL_LIB_DIR are both set, pre-populates library paths for
-# non-standard directory layouts (e.g. Unreal Engine, cross-compilation).
+# Creates the global OpenSSL::Crypto and OpenSSL::SSL imported targets and
+# sets OPENSSL_VERSION (INTERNAL cache).
+#
+# Resolution paths, in precedence order:
+#   1. Non-empty PUBNUB_OPENSSL_LIB_DIR. An absolute path is used as-is
+#      (OPENSSL_ROOT_DIR not required); a relative path is resolved against
+#      OPENSSL_ROOT_DIR, and is a fatal error when the root is unset.
+#      Libraries are searched only in that directory (CMAKE_FIND_ROOT_PATH is
+#      ignored there) and FindOpenSSL is bypassed. Wins over any
+#      OPENSSL_CRYPTO_LIBRARY / OPENSSL_SSL_LIBRARY values.
+#      Searched names: crypto, libcrypto, libcrypto_static and ssl, libssl,
+#      libssl_static (with the usual platform prefixes/suffixes).
+#   2. Both OPENSSL_CRYPTO_LIBRARY and OPENSSL_SSL_LIBRARY supplied by the
+#      user (full paths).
+#   3. Otherwise plain find_package(OpenSSL REQUIRED).
+#
+# Pass OPTIONAL to make path 3 non-fatal: when no OpenSSL is found the
+# function returns without creating any target (callers test
+# TARGET OpenSSL::Crypto). An explicit PUBNUB_OPENSSL_LIB_DIR or
+# OPENSSL_*_LIBRARY (paths 1 and 2) makes every failure fatal even under
+# OPTIONAL, because the user explicitly asked for that location.
+#
+# Header search in the custom paths (1 and 2): OPENSSL_INCLUDE_DIR (strict),
+# else OPENSSL_ROOT_DIR/include when the root is set (strict), else
+# <crypto lib dir>/../include and ../../include, then default system paths.
+# The explicit locations ignore CMAKE_FIND_ROOT_PATH; the final default-path
+# search honours it.
+#
+# Re-configure: FindOpenSSL fills the same cache variables a user would set
+# (OPENSSL_CRYPTO_LIBRARY, OPENSSL_SSL_LIBRARY, OPENSSL_INCLUDE_DIR). After a
+# find_package run, each value that was NOT user-supplied is recorded in an
+# INTERNAL cache entry (PN_OPENSSL_FP_*); a variable equal to its entry is
+# treated as find_package output, anything else as user input. A value the
+# user supplied before find_package ran is never recorded.
+#
+# Static OpenSSL: the custom OpenSSL::Crypto always carries the system
+# libraries a static libcrypto needs (ws2_32/crypt32/... on Windows, dl and
+# threads elsewhere); they are harmless for shared libraries.
 # ---------------------------------------------------------------------------
 function(pubnub_resolve_openssl)
+    cmake_parse_arguments(PARSE_ARGV 0 PN_OSSL "OPTIONAL" "" "")
+
     if(TARGET OpenSSL::Crypto)
         return()
     endif()
 
-    set(PUBNUB_OPENSSL_LIB_DIR
-        ""
-        CACHE STRING
-        "Relative path from OPENSSL_ROOT_DIR to the library directory (for non-standard layouts)."
+    # A value is user input when set and different from what find_package left.
+    set(PN_USER_CRYPTO FALSE)
+    if(
+        OPENSSL_CRYPTO_LIBRARY
+        AND NOT "${OPENSSL_CRYPTO_LIBRARY}" STREQUAL "${PN_OPENSSL_FP_CRYPTO}"
     )
+        set(PN_USER_CRYPTO TRUE)
+    endif()
+    set(PN_USER_SSL FALSE)
+    if(OPENSSL_SSL_LIBRARY AND NOT "${OPENSSL_SSL_LIBRARY}" STREQUAL "${PN_OPENSSL_FP_SSL}")
+        set(PN_USER_SSL TRUE)
+    endif()
+    set(PN_USER_INCLUDE "")
+    set(PN_USER_INC FALSE)
+    if(OPENSSL_INCLUDE_DIR AND NOT "${OPENSSL_INCLUDE_DIR}" STREQUAL "${PN_OPENSSL_FP_INCLUDE}")
+        set(PN_USER_INCLUDE "${OPENSSL_INCLUDE_DIR}")
+        set(PN_USER_INC TRUE)
+    endif()
 
-    if(OPENSSL_ROOT_DIR AND PUBNUB_OPENSSL_LIB_DIR)
-        set(_pn_openssl_lib_path "${OPENSSL_ROOT_DIR}/${PUBNUB_OPENSSL_LIB_DIR}")
-        if(NOT OPENSSL_CRYPTO_LIBRARY)
-            find_library(
-                OPENSSL_CRYPTO_LIBRARY
-                NAMES crypto libcrypto
-                PATHS "${_pn_openssl_lib_path}"
-                NO_DEFAULT_PATH
+    set(PN_EXPLICIT_LIBS FALSE)
+    if(PN_USER_CRYPTO AND PN_USER_SSL)
+        set(PN_EXPLICIT_LIBS TRUE)
+    endif()
+
+    set(PN_LIBDIR_MODE FALSE)
+    if(PUBNUB_OPENSSL_LIB_DIR)
+        set(PN_LIBDIR_MODE TRUE)
+        set(PN_EXPLICIT_LIBS FALSE)
+        file(TO_CMAKE_PATH "${PUBNUB_OPENSSL_LIB_DIR}" PN_LIBDIR_NORM)
+        if(IS_ABSOLUTE "${PN_LIBDIR_NORM}")
+            set(PN_OPENSSL_LIB_PATH "${PN_LIBDIR_NORM}")
+        elseif(OPENSSL_ROOT_DIR)
+            set(PN_OPENSSL_LIB_PATH "${OPENSSL_ROOT_DIR}/${PN_LIBDIR_NORM}")
+        else()
+            message(
+                FATAL_ERROR
+                "[PubNub] PUBNUB_OPENSSL_LIB_DIR='${PUBNUB_OPENSSL_LIB_DIR}' is relative but "
+                "OPENSSL_ROOT_DIR is not set. Pass an absolute PUBNUB_OPENSSL_LIB_DIR or set "
+                "OPENSSL_ROOT_DIR."
             )
-            if(NOT OPENSSL_CRYPTO_LIBRARY)
-                message(
-                    FATAL_ERROR
-                    "[PubNub] OpenSSL crypto library not found in ${_pn_openssl_lib_path}"
-                )
-            endif()
-        endif()
-        if(NOT OPENSSL_SSL_LIBRARY)
-            find_library(
-                OPENSSL_SSL_LIBRARY
-                NAMES ssl libssl
-                PATHS "${_pn_openssl_lib_path}"
-                NO_DEFAULT_PATH
-            )
-            if(NOT OPENSSL_SSL_LIBRARY)
-                message(
-                    FATAL_ERROR
-                    "[PubNub] OpenSSL SSL library not found in ${_pn_openssl_lib_path}"
-                )
-            endif()
         endif()
     endif()
 
-    find_package(OpenSSL REQUIRED)
-    set(OPENSSL_VERSION "${OPENSSL_VERSION}" CACHE INTERNAL "Resolved OpenSSL version")
-    message(STATUS "[PubNub] OpenSSL ${OPENSSL_VERSION}: ${OPENSSL_CRYPTO_LIBRARY}")
+    if(NOT PN_LIBDIR_MODE AND NOT PN_EXPLICIT_LIBS)
+        if(PN_OSSL_OPTIONAL)
+            find_package(OpenSSL QUIET)
+            if(NOT OpenSSL_FOUND)
+                return()
+            endif()
+        else()
+            find_package(OpenSSL REQUIRED)
+        endif()
+        foreach(PN_TGT IN ITEMS OpenSSL::SSL OpenSSL::Crypto)
+            if(TARGET ${PN_TGT})
+                set_target_properties(${PN_TGT} PROPERTIES IMPORTED_GLOBAL TRUE)
+            endif()
+        endforeach()
+
+        set(PN_FP_NAMES PN_OPENSSL_FP_CRYPTO PN_OPENSSL_FP_SSL PN_OPENSSL_FP_INCLUDE)
+        set(PN_FP_SOURCES OPENSSL_CRYPTO_LIBRARY OPENSSL_SSL_LIBRARY OPENSSL_INCLUDE_DIR)
+        set(PN_FP_USER ${PN_USER_CRYPTO} ${PN_USER_SSL} ${PN_USER_INC})
+        foreach(PN_IDX RANGE 2)
+            list(GET PN_FP_NAMES ${PN_IDX} PN_FP_NAME)
+            list(GET PN_FP_SOURCES ${PN_IDX} PN_FP_SOURCE)
+            list(GET PN_FP_USER ${PN_IDX} PN_FP_IS_USER)
+            if(PN_FP_IS_USER)
+                unset(${PN_FP_NAME} CACHE)
+            else()
+                set(${PN_FP_NAME}
+                    "${${PN_FP_SOURCE}}"
+                    CACHE INTERNAL
+                    "Value produced by find_package"
+                )
+            endif()
+        endforeach()
+
+        set(OPENSSL_VERSION "${OPENSSL_VERSION}" CACHE INTERNAL "Resolved OpenSSL version")
+        message(STATUS "[PubNub] OpenSSL ${OPENSSL_VERSION}: ${OPENSSL_CRYPTO_LIBRARY}")
+        return()
+    endif()
+
+    # Libraries.
+    set(PN_OPENSSL_CRYPTO_LIB "")
+    set(PN_OPENSSL_SSL_LIB "")
+    if(PN_EXPLICIT_LIBS)
+        set(PN_OPENSSL_CRYPTO_LIB "${OPENSSL_CRYPTO_LIBRARY}")
+        set(PN_OPENSSL_SSL_LIB "${OPENSSL_SSL_LIBRARY}")
+        foreach(PN_LIB IN ITEMS "${PN_OPENSSL_CRYPTO_LIB}" "${PN_OPENSSL_SSL_LIB}")
+            if(NOT EXISTS "${PN_LIB}")
+                message(FATAL_ERROR "[PubNub] OpenSSL library does not exist: ${PN_LIB}")
+            endif()
+        endforeach()
+    else()
+        unset(PN_OSSL_TMP_CRYPTO CACHE)
+        unset(PN_OSSL_TMP_SSL CACHE)
+        find_library(
+            PN_OSSL_TMP_CRYPTO
+            NAMES crypto libcrypto libcrypto_static
+            PATHS "${PN_OPENSSL_LIB_PATH}"
+            NO_DEFAULT_PATH
+            NO_CMAKE_FIND_ROOT_PATH
+        )
+        find_library(
+            PN_OSSL_TMP_SSL
+            NAMES ssl libssl libssl_static
+            PATHS "${PN_OPENSSL_LIB_PATH}"
+            NO_DEFAULT_PATH
+            NO_CMAKE_FIND_ROOT_PATH
+        )
+        set(PN_OPENSSL_CRYPTO_LIB "${PN_OSSL_TMP_CRYPTO}")
+        set(PN_OPENSSL_SSL_LIB "${PN_OSSL_TMP_SSL}")
+        unset(PN_OSSL_TMP_CRYPTO CACHE)
+        unset(PN_OSSL_TMP_SSL CACHE)
+        if(NOT PN_OPENSSL_CRYPTO_LIB)
+            message(
+                FATAL_ERROR
+                "[PubNub] OpenSSL crypto library not found in ${PN_OPENSSL_LIB_PATH}"
+            )
+        endif()
+        if(NOT PN_OPENSSL_SSL_LIB)
+            message(FATAL_ERROR "[PubNub] OpenSSL SSL library not found in ${PN_OPENSSL_LIB_PATH}")
+        endif()
+    endif()
+
+    # Headers.
+    unset(PN_OSSL_TMP_INC CACHE)
+    if(PN_USER_INCLUDE)
+        find_path(
+            PN_OSSL_TMP_INC
+            NAMES openssl/ssl.h
+            PATHS "${PN_USER_INCLUDE}"
+            NO_DEFAULT_PATH
+            NO_CMAKE_FIND_ROOT_PATH
+        )
+        set(PN_INC_WHERE "${PN_USER_INCLUDE}")
+    elseif(OPENSSL_ROOT_DIR)
+        find_path(
+            PN_OSSL_TMP_INC
+            NAMES openssl/ssl.h
+            PATHS "${OPENSSL_ROOT_DIR}/include"
+            NO_DEFAULT_PATH
+            NO_CMAKE_FIND_ROOT_PATH
+        )
+        set(PN_INC_WHERE "${OPENSSL_ROOT_DIR}/include")
+    else()
+        get_filename_component(PN_LIB_DIR "${PN_OPENSSL_CRYPTO_LIB}" DIRECTORY)
+        find_path(
+            PN_OSSL_TMP_INC
+            NAMES openssl/ssl.h
+            PATHS "${PN_LIB_DIR}/../include" "${PN_LIB_DIR}/../../include"
+            NO_DEFAULT_PATH
+            NO_CMAKE_FIND_ROOT_PATH
+        )
+        if(NOT PN_OSSL_TMP_INC)
+            find_path(PN_OSSL_TMP_INC NAMES openssl/ssl.h)
+        endif()
+        set(PN_INC_WHERE
+            "${PN_LIB_DIR}/../include, ${PN_LIB_DIR}/../../include or the default include paths"
+        )
+    endif()
+    set(PN_OPENSSL_INC "${PN_OSSL_TMP_INC}")
+    unset(PN_OSSL_TMP_INC CACHE)
+    if(NOT PN_OPENSSL_INC)
+        message(
+            FATAL_ERROR
+            "[PubNub] openssl/ssl.h not found in ${PN_INC_WHERE}; set OPENSSL_INCLUDE_DIR"
+        )
+    endif()
+
+    # Version: OPENSSL_VERSION_STR (3.x), else OPENSSL_VERSION_TEXT (1.1.x).
+    set(PN_OPENSSL_VER "")
+    set(PN_OPENSSLV_H "${PN_OPENSSL_INC}/openssl/opensslv.h")
+    if(NOT EXISTS "${PN_OPENSSLV_H}")
+        message(FATAL_ERROR "[PubNub] openssl/opensslv.h not found in ${PN_OPENSSL_INC}")
+    endif()
+    file(
+        STRINGS "${PN_OPENSSLV_H}"
+        PN_VER_LINE
+        REGEX "^#[ \t]*define[ \t]+OPENSSL_VERSION_STR[ \t]+\"[^\"]+\""
+        LIMIT_COUNT 1
+    )
+    if(PN_VER_LINE MATCHES "OPENSSL_VERSION_STR[ \t]+\"([^\"]+)\"")
+        set(PN_OPENSSL_VER "${CMAKE_MATCH_1}")
+    else()
+        file(
+            STRINGS "${PN_OPENSSLV_H}"
+            PN_VER_LINE
+            REGEX "^#[ \t]*define[ \t]+OPENSSL_VERSION_TEXT[ \t]+\"OpenSSL [^\"]+\""
+            LIMIT_COUNT 1
+        )
+        if(PN_VER_LINE MATCHES "OPENSSL_VERSION_TEXT[ \t]+\"OpenSSL ([^ \"]+)")
+            set(PN_OPENSSL_VER "${CMAKE_MATCH_1}")
+        endif()
+    endif()
+    if(NOT PN_OPENSSL_VER)
+        message(FATAL_ERROR "[PubNub] Unable to determine OpenSSL version from ${PN_OPENSSLV_H}")
+    endif()
+
+    # System libraries needed when libcrypto is static.
+    set(PN_OPENSSL_SYSLIBS "")
+    if(WIN32)
+        set(PN_OPENSSL_SYSLIBS
+            ws2_32
+            crypt32
+            advapi32
+            user32
+            gdi32
+        )
+    else()
+        find_package(Threads REQUIRED)
+        set_target_properties(Threads::Threads PROPERTIES IMPORTED_GLOBAL TRUE)
+        set(PN_OPENSSL_SYSLIBS ${CMAKE_DL_LIBS} Threads::Threads)
+    endif()
+
+    add_library(OpenSSL::Crypto UNKNOWN IMPORTED GLOBAL)
+    set_target_properties(
+        OpenSSL::Crypto
+        PROPERTIES
+            IMPORTED_LOCATION "${PN_OPENSSL_CRYPTO_LIB}"
+            INTERFACE_INCLUDE_DIRECTORIES "${PN_OPENSSL_INC}"
+            INTERFACE_LINK_LIBRARIES "${PN_OPENSSL_SYSLIBS}"
+    )
+    add_library(OpenSSL::SSL UNKNOWN IMPORTED GLOBAL)
+    set_target_properties(
+        OpenSSL::SSL
+        PROPERTIES
+            IMPORTED_LOCATION "${PN_OPENSSL_SSL_LIB}"
+            INTERFACE_INCLUDE_DIRECTORIES "${PN_OPENSSL_INC}"
+            INTERFACE_LINK_LIBRARIES OpenSSL::Crypto
+    )
+
+    set(OPENSSL_VERSION "${PN_OPENSSL_VER}" CACHE INTERNAL "Resolved OpenSSL version")
+    message(
+        STATUS
+        "[PubNub] OpenSSL ${OPENSSL_VERSION}: ${PN_OPENSSL_CRYPTO_LIB} (headers: ${PN_OPENSSL_INC})"
+    )
 endfunction()
 
 # ---------------------------------------------------------------------------

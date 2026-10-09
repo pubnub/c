@@ -22,6 +22,7 @@
 #include "pubnub/error.h"
 #include "pubnub/features/subscribe_types.h"
 #include "pubnub/providers/allocator.h"
+#include "pubnub/providers/logger.h"
 #include "pubnub/providers/serialization.h"
 #include "pubnub/providers/transport_types.h"
 #include "pubnub/types.h"
@@ -188,6 +189,8 @@ pubnub_res_t pn_subscribe_build_receive(pubnub_http_request_t* request,
  * message batch alias tree-owned memory).
  *
  * @param serial   Serialization provider for JSON parsing.
+ * @param log      Logger provider for debug diagnostics; may be NULL, in
+ *                 which case nothing is logged.
  * @param body     Raw response body bytes.
  * @param body_len Length of @p body in bytes.
  * @param out      Parsed response (caller-owned, zero-initialized on
@@ -197,11 +200,15 @@ pubnub_res_t pn_subscribe_build_receive(pubnub_http_request_t* request,
  *         PUBNUB_ERR_SERIALIZATION when the body is not a parseable JSON
  *         object or the cursor is missing or invalid.
  * @note A bad message array sets @c malformed (with @c message_count 0), not
- *       the return code — advance the cursor and deliver nothing.
+ *       the return code — advance the cursor and deliver nothing. Elements
+ *       with a non-integer or out-of-range @c e are skipped (not counted in
+ *       @c message_count) and logged at debug level, even if the batch is
+ *       later dropped as malformed.
  */
 pubnub_res_t pn_subscribe_parse_response(pubnub_serialization_provider_t* serial,
-                                         const uint8_t* body,
-                                         size_t         body_len,
+                                         pubnub_logger_provider_t* log,
+                                         const uint8_t*            body,
+                                         size_t                    body_len,
                                          pn_subscribe_parsed_response_t* out);
 
 /**

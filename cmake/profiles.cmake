@@ -504,7 +504,11 @@ function(pubnub_apply_profile)
     # Warn when crypto is enabled on a user-owned-pool profile: NULL allocator
     # is not available (pn_allocator_default returns NULL). Pass an explicit
     # allocator to pubnub_crypto_module_aes_cbc() and related functions.
-    if(PUBNUB_ENABLE_CRYPTO AND NOT PUBNUB_CFG_ARENA_POOL_OWNER_SDK)
+    if(
+        PUBNUB_ENABLE_CRYPTO
+        AND PUBNUB_PROVIDER_ALLOCATOR STREQUAL "arena"
+        AND NOT PUBNUB_CFG_ARENA_POOL_OWNER_SDK
+    )
         message(
             STATUS
             "[PubNub] PUBNUB_ENABLE_CRYPTO=ON with user-owned arena (PUBNUB_CFG_ARENA_POOL_OWNER_SDK=0). "

@@ -372,7 +372,7 @@ static void test_parse_response_basic_envelope(void** state)
 
     pn_subscribe_parsed_response_t out = {0};
     pubnub_res_t                   rc  = pn_subscribe_parse_response(
-        serial, (const uint8_t*)body, strlen(body), &out);
+        serial, NULL, (const uint8_t*)body, strlen(body), &out);
 
     assert_int_equal(PUBNUB_OK, rc);
     assert_int_equal(17, out.cursor.timetoken_len);
@@ -397,7 +397,7 @@ static void test_parse_response_with_messages(void** state)
 
     pn_subscribe_parsed_response_t out = {0};
     pubnub_res_t                   rc  = pn_subscribe_parse_response(
-        serial, (const uint8_t*)body, strlen(body), &out);
+        serial, NULL, (const uint8_t*)body, strlen(body), &out);
 
     assert_int_equal(PUBNUB_OK, rc);
     assert_int_equal(1, out.message_count);
@@ -438,7 +438,7 @@ static void test_parse_response_all_event_fields(void** state)
 
     pn_subscribe_parsed_response_t out = {0};
     pubnub_res_t                   rc  = pn_subscribe_parse_response(
-        serial, (const uint8_t*)body, strlen(body), &out);
+        serial, NULL, (const uint8_t*)body, strlen(body), &out);
 
     assert_int_equal(PUBNUB_OK, rc);
     assert_int_equal(1, out.message_count);
@@ -478,7 +478,7 @@ static void parse_and_assert_type(const char*                     body,
 
     pn_subscribe_parsed_response_t out = {0};
     pubnub_res_t                   rc  = pn_subscribe_parse_response(
-        serial, (const uint8_t*)body, strlen(body), &out);
+        serial, NULL, (const uint8_t*)body, strlen(body), &out);
 
     assert_int_equal(PUBNUB_OK, rc);
     assert_int_equal(1, out.message_count);
@@ -540,7 +540,7 @@ static void test_parse_response_missing_optional_fields(void** state)
 
     pn_subscribe_parsed_response_t out = {0};
     pubnub_res_t                   rc  = pn_subscribe_parse_response(
-        serial, (const uint8_t*)body, strlen(body), &out);
+        serial, NULL, (const uint8_t*)body, strlen(body), &out);
 
     assert_int_equal(PUBNUB_OK, rc);
     assert_int_equal(1, out.message_count);
@@ -574,7 +574,7 @@ static void test_parse_response_empty_message_list(void** state)
 
     pn_subscribe_parsed_response_t out = {0};
     pubnub_res_t                   rc  = pn_subscribe_parse_response(
-        serial, (const uint8_t*)body, strlen(body), &out);
+        serial, NULL, (const uint8_t*)body, strlen(body), &out);
 
     assert_int_equal(PUBNUB_OK, rc);
     assert_int_equal(0, out.message_count);
@@ -600,7 +600,7 @@ static void test_parse_response_multiple_messages(void** state)
 
     pn_subscribe_parsed_response_t out = {0};
     pubnub_res_t                   rc  = pn_subscribe_parse_response(
-        serial, (const uint8_t*)body, strlen(body), &out);
+        serial, NULL, (const uint8_t*)body, strlen(body), &out);
 
     assert_int_equal(PUBNUB_OK, rc);
     assert_int_equal(3, out.message_count);
@@ -625,7 +625,7 @@ static void test_parse_response_channel_distinct_from_subscription(void** state)
 
     pn_subscribe_parsed_response_t out = {0};
     pubnub_res_t                   rc  = pn_subscribe_parse_response(
-        serial, (const uint8_t*)body, strlen(body), &out);
+        serial, NULL, (const uint8_t*)body, strlen(body), &out);
 
     assert_int_equal(PUBNUB_OK, rc);
     assert_int_equal(1, out.message_count);
@@ -654,7 +654,7 @@ static void test_parse_response_presence_channel(void** state)
 
     pn_subscribe_parsed_response_t out = {0};
     pubnub_res_t                   rc  = pn_subscribe_parse_response(
-        serial, (const uint8_t*)body, strlen(body), &out);
+        serial, NULL, (const uint8_t*)body, strlen(body), &out);
 
     assert_int_equal(PUBNUB_OK, rc);
     assert_int_equal(1, out.message_count);
@@ -683,7 +683,7 @@ static void test_parse_response_presence_subscription_raw(void** state)
 
     pn_subscribe_parsed_response_t out = {0};
     pubnub_res_t                   rc  = pn_subscribe_parse_response(
-        serial, (const uint8_t*)body, strlen(body), &out);
+        serial, NULL, (const uint8_t*)body, strlen(body), &out);
 
     assert_int_equal(PUBNUB_OK, rc);
     assert_int_equal(1, out.message_count);
@@ -709,7 +709,7 @@ static void test_parse_response_bare_pnpres_not_stripped(void** state)
 
     pn_subscribe_parsed_response_t out = {0};
     pubnub_res_t                   rc  = pn_subscribe_parse_response(
-        serial, (const uint8_t*)body, strlen(body), &out);
+        serial, NULL, (const uint8_t*)body, strlen(body), &out);
 
     assert_int_equal(PUBNUB_OK, rc);
     assert_int_equal(1, out.message_count);
@@ -730,7 +730,7 @@ static void test_parse_response_malformed_body(void** state)
 
     pn_subscribe_parsed_response_t out = {0};
     pubnub_res_t                   rc  = pn_subscribe_parse_response(
-        serial, (const uint8_t*)body, strlen(body), &out);
+        serial, NULL, (const uint8_t*)body, strlen(body), &out);
 
     assert_int_equal(PUBNUB_ERR_SERIALIZATION, rc);
     assert_null(out._tree);
@@ -747,7 +747,7 @@ static void test_parse_response_missing_cursor(void** state)
 
     pn_subscribe_parsed_response_t out = {0};
     pubnub_res_t                   rc  = pn_subscribe_parse_response(
-        serial, (const uint8_t*)body, strlen(body), &out);
+        serial, NULL, (const uint8_t*)body, strlen(body), &out);
 
     assert_int_equal(PUBNUB_ERR_SERIALIZATION, rc);
 }
@@ -764,7 +764,7 @@ static void test_parse_response_rejects_non_digit_cursor(void** state)
 
     pn_subscribe_parsed_response_t out = {0};
     pubnub_res_t                   rc  = pn_subscribe_parse_response(
-        serial, (const uint8_t*)body, strlen(body), &out);
+        serial, NULL, (const uint8_t*)body, strlen(body), &out);
 
     assert_int_equal(PUBNUB_ERR_SERIALIZATION, rc);
     assert_null(out._tree);
@@ -781,7 +781,7 @@ static void test_parse_response_rejects_symbol_cursor(void** state)
 
     pn_subscribe_parsed_response_t out = {0};
     pubnub_res_t                   rc  = pn_subscribe_parse_response(
-        serial, (const uint8_t*)body, strlen(body), &out);
+        serial, NULL, (const uint8_t*)body, strlen(body), &out);
 
     assert_int_equal(PUBNUB_ERR_SERIALIZATION, rc);
     assert_null(out._tree);
@@ -798,7 +798,7 @@ static void test_parse_response_accepts_17_digit_cursor(void** state)
 
     pn_subscribe_parsed_response_t out = {0};
     pubnub_res_t                   rc  = pn_subscribe_parse_response(
-        serial, (const uint8_t*)body, strlen(body), &out);
+        serial, NULL, (const uint8_t*)body, strlen(body), &out);
 
     assert_int_equal(PUBNUB_OK, rc);
     assert_int_equal(17, out.cursor.timetoken_len);
@@ -814,8 +814,8 @@ static void test_parse_response_null_serial(void** state)
     const char body[] = "{\"t\":{\"t\":\"0\",\"r\":0},\"m\":[]}";
 
     pn_subscribe_parsed_response_t out = {0};
-    pubnub_res_t                   rc =
-        pn_subscribe_parse_response(NULL, (const uint8_t*)body, strlen(body), &out);
+    pubnub_res_t                   rc  = pn_subscribe_parse_response(
+        NULL, NULL, (const uint8_t*)body, strlen(body), &out);
 
     assert_int_equal(PUBNUB_ERR_SERIALIZATION, rc);
 }
@@ -827,7 +827,7 @@ static void test_parse_response_null_body(void** state)
     assert_non_null(serial);
 
     pn_subscribe_parsed_response_t out = {0};
-    pubnub_res_t rc = pn_subscribe_parse_response(serial, NULL, 0, &out);
+    pubnub_res_t rc = pn_subscribe_parse_response(serial, NULL, NULL, 0, &out);
 
     assert_int_equal(PUBNUB_ERR_SERIALIZATION, rc);
 }
@@ -841,7 +841,7 @@ static void test_parse_response_null_out(void** state)
     const char body[] = "{\"t\":{\"t\":\"0\",\"r\":0},\"m\":[]}";
 
     pubnub_res_t rc = pn_subscribe_parse_response(
-        serial, (const uint8_t*)body, strlen(body), NULL);
+        serial, NULL, (const uint8_t*)body, strlen(body), NULL);
 
     assert_int_equal(PUBNUB_ERR_INVALID_ARGUMENT, rc);
 }
@@ -859,7 +859,7 @@ static void test_parse_response_missing_channel_marks_malformed(void** state)
 
     pn_subscribe_parsed_response_t out = {0};
     pubnub_res_t                   rc  = pn_subscribe_parse_response(
-        serial, (const uint8_t*)body, strlen(body), &out);
+        serial, NULL, (const uint8_t*)body, strlen(body), &out);
 
     assert_int_equal(PUBNUB_OK, rc);
     assert_int_equal(0, out.message_count);
@@ -888,7 +888,7 @@ static void test_parse_response_good_bad_good_drops_all(void** state)
 
     pn_subscribe_parsed_response_t out = {0};
     pubnub_res_t                   rc  = pn_subscribe_parse_response(
-        serial, (const uint8_t*)body, strlen(body), &out);
+        serial, NULL, (const uint8_t*)body, strlen(body), &out);
 
     assert_int_equal(PUBNUB_OK, rc);
     assert_int_equal(0, out.message_count);
@@ -910,7 +910,7 @@ static void test_parse_response_empty_channel_marks_malformed(void** state)
 
     pn_subscribe_parsed_response_t out = {0};
     pubnub_res_t                   rc  = pn_subscribe_parse_response(
-        serial, (const uint8_t*)body, strlen(body), &out);
+        serial, NULL, (const uint8_t*)body, strlen(body), &out);
 
     assert_int_equal(PUBNUB_OK, rc);
     assert_int_equal(0, out.message_count);
@@ -931,7 +931,7 @@ static void test_parse_response_numeric_channel_marks_malformed(void** state)
 
     pn_subscribe_parsed_response_t out = {0};
     pubnub_res_t                   rc  = pn_subscribe_parse_response(
-        serial, (const uint8_t*)body, strlen(body), &out);
+        serial, NULL, (const uint8_t*)body, strlen(body), &out);
 
     assert_int_equal(PUBNUB_OK, rc);
     assert_int_equal(0, out.message_count);
@@ -952,7 +952,7 @@ static void test_parse_response_object_channel_marks_malformed(void** state)
 
     pn_subscribe_parsed_response_t out = {0};
     pubnub_res_t                   rc  = pn_subscribe_parse_response(
-        serial, (const uint8_t*)body, strlen(body), &out);
+        serial, NULL, (const uint8_t*)body, strlen(body), &out);
 
     assert_int_equal(PUBNUB_OK, rc);
     assert_int_equal(0, out.message_count);
@@ -973,7 +973,7 @@ static void test_parse_response_null_channel_marks_malformed(void** state)
 
     pn_subscribe_parsed_response_t out = {0};
     pubnub_res_t                   rc  = pn_subscribe_parse_response(
-        serial, (const uint8_t*)body, strlen(body), &out);
+        serial, NULL, (const uint8_t*)body, strlen(body), &out);
 
     assert_int_equal(PUBNUB_OK, rc);
     assert_int_equal(0, out.message_count);
@@ -994,7 +994,7 @@ static void test_parse_response_numeric_element_marks_malformed(void** state)
 
     pn_subscribe_parsed_response_t out = {0};
     pubnub_res_t                   rc  = pn_subscribe_parse_response(
-        serial, (const uint8_t*)body, strlen(body), &out);
+        serial, NULL, (const uint8_t*)body, strlen(body), &out);
 
     assert_int_equal(PUBNUB_OK, rc);
     assert_int_equal(0, out.message_count);
@@ -1015,7 +1015,7 @@ static void test_parse_response_array_element_marks_malformed(void** state)
 
     pn_subscribe_parsed_response_t out = {0};
     pubnub_res_t                   rc  = pn_subscribe_parse_response(
-        serial, (const uint8_t*)body, strlen(body), &out);
+        serial, NULL, (const uint8_t*)body, strlen(body), &out);
 
     assert_int_equal(PUBNUB_OK, rc);
     assert_int_equal(0, out.message_count);
@@ -1036,7 +1036,7 @@ static void test_parse_response_string_element_marks_malformed(void** state)
 
     pn_subscribe_parsed_response_t out = {0};
     pubnub_res_t                   rc  = pn_subscribe_parse_response(
-        serial, (const uint8_t*)body, strlen(body), &out);
+        serial, NULL, (const uint8_t*)body, strlen(body), &out);
 
     assert_int_equal(PUBNUB_OK, rc);
     assert_int_equal(0, out.message_count);
@@ -1057,7 +1057,7 @@ static void test_parse_response_null_element_marks_malformed(void** state)
 
     pn_subscribe_parsed_response_t out = {0};
     pubnub_res_t                   rc  = pn_subscribe_parse_response(
-        serial, (const uint8_t*)body, strlen(body), &out);
+        serial, NULL, (const uint8_t*)body, strlen(body), &out);
 
     assert_int_equal(PUBNUB_OK, rc);
     assert_int_equal(0, out.message_count);
@@ -1079,7 +1079,7 @@ static void test_parse_response_b_present_c_missing_marks_malformed(void** state
 
     pn_subscribe_parsed_response_t out = {0};
     pubnub_res_t                   rc  = pn_subscribe_parse_response(
-        serial, (const uint8_t*)body, strlen(body), &out);
+        serial, NULL, (const uint8_t*)body, strlen(body), &out);
 
     assert_int_equal(PUBNUB_OK, rc);
     assert_int_equal(0, out.message_count);
@@ -1101,7 +1101,7 @@ static void test_parse_response_empty_b_falls_back_to_channel(void** state)
 
     pn_subscribe_parsed_response_t out = {0};
     pubnub_res_t                   rc  = pn_subscribe_parse_response(
-        serial, (const uint8_t*)body, strlen(body), &out);
+        serial, NULL, (const uint8_t*)body, strlen(body), &out);
 
     assert_int_equal(PUBNUB_OK, rc);
     assert_int_equal(0, out.malformed);
@@ -1127,7 +1127,7 @@ static void test_parse_response_presence_no_b_keeps_raw(void** state)
 
     pn_subscribe_parsed_response_t out = {0};
     pubnub_res_t                   rc  = pn_subscribe_parse_response(
-        serial, (const uint8_t*)body, strlen(body), &out);
+        serial, NULL, (const uint8_t*)body, strlen(body), &out);
 
     assert_int_equal(PUBNUB_OK, rc);
     assert_int_equal(0, out.malformed);
@@ -1179,7 +1179,7 @@ static void test_parse_response_full_batch_no_truncation(void** state)
 
     pn_subscribe_parsed_response_t out = {0};
     pubnub_res_t                   rc  = pn_subscribe_parse_response(
-        serial, (const uint8_t*)body, strlen(body), &out);
+        serial, NULL, (const uint8_t*)body, strlen(body), &out);
 
     assert_int_equal(PUBNUB_OK, rc);
     assert_int_equal(0, out.malformed);
@@ -1204,7 +1204,7 @@ static void test_parse_response_bad_beyond_cap_not_inspected(void** state)
 
     pn_subscribe_parsed_response_t out = {0};
     pubnub_res_t                   rc  = pn_subscribe_parse_response(
-        serial, (const uint8_t*)body, strlen(body), &out);
+        serial, NULL, (const uint8_t*)body, strlen(body), &out);
 
     assert_int_equal(PUBNUB_OK, rc);
     assert_int_equal(0, out.malformed);
@@ -1213,6 +1213,225 @@ static void test_parse_response_bad_beyond_cap_not_inspected(void** state)
 
     serial->value_destroy(serial, out._tree);
     free(body);
+}
+
+static void parse_ok(const char* body, pn_subscribe_parsed_response_t* out)
+{
+    pubnub_serialization_provider_t* serial = pn_serialization_default();
+    assert_non_null(serial);
+    memset(out, 0, sizeof(*out));
+    assert_int_equal(PUBNUB_OK,
+                     pn_subscribe_parse_response(
+                         serial, NULL, (const uint8_t*)body, strlen(body), out));
+}
+
+static void destroy_tree(pn_subscribe_parsed_response_t* out)
+{
+    pubnub_serialization_provider_t* serial = pn_serialization_default();
+    serial->value_destroy(serial, out->_tree);
+}
+
+static void test_parse_response_unknown_type_positive_skipped(void** state)
+{
+    (void)state;
+    pn_subscribe_parsed_response_t out;
+    parse_ok("{\"t\":{\"t\":\"42\",\"r\":3},"
+             "\"m\":[{\"c\":\"ch\",\"e\":5,\"d\":\"x\"}]}",
+             &out);
+    assert_int_equal(0, out.malformed);
+    assert_int_equal(0, out.message_count);
+    assert_string_equal("42", out.cursor.timetoken);
+    assert_int_equal(3, out.cursor.region);
+    destroy_tree(&out);
+}
+
+static void test_parse_response_unknown_type_negative_skipped(void** state)
+{
+    (void)state;
+    pn_subscribe_parsed_response_t out;
+    parse_ok("{\"t\":{\"t\":\"42\",\"r\":0},"
+             "\"m\":[{\"c\":\"ch\",\"e\":-5,\"d\":\"x\"}]}",
+             &out);
+    assert_int_equal(0, out.malformed);
+    assert_int_equal(0, out.message_count);
+    destroy_tree(&out);
+}
+
+static void test_parse_response_unknown_type_non_numeric_skipped(void** state)
+{
+    (void)state;
+    pn_subscribe_parsed_response_t out;
+    parse_ok("{\"t\":{\"t\":\"42\",\"r\":0},"
+             "\"m\":[{\"c\":\"ch\",\"e\":\"abc\",\"d\":\"x\"}]}",
+             &out);
+    assert_int_equal(0, out.malformed);
+    assert_int_equal(0, out.message_count);
+    destroy_tree(&out);
+}
+
+static void test_parse_response_unknown_type_neighbors_preserved(void** state)
+{
+    (void)state;
+    pn_subscribe_parsed_response_t out;
+    parse_ok("{\"t\":{\"t\":\"99\",\"r\":1},\"m\":["
+             "{\"c\":\"a\",\"d\":\"1\"},"
+             "{\"c\":\"bad1\",\"e\":7},"
+             "{\"c\":\"b\",\"e\":1,\"d\":\"2\"},"
+             "{\"c\":\"bad2\",\"e\":\"zz\"},"
+             "{\"c\":\"c\",\"e\":4,\"d\":\"3\"}]}",
+             &out);
+    assert_int_equal(0, out.malformed);
+    assert_int_equal(3, out.message_count);
+    assert_int_equal(1, out.messages[0].channel.len);
+    assert_memory_equal(out.messages[0].channel.ptr, "a", 1);
+    assert_int_equal(PUBNUB_SUBSCRIBE_MESSAGE, out.messages[0].type);
+    assert_memory_equal(out.messages[1].channel.ptr, "b", 1);
+    assert_int_equal(PUBNUB_SUBSCRIBE_SIGNAL, out.messages[1].type);
+    assert_memory_equal(out.messages[2].channel.ptr, "c", 1);
+    assert_int_equal(PUBNUB_SUBSCRIBE_FILE, out.messages[2].type);
+    assert_string_equal("99", out.cursor.timetoken);
+    destroy_tree(&out);
+}
+
+static void test_parse_response_skipped_event_does_not_leak_fields(void** state)
+{
+    (void)state;
+    pn_subscribe_parsed_response_t out;
+    parse_ok("{\"t\":{\"t\":\"5\",\"r\":0},\"m\":["
+             "{\"c\":\"bad\",\"e\":9,\"f\":512,\"b\":\"wild.*\","
+             "\"i\":\"pub\",\"cmt\":\"kind\",\"p\":{\"t\":\"777\"},"
+             "\"d\":\"x\",\"u\":{}},"
+             "{\"c\":\"ok\",\"d\":\"y\"}]}",
+             &out);
+    assert_int_equal(1, out.message_count);
+    assert_memory_equal(out.messages[0].channel.ptr, "ok", 2);
+    assert_int_equal(0, out.messages[0].flags);
+    assert_int_equal(PUBNUB_SUBSCRIBE_MESSAGE, out.messages[0].type);
+    assert_int_equal(2, out.messages[0].subscription.len);
+    assert_memory_equal(out.messages[0].subscription.ptr, "ok", 2);
+    assert_int_equal(0, out.messages[0].publisher.len);
+    assert_int_equal(0, out.messages[0].custom_message_type.len);
+    assert_int_equal(0, out.messages[0].timetoken.len);
+    assert_null(out.messages[0].user_metadata);
+    destroy_tree(&out);
+}
+
+static void test_parse_response_unknown_type_then_missing_channel_rejects(void** state)
+{
+    (void)state;
+    pn_subscribe_parsed_response_t out;
+    parse_ok("{\"t\":{\"t\":\"5\",\"r\":0},\"m\":["
+             "{\"c\":\"a\",\"d\":\"1\"},"
+             "{\"c\":\"bad\",\"e\":9},"
+             "{\"d\":\"nochannel\"}]}",
+             &out);
+    assert_int_equal(1, out.malformed);
+    assert_int_equal(0, out.message_count);
+    assert_string_equal("5", out.cursor.timetoken);
+    destroy_tree(&out);
+}
+
+static void test_parse_response_unknown_type_then_non_object_rejects(void** state)
+{
+    (void)state;
+    pn_subscribe_parsed_response_t out;
+    parse_ok("{\"t\":{\"t\":\"5\",\"r\":0},\"m\":["
+             "{\"c\":\"bad\",\"e\":9},"
+             "\"str\"]}",
+             &out);
+    assert_int_equal(1, out.malformed);
+    assert_int_equal(0, out.message_count);
+    assert_string_equal("5", out.cursor.timetoken);
+    destroy_tree(&out);
+}
+
+static void test_parse_response_presence_unknown_event_type_skipped(void** state)
+{
+    (void)state;
+    pn_subscribe_parsed_response_t out;
+    parse_ok("{\"t\":{\"t\":\"1\",\"r\":0},\"m\":["
+             "{\"c\":\"x-pnpres\",\"e\":9}]}",
+             &out);
+    assert_int_equal(0, out.malformed);
+    assert_int_equal(0, out.message_count);
+    assert_string_equal("1", out.cursor.timetoken);
+    destroy_tree(&out);
+}
+
+static void test_parse_response_presence_non_integer_event_type_skipped(void** state)
+{
+    (void)state;
+    pn_subscribe_parsed_response_t out;
+    parse_ok("{\"t\":{\"t\":\"1\",\"r\":0},\"m\":["
+             "{\"c\":\"x-pnpres\",\"e\":\"abc\"}]}",
+             &out);
+    assert_int_equal(0, out.malformed);
+    assert_int_equal(0, out.message_count);
+    destroy_tree(&out);
+}
+
+static void test_parse_response_presence_without_event_type_is_presence(void** state)
+{
+    (void)state;
+    pn_subscribe_parsed_response_t out;
+    parse_ok("{\"t\":{\"t\":\"1\",\"r\":0},\"m\":["
+             "{\"c\":\"x-pnpres\"}]}",
+             &out);
+    assert_int_equal(0, out.malformed);
+    assert_int_equal(1, out.message_count);
+    assert_int_equal(PUBNUB_SUBSCRIBE_PRESENCE, (int)out.messages[0].type);
+    assert_int_equal(1, out.messages[0].channel.len);
+    assert_memory_equal(out.messages[0].channel.ptr, "x", 1);
+    assert_int_equal(8, out.messages[0].subscription.len);
+    destroy_tree(&out);
+}
+
+/* A known "e" decides the type even on a -pnpres channel; the channel view is
+ * narrowed only for the implied presence type, so it keeps the suffix here. */
+static void test_parse_response_presence_known_event_type_signal(void** state)
+{
+    (void)state;
+    pn_subscribe_parsed_response_t out;
+    parse_ok("{\"t\":{\"t\":\"1\",\"r\":0},\"m\":["
+             "{\"c\":\"x-pnpres\",\"e\":1}]}",
+             &out);
+    assert_int_equal(1, out.message_count);
+    assert_int_equal(PUBNUB_SUBSCRIBE_SIGNAL, (int)out.messages[0].type);
+    assert_int_equal(8, out.messages[0].channel.len);
+    assert_memory_equal(out.messages[0].channel.ptr, "x-pnpres", 8);
+    destroy_tree(&out);
+}
+
+static void test_parse_response_presence_event_type_zero_is_message(void** state)
+{
+    (void)state;
+    pn_subscribe_parsed_response_t out;
+    parse_ok("{\"t\":{\"t\":\"1\",\"r\":0},\"m\":["
+             "{\"c\":\"x-pnpres\",\"e\":0}]}",
+             &out);
+    assert_int_equal(1, out.message_count);
+    assert_int_equal(PUBNUB_SUBSCRIBE_MESSAGE, (int)out.messages[0].type);
+    assert_int_equal(8, out.messages[0].channel.len);
+    destroy_tree(&out);
+}
+
+static void test_parse_response_known_types_accepted(void** state)
+{
+    (void)state;
+    int e;
+    for (e = 0; e <= 4; ++e) {
+        char                           body[128];
+        pn_subscribe_parsed_response_t out;
+        snprintf(body,
+                 sizeof(body),
+                 "{\"t\":{\"t\":\"1\",\"r\":0},"
+                 "\"m\":[{\"c\":\"ch\",\"e\":%d,\"d\":\"m\"}]}",
+                 e);
+        parse_ok(body, &out);
+        assert_int_equal(1, out.message_count);
+        assert_int_equal(e, (int)out.messages[0].type);
+        destroy_tree(&out);
+    }
 }
 
 int main(void)
@@ -1281,6 +1500,21 @@ int main(void)
         cmocka_unit_test(test_parse_response_presence_no_b_keeps_raw),
         cmocka_unit_test(test_parse_response_full_batch_no_truncation),
         cmocka_unit_test(test_parse_response_bad_beyond_cap_not_inspected),
+
+        /* Unknown event-type skipping. */
+        cmocka_unit_test(test_parse_response_unknown_type_positive_skipped),
+        cmocka_unit_test(test_parse_response_unknown_type_negative_skipped),
+        cmocka_unit_test(test_parse_response_unknown_type_non_numeric_skipped),
+        cmocka_unit_test(test_parse_response_unknown_type_neighbors_preserved),
+        cmocka_unit_test(test_parse_response_skipped_event_does_not_leak_fields),
+        cmocka_unit_test(test_parse_response_unknown_type_then_missing_channel_rejects),
+        cmocka_unit_test(test_parse_response_unknown_type_then_non_object_rejects),
+        cmocka_unit_test(test_parse_response_presence_unknown_event_type_skipped),
+        cmocka_unit_test(test_parse_response_presence_non_integer_event_type_skipped),
+        cmocka_unit_test(test_parse_response_presence_without_event_type_is_presence),
+        cmocka_unit_test(test_parse_response_presence_known_event_type_signal),
+        cmocka_unit_test(test_parse_response_presence_event_type_zero_is_message),
+        cmocka_unit_test(test_parse_response_known_types_accepted),
     };
 
     return cmocka_run_group_tests(tests, NULL, NULL);

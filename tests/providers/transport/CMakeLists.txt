@@ -393,15 +393,10 @@ if(PUBNUB_PROVIDER_TRANSPORT STREQUAL "socket")
         )
         # The offline regression tests drive OpenSSL directly (thread error
         # queue, socketpair), so the test TU needs the OpenSSL headers/libs
-        # that pubnub keeps PRIVATE. The OpenSSL::SSL imported target is not
-        # visible in this directory scope, so use the global cache variables.
-        target_include_directories(
-            test_provider_transport_socket_tls_openssl
-            PRIVATE ${OPENSSL_INCLUDE_DIR}
-        )
+        # that pubnub keeps PRIVATE. The OpenSSL::* targets are IMPORTED_GLOBAL.
         target_link_libraries(
             test_provider_transport_socket_tls_openssl
-            PRIVATE ${OPENSSL_SSL_LIBRARY} ${OPENSSL_CRYPTO_LIBRARY}
+            PRIVATE OpenSSL::SSL OpenSSL::Crypto
         )
     elseif(PUBNUB_SOCKET_TLS_BACKEND STREQUAL "mbedtls")
         pubnub_add_unit_test(
