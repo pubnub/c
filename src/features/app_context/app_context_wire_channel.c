@@ -83,80 +83,60 @@ pn_channel_metadata_build_body(pubnub_serialization_provider_t*          serial,
                                const pubnub_set_channel_metadata_opts_t* opts,
                                pubnub_buffer_t* body_buf)
 {
+    /* The builder owns custom_value from entry; cleared once attached. */
+    pubnub_json_value_t* pending = (NULL != opts) ? opts->custom_value : NULL;
+    pubnub_json_value_t* obj     = NULL;
+    pubnub_res_t         rc      = PUBNUB_OK;
+
     if (NULL == serial || NULL == opts || NULL == body_buf
         || NULL == body_buf->data || 0 == body_buf->cap) {
-        return PUBNUB_ERR_INVALID_ARGUMENT;
+        rc = PUBNUB_ERR_INVALID_ARGUMENT;
+        goto cleanup;
     }
     if (NULL == serial->value_create_object || NULL == serial->object_set
         || NULL == serial->value_create_string || NULL == serial->serialize
         || NULL == serial->value_destroy) {
-        return PUBNUB_ERR_SERIALIZATION;
+        rc = PUBNUB_ERR_SERIALIZATION;
+        goto cleanup;
     }
 
-    pubnub_json_value_t* obj = serial->value_create_object(serial);
+    obj = serial->value_create_object(serial);
     if (NULL == obj) {
-        return PUBNUB_ERR_OUT_OF_MEMORY;
+        rc = PUBNUB_ERR_OUT_OF_MEMORY;
+        goto cleanup;
     }
-
-    pubnub_res_t rc = PUBNUB_OK;
 
     if (NULL != opts->name) {
-        pubnub_json_value_t* val =
-            serial->value_create_string(serial, opts->name, strlen(opts->name));
-        if (NULL == val) {
-            rc = PUBNUB_ERR_OUT_OF_MEMORY;
-            goto cleanup;
-        }
-        rc = serial->object_set(serial, obj, "name", 4, val);
+        rc = pn_app_context_set_string_field(serial, obj, "name", 4, opts->name);
         if (PUBNUB_OK != rc) {
-            serial->value_destroy(serial, val);
             goto cleanup;
         }
     }
 
     if (NULL != opts->description) {
-        pubnub_json_value_t* val = serial->value_create_string(
-            serial, opts->description, strlen(opts->description));
-        if (NULL == val) {
-            rc = PUBNUB_ERR_OUT_OF_MEMORY;
-            goto cleanup;
-        }
-        rc = serial->object_set(serial, obj, "description", 11, val);
+        rc = pn_app_context_set_string_field(
+            serial, obj, "description", 11, opts->description);
         if (PUBNUB_OK != rc) {
-            serial->value_destroy(serial, val);
             goto cleanup;
         }
     }
 
     if (NULL != opts->type) {
-        pubnub_json_value_t* val =
-            serial->value_create_string(serial, opts->type, strlen(opts->type));
-        if (NULL == val) {
-            rc = PUBNUB_ERR_OUT_OF_MEMORY;
-            goto cleanup;
-        }
-        rc = serial->object_set(serial, obj, "type", 4, val);
+        rc = pn_app_context_set_string_field(serial, obj, "type", 4, opts->type);
         if (PUBNUB_OK != rc) {
-            serial->value_destroy(serial, val);
             goto cleanup;
         }
     }
 
     if (NULL != opts->status) {
-        pubnub_json_value_t* val = serial->value_create_string(
-            serial, opts->status, strlen(opts->status));
-        if (NULL == val) {
-            rc = PUBNUB_ERR_OUT_OF_MEMORY;
-            goto cleanup;
-        }
-        rc = serial->object_set(serial, obj, "status", 6, val);
+        rc = pn_app_context_set_string_field(serial, obj, "status", 6, opts->status);
         if (PUBNUB_OK != rc) {
-            serial->value_destroy(serial, val);
             goto cleanup;
         }
     }
 
-    rc = pn_app_context_set_custom_field(
+    pending = NULL;
+    rc      = pn_app_context_set_custom_field(
         serial, obj, opts->custom_value, opts->custom, opts->custom_len);
     if (PUBNUB_OK != rc) {
         goto cleanup;
@@ -165,7 +145,10 @@ pn_channel_metadata_build_body(pubnub_serialization_provider_t*          serial,
     rc = pn_buf_serialize_grow(alloc, serial, obj, body_buf);
 
 cleanup:
-    serial->value_destroy(serial, obj);
+    pn_app_context_discard_custom(serial, pending);
+    if (NULL != obj) {
+        serial->value_destroy(serial, obj);
+    }
     return rc;
 }
 

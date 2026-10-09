@@ -30,6 +30,11 @@ pubnub_add_unit_test(
 
 pubnub_add_unit_test(test_core_feature_registry_units SOURCES feature_registry_units.c LIBS pubnub)
 
+# Clear-value sentinel: PN_IS_CLEAR_VALUE by-address identity contract.
+# Links the aggregate library so the pn_core-defined marker object resolves;
+# the distinct-identical-content case guards against linker/LTO data folding.
+pubnub_add_unit_test(test_core_clear_value_units SOURCES clear_value_units.c LIBS pubnub)
+
 # Response accessor unit tests: pubnub_response_error_message() routing
 # coverage (status_code == 0 verbatim pass-through vs. service_error
 # classifier for status_code != 0). Needs the full provider stack

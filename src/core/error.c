@@ -19,6 +19,7 @@ const char* pubnub_res_str(pubnub_res_t res)
     case PUBNUB_ERR_OUT_OF_MEMORY: return "Out of memory";
     case PUBNUB_ERR_BUFFER_TOO_SMALL: return "Buffer too small";
     case PUBNUB_ERR_QUEUE_FULL: return "Request queue full";
+    case PUBNUB_ERR_LIMIT_REACHED: return "Compile-time limit reached";
     case PUBNUB_ERR_TIMEOUT: return "Operation timed out";
     case PUBNUB_ERR_NO_WALL_CLOCK: return "Wall-clock time unavailable";
     case PUBNUB_ERR_TRANSPORT: return "Transport failure";

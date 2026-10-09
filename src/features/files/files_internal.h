@@ -27,6 +27,9 @@
 #include "pubnub/types.h"
 #include "pubnub/types_fwd.h"
 
+#include "core/runtime/pipeline_internal.h"
+#include "core/runtime/request_internal.h"
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -35,10 +38,6 @@
 extern "C" {
 // clang-format on
 #endif
-
-/** Forward declarations — full definitions live in their own headers. */
-typedef struct pn_request  pn_request_t;
-typedef struct pn_pipeline pn_pipeline_t;
 
 /**
  * @brief Send-file state machine phases.
@@ -467,17 +466,34 @@ pubnub_res_t pn_file_build_download_request(pubnub_http_request_t* request,
                                             const pn_file_download_inputs_t* in);
 
 /**
+ * @brief Extract the send-state fields from an already parsed
+ *        generate-upload-url tree.
+ *
+ * @param serial Serialization provider that produced @p tree (borrowed).
+ * @param tree   Parsed response root (borrowed).
+ * @param state  Send state to populate with extracted values.
+ * @return PUBNUB_OK on success, PUBNUB_ERR_SERIALIZATION on a malformed
+ *         shape, PUBNUB_ERR_OUT_OF_MEMORY on allocation failure, or
+ *         PUBNUB_ERR_INVALID_ARGUMENT for NULL inputs.
+ */
+pubnub_res_t pn_file_parse_generate_url_tree(pubnub_serialization_provider_t* serial,
+                                             const pubnub_json_value_t* tree,
+                                             pn_file_send_state_t*      state);
+
+/**
  * @brief Parse the generate-upload-url JSON response.
  *
- * Extracts file ID, file name, upload URL, and form fields from the
- * response body. The parsed JSON tree is stored in @p state for
- * form-field view lifetime.
+ * Parses @p body, then extracts file ID, file name, upload URL, and form
+ * fields via @ref pn_file_parse_generate_url_tree. On success the parsed
+ * tree is stored in @p state (@c generate_url_tree) to keep the
+ * form-field views valid; on failure it is destroyed.
  *
  * @param serial Serialization provider (borrowed).
  * @param body   Response body bytes (borrowed).
  * @param len    Response body length.
  * @param state  Send state to populate with extracted values.
- * @return PUBNUB_OK on success, PUBNUB_ERR_SERIALIZATION on parse failure.
+ * @return PUBNUB_OK on success, PUBNUB_ERR_SERIALIZATION on parse failure,
+ *         PUBNUB_ERR_INVALID_ARGUMENT for NULL or empty input.
  */
 pubnub_res_t pn_file_parse_generate_url_response(pubnub_serialization_provider_t* serial,
                                                  const uint8_t*        body,

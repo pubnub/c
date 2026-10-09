@@ -31,17 +31,41 @@ extern "C" {
 // clang-format on
 #endif
 
-/**
- * @brief Maximum subscriptions per subscription set.
- *
- * Defaults to PUBNUB_CFG_MAX_SUBSCRIBE_CHANNELS so each set can
- * reference up to the configured channel limit. Override via
- * -DPUBNUB_CFG_MAX_SUBSCRIPTIONS_PER_SET=N if a different cap is
- * needed.
- */
-#ifndef PUBNUB_CFG_MAX_SUBSCRIPTIONS_PER_SET
+/* Fallback for non-CMake builds that define only the channel cap: default
+ * the independent subscribe caps to it. Inert for CMake builds. */
+#if !defined(PUBNUB_CFG_MAX_SUBSCRIPTIONS) \
+    && defined(PUBNUB_CFG_MAX_SUBSCRIBE_CHANNELS)
+#define PUBNUB_CFG_MAX_SUBSCRIPTIONS PUBNUB_CFG_MAX_SUBSCRIBE_CHANNELS
+#endif
+#if !defined(PUBNUB_CFG_MAX_SUBSCRIPTION_SETS) \
+    && defined(PUBNUB_CFG_MAX_SUBSCRIBE_CHANNELS)
+#define PUBNUB_CFG_MAX_SUBSCRIPTION_SETS PUBNUB_CFG_MAX_SUBSCRIBE_CHANNELS
+#endif
+#if !defined(PUBNUB_CFG_MAX_SUBSCRIPTIONS_PER_SET) \
+    && defined(PUBNUB_CFG_MAX_SUBSCRIBE_CHANNELS)
 #define PUBNUB_CFG_MAX_SUBSCRIPTIONS_PER_SET PUBNUB_CFG_MAX_SUBSCRIBE_CHANNELS
 #endif
+
+/* Each cap must fit uint16_t slot indices (UINT16_MAX is the "none"
+ * sentinel); a set holds no more members than there are handles. */
+PUBNUB_STATIC_ASSERT(
+    PUBNUB_CFG_MAX_SUBSCRIBE_CHANNELS >= 1
+        && PUBNUB_CFG_MAX_SUBSCRIBE_CHANNELS <= 65535,
+    "PUBNUB_CFG_MAX_SUBSCRIBE_CHANNELS out of range [1,65535]");
+PUBNUB_STATIC_ASSERT(PUBNUB_CFG_MAX_SUBSCRIPTIONS >= 1
+                         && PUBNUB_CFG_MAX_SUBSCRIPTIONS <= 65535,
+                     "PUBNUB_CFG_MAX_SUBSCRIPTIONS out of range [1,65535]");
+PUBNUB_STATIC_ASSERT(PUBNUB_CFG_MAX_SUBSCRIPTION_SETS >= 1
+                         && PUBNUB_CFG_MAX_SUBSCRIPTION_SETS <= 65535,
+                     "PUBNUB_CFG_MAX_SUBSCRIPTION_SETS out of range [1,65535]");
+PUBNUB_STATIC_ASSERT(
+    PUBNUB_CFG_MAX_SUBSCRIPTIONS_PER_SET >= 1
+        && PUBNUB_CFG_MAX_SUBSCRIPTIONS_PER_SET <= 65535,
+    "PUBNUB_CFG_MAX_SUBSCRIPTIONS_PER_SET out of range [1,65535]");
+PUBNUB_STATIC_ASSERT(PUBNUB_CFG_MAX_SUBSCRIPTIONS_PER_SET
+                         <= PUBNUB_CFG_MAX_SUBSCRIPTIONS,
+                     "PUBNUB_CFG_MAX_SUBSCRIPTIONS_PER_SET must be <= "
+                     "PUBNUB_CFG_MAX_SUBSCRIPTIONS");
 
 /**
  * @brief Entity type for a subscription entry.
@@ -76,7 +100,8 @@ typedef struct pn_subscription_entry {
     uint16_t name_len;
     /** Entity type (channel or channel group). */
     pn_subscribe_entity_type_t entity_type;
-    /** 1 = also subscribe to presence channel (<name>-pnpres). */
+    /** Cache of (presence_contributors > 0); 1 emits `<name>-pnpres`. Sole
+     *  writer: pn_subscription_entry_presence_adjust(). */
     uint8_t with_presence;
     /** Non-zero when this slot is occupied. */
     uint8_t occupied;
@@ -85,21 +110,28 @@ typedef struct pn_subscription_entry {
     /** Number of subscriptions with subscribed=1 referencing this entry.
      *  Only entries with active_count > 0 appear on the wire. */
     uint16_t active_count;
+    /** Distinct presence sources (presence-requesting standalone handles and
+     *  sets with such a member); with_presence caches (this > 0). */
+    uint16_t presence_contributors;
 } pn_subscription_entry_t;
 
 /**
  * @brief Internal subscription set slot data.
  *
- * Stores the actual entry indices for a subscription set. One slot
- * exists per active set in the manager's fixed-capacity array.
+ * Holds member handles by tracked_subs[] slot index, taking one reference on
+ * each. A member resolves to tracked_subs[member_slot]->entry_index; the set
+ * contributes one active-count share per distinct entry while subscribed.
  */
 typedef struct pn_subscription_set_data {
-    /** Indices into the manager's entries[] array. */
-    uint16_t entry_indices[PUBNUB_CFG_MAX_SUBSCRIPTIONS_PER_SET];
-    /** Number of valid entries in entry_indices[]. */
+    /** Member handle slot indices into the manager's tracked_subs[] table. */
+    uint16_t member_slots[PUBNUB_CFG_MAX_SUBSCRIPTIONS_PER_SET];
+    /** Number of valid entries in member_slots[]. */
     uint16_t count;
     /** 1 = set slot is occupied. */
     uint8_t active;
+    /** 1 = set is subscribed. Mirrors the public handle's subscribed flag;
+     *  per-set listeners deliver events only while this is 1. */
+    uint8_t subscribed;
 } pn_subscription_set_data_t;
 
 /**
@@ -128,14 +160,14 @@ typedef struct pubnub_subscription_set pn_subscription_set_t;
  * on_status callback receives subscribe lifecycle events. All fields
  * mirror the public pubnub_subscribe_listener_t structure.
  *
- * Listeners support optional binding to a specific subscription entry
- * or subscription set for filtered event delivery:
- *  - bound_entry_index = UINT16_MAX AND bound_set_index = UINT16_MAX:
- *    Global listener, receives all events.
- *  - bound_entry_index != UINT16_MAX: per-subscription listener,
- *    receives only events matching that entry.
- *  - bound_set_index != UINT16_MAX: per-set listener, receives events
- *    whose source entry is a member of the referenced set.
+ * Binding filters delivery:
+ *  - both bound_* = UINT16_MAX: global listener, receives all events.
+ *  - bound_slot_index set: per-handle listener; delivers while that handle is
+ *    subscribed, or while at least one subscribed set contains it, and its
+ *    entry name matches. Binds to the slot, not the shared entry, so it
+ *    survives an unsubscribe/subscribe cycle.
+ *  - bound_set_index set: per-set listener; delivers for the set's members
+ *    only while the set is subscribed.
  */
 typedef struct pn_subscribe_listener {
     /** Status change callback (may be NULL). */
@@ -154,9 +186,10 @@ typedef struct pn_subscribe_listener {
     pubnub_subscribe_file_cb_t on_file;
     /** Opaque user data forwarded to all callbacks. */
     void* user_data;
-    /** Bound subscription entry index (UINT16_MAX = not bound). */
-    uint16_t bound_entry_index;
-    /** Bound subscription set index (UINT16_MAX = not bound). */
+    /** Bound handle slot into tracked_subs[], or UINT16_MAX when not bound
+     *  (both bound_* at UINT16_MAX means a global listener). */
+    uint16_t bound_slot_index;
+    /** Bound set index, or UINT16_MAX when not bound. */
     uint16_t bound_set_index;
     /** Non-zero when this listener slot is occupied. */
     uint8_t active;
@@ -208,8 +241,25 @@ struct pubnub_subscription {
     pubnub_context_t* ctx;
     /** Index into the manager's entries[] array. */
     uint16_t entry_index;
-    /** 1 = currently contributing to the active channel set. */
+    /** Own index into the manager's tracked_subs[] slot table, or
+     *  UINT16_MAX when not tracked. */
+    uint16_t slot_index;
+    /** Reference count: creator holds one, each owning set one more. Handle
+     *  and its registry-entry reference freed at 0; saturated adds refused. */
+    uint16_t ref_count;
+    /** 1 = this handle's own share contributes to the active channel set.
+     *  Cleared on destroy even while the handle lives on in a set. */
     uint8_t subscribed;
+    /** 1 = handle requested presence (`<name>-pnpres`). Immutable after
+     *  creation; always 0 for metadata entities. */
+    uint8_t with_presence;
+    /** Number of currently-subscribed sets that contain this handle. A
+     *  per-handle listener fires while `subscribed` is set OR this count is
+     *  non-zero, so a member of a subscribed set receives events even when its
+     *  own handle was never directly subscribed. Maintained under the context
+     *  lock alongside set membership/subscribe state. Saturates at UINT16_MAX;
+     *  never decremented below 0. */
+    uint16_t subscribed_set_refs;
 };
 
 /** Internal alias so existing src/ code compiles unchanged. */
@@ -229,7 +279,7 @@ typedef struct pn_subscribe_manager {
     uint16_t channel_count;
 
     /** Subscription sets (fixed capacity). */
-    pn_subscription_set_data_t sets[PUBNUB_CFG_MAX_SUBSCRIBE_CHANNELS];
+    pn_subscription_set_data_t sets[PUBNUB_CFG_MAX_SUBSCRIPTION_SETS];
     /** Number of active sets. */
     uint16_t set_count;
 
@@ -286,6 +336,11 @@ typedef struct pn_subscribe_manager {
     /** 1 = context is being destroyed; callbacks must no-op. */
     uint8_t draining;
 
+    /** Consecutive malformed response batches; reset on any clean parse.
+     *  At a ceiling, a RECEIVE_FAILURE event breaks the stale-cursor loop.
+     *  Poll-thread only. */
+    uint8_t consecutive_malformed;
+
     /**
      * Non-zero while an emit function is iterating the listener
      * array and invoking callbacks. When set, pubnub_remove_listener
@@ -304,16 +359,16 @@ typedef struct pn_subscribe_manager {
      */
     PUBNUB_ATOMIC_UINT8 invoke_pending;
 
-    /** Live subscription handles (registered on create, cleared on
-     *  destroy). Enables the pubnub_subscriptions() introspection
-     *  accessor to return the same handles the caller created. */
-    pn_subscription_t* tracked_subs[PUBNUB_CFG_MAX_SUBSCRIBE_CHANNELS];
-    /** Number of entries in tracked_subs[] that are non-NULL. */
+    /** Stable slot table of live handles: a handle keeps its slot for life
+     *  (freed slots become NULL holes, never compacted) so sets can
+     *  reference members by slot index. Backs pubnub_subscriptions(). */
+    pn_subscription_t* tracked_subs[PUBNUB_CFG_MAX_SUBSCRIPTIONS];
+    /** Number of non-NULL (occupied) slots in tracked_subs[]. */
     uint16_t tracked_sub_count;
 
     /** Live subscription set handles (registered on create, cleared
      *  on destroy). Enables pubnub_subscription_sets(). */
-    pn_subscription_set_t* tracked_sets[PUBNUB_CFG_MAX_SUBSCRIBE_CHANNELS];
+    pn_subscription_set_t* tracked_sets[PUBNUB_CFG_MAX_SUBSCRIPTION_SETS];
     /** Number of entries in tracked_sets[] that are non-NULL. */
     uint16_t tracked_set_count;
 
@@ -328,8 +383,8 @@ typedef struct pn_subscribe_manager {
     pubnub_context_t* ctx;
 } pn_subscribe_manager_t;
 
-/* Compile-time guard: catch unexpected size regressions on 32-bit
- * embedded targets. */
+/* Compile-time guard: catch size regressions on 32-bit embedded targets.
+ * ILP32 worst case (full profile) is ~3.3 KB, under the 4 KB budget. */
 #if !defined(__LP64__) && !defined(_WIN64) && !defined(__x86_64__)
 PUBNUB_STATIC_ASSERT(sizeof(pn_subscribe_manager_t) <= 4096,
                      "pn_subscribe_manager_t exceeds embedded memory budget");
@@ -391,6 +446,26 @@ uint16_t pn_subscription_acquire(pn_subscribe_manager_t*    mgr,
                                  uint8_t                    with_presence);
 
 /**
+ * @brief Report whether the entity table has no room for a new entity.
+ *
+ * True only when no entry matches @p name + @p entity_type and no free
+ * slot remains, i.e. a failed pn_subscription_acquire() was caused by
+ * PUBNUB_CFG_MAX_SUBSCRIBE_CHANNELS rather than allocation failure or
+ * reference-count saturation. The caller must hold the context lock.
+ *
+ * @param mgr         Manager (NULL yields 0).
+ * @param name        Entity name (need not be NUL-terminated).
+ * @param name_len    Number of bytes in name.
+ * @param entity_type Channel or channel-group.
+ * @retval 0 A matching entry or a free slot exists (or inputs invalid).
+ * @retval 1 The entity table is exhausted for this entity.
+ */
+uint8_t pn_subscription_entity_table_full(const pn_subscribe_manager_t* mgr,
+                                          const char*                   name,
+                                          uint16_t name_len,
+                                          pn_subscribe_entity_type_t entity_type);
+
+/**
  * @brief Release a reference to a subscription entry.
  *
  * Decrements the reference count. If it reaches zero, the entry slot
@@ -410,36 +485,151 @@ void pn_subscription_release(pn_subscribe_manager_t* mgr, uint16_t index);
 uint16_t pn_subscription_set_create(pn_subscribe_manager_t* mgr);
 
 /**
- * @brief Add a subscription entry to a subscription set.
- *
- * Calls pn_subscription_acquire() internally and appends the index
- * to the set's entry_indices[].
- *
- * @param mgr           Manager (non-NULL).
- * @param set_index     Set index returned by pn_subscription_set_create().
- * @param name          NUL-terminated entity name.
- * @param name_len      Length of name (excludes NUL).
- * @param entity_type   Channel or channel-group.
- * @param with_presence 1 to also subscribe to presence.
- * @return PUBNUB_OK on success, or an error code.
- */
-pubnub_res_t pn_subscription_set_add(pn_subscribe_manager_t*    mgr,
-                                     uint16_t                   set_index,
-                                     const char*                name,
-                                     uint16_t                   name_len,
-                                     pn_subscribe_entity_type_t entity_type,
-                                     uint8_t                    with_presence);
-
-/**
  * @brief Remove and destroy a subscription set.
  *
- * Releases all subscription entries in the set and marks the set slot
- * as inactive.
+ * Drops the set's reference on every member handle (freeing any handle
+ * whose last reference this was) and marks the set slot as inactive. Does
+ * not touch active_count or emit presence — the caller must settle the
+ * set's wire shares before calling this.
  *
  * @param mgr       Manager (non-NULL).
  * @param set_index Set index.
  */
 void pn_subscription_set_destroy(pn_subscribe_manager_t* mgr, uint16_t set_index);
+
+/**
+ * @brief Register a subscription handle in the stable slot table.
+ *
+ * Assigns a free slot and records it on @c sub->slot_index. The caller
+ * must hold the context lock.
+ *
+ * @param mgr Manager (non-NULL).
+ * @param sub Subscription handle to track (non-NULL).
+ * @return Assigned slot index, or UINT16_MAX when the table is full.
+ */
+uint16_t pn_track_subscription(pn_subscribe_manager_t* mgr, pn_subscription_t* sub);
+
+/**
+ * @brief Remove a subscription handle from the stable slot table.
+ *
+ * Clears the handle's slot (leaving a NULL hole) when it still owns that
+ * slot. The caller must hold the context lock.
+ *
+ * @param mgr Manager (non-NULL).
+ * @param sub Subscription handle to untrack (non-NULL).
+ */
+void pn_untrack_subscription(pn_subscribe_manager_t* mgr, pn_subscription_t* sub);
+
+/**
+ * @brief Drop one reference on a subscription handle.
+ *
+ * At zero, releases the handle's registry-entry reference, untracks its
+ * slot, and frees the handle. The caller must hold the context lock; the
+ * free runs under the lock (allocator free is O(1), non-blocking).
+ *
+ * @param mgr Manager (non-NULL).
+ * @param sub Subscription handle (may be NULL — no-op).
+ */
+void pn_subscription_handle_unref(pn_subscribe_manager_t* mgr,
+                                  pn_subscription_t*      sub);
+
+/**
+ * @brief Add a subscription handle as a member of a set.
+ *
+ * Appends the handle's slot to the set and takes one reference on the
+ * handle. Membership is deduplicated by handle: adding a handle already
+ * in the set is a no-op. Does not touch active_count. The caller must
+ * hold the context lock.
+ *
+ * @param mgr       Manager (non-NULL).
+ * @param set_index Set index.
+ * @param sub       Member subscription handle (non-NULL, already tracked).
+ * @retval 1  Added as a new member.
+ * @retval 0  Already a member (no-op).
+ * @retval -1 Set is full or the handle's reference count is saturated.
+ */
+int pn_subscription_set_add_member(pn_subscribe_manager_t* mgr,
+                                   uint16_t                set_index,
+                                   pn_subscription_t*      sub);
+
+/**
+ * @brief Remove a member handle slot from a set.
+ *
+ * Removes the member at the matching slot. Does not drop the handle
+ * reference — the caller unrefs separately after settling active_count.
+ * The caller must hold the context lock.
+ *
+ * @param mgr         Manager (non-NULL).
+ * @param set_index   Set index.
+ * @param member_slot Handle slot to remove.
+ * @retval 1 Removed.
+ * @retval 0 Not a member.
+ */
+int pn_subscription_set_remove_member_slot(pn_subscribe_manager_t* mgr,
+                                           uint16_t                set_index,
+                                           uint16_t                member_slot);
+
+/**
+ * @brief Count members of a set that resolve to a given registry entry.
+ *
+ * @param mgr         Manager (non-NULL).
+ * @param set_index   Set index.
+ * @param entry_index Registry entry to match.
+ * @return Number of member handles whose entry_index equals @p entry_index.
+ */
+uint16_t pn_subscription_set_member_entry_count(const pn_subscribe_manager_t* mgr,
+                                                uint16_t set_index,
+                                                uint16_t entry_index);
+
+/**
+ * @brief Count presence-requesting members of a set that resolve to an entry.
+ *
+ * Like pn_subscription_set_member_entry_count() but counts only member
+ * handles whose own @c with_presence flag is set. Used to decide when a
+ * subscribed set gains or loses its single presence share for an entry.
+ *
+ * @param mgr         Manager (non-NULL).
+ * @param set_index   Set index.
+ * @param entry_index Registry entry to match.
+ * @return Number of presence-requesting member handles resolving to the entry.
+ */
+uint16_t pn_subscription_set_member_entry_presence_count(const pn_subscribe_manager_t* mgr,
+                                                         uint16_t set_index,
+                                                         uint16_t entry_index);
+
+/**
+ * @brief Adjust an entry's presence-contributor count and refresh its cache.
+ *
+ * Increments (positive) or decrements (!positive) the entry's
+ * presence_contributors, clamping at 0 and UINT16_MAX, then recomputes the
+ * derived @c with_presence cache as (presence_contributors > 0). This is the
+ * ONLY writer of @c with_presence. The caller must hold the context lock.
+ *
+ * @param mgr         Manager (non-NULL).
+ * @param entry_index Registry entry to adjust.
+ * @param positive    Non-zero to add a presence share, 0 to drop one.
+ * @retval 1 The derived @c with_presence cache flipped (0->1 or 1->0).
+ * @retval 0 No cache change (counter saturated, entry invalid, or the flip
+ *           threshold was not crossed).
+ */
+int pn_subscription_entry_presence_adjust(pn_subscribe_manager_t* mgr,
+                                          uint16_t                entry_index,
+                                          int                     positive);
+
+/**
+ * @brief Collect the distinct registry entries referenced by a set's
+ *        members.
+ *
+ * @param mgr       Manager (non-NULL).
+ * @param set_index Set index.
+ * @param out       Caller buffer receiving distinct entry indices.
+ * @param out_cap   Capacity of @p out.
+ * @return Number of distinct entries written (<= out_cap).
+ */
+uint16_t pn_subscription_set_distinct_entries(const pn_subscribe_manager_t* mgr,
+                                              uint16_t  set_index,
+                                              uint16_t* out,
+                                              uint16_t  out_cap);
 
 /**
  * @brief Register a typed listener (global — receives all events).
@@ -457,20 +647,22 @@ pn_subscribe_listener_add(pn_subscribe_manager_t*            mgr,
                           const pubnub_subscribe_listener_t* listener);
 
 /**
- * @brief Register a listener bound to a specific subscription entry.
+ * @brief Register a listener bound to a specific subscription handle.
  *
- * The listener only receives message events whose source entry index
- * matches @p entry_index. Status events are always delivered.
+ * The listener receives message events only while the handle at
+ * @p slot_index is subscribed and its entry name matches the event.
+ * Status events are never delivered to a bound listener.
  *
- * @param mgr         Manager (non-NULL).
- * @param listener    Listener with typed callbacks (borrowed, copied).
- * @param entry_index Registry entry index to bind to.
- * @return Listener handle, or PN_LISTENER_HANDLE_INVALID when full.
+ * @param mgr        Manager (non-NULL).
+ * @param listener   Listener with typed callbacks (borrowed, copied).
+ * @param slot_index Handle slot (index into tracked_subs[]) to bind to.
+ * @return Listener handle, or PN_LISTENER_HANDLE_INVALID when full or when
+ *         no handle occupies @p slot_index.
  */
 pn_listener_handle_t
 pn_subscribe_listener_add_bound(pn_subscribe_manager_t*            mgr,
                                 const pubnub_subscribe_listener_t* listener,
-                                uint16_t                           entry_index);
+                                uint16_t                           slot_index);
 
 /**
  * @brief Register a listener bound to a subscription set.
@@ -499,6 +691,34 @@ void pn_subscribe_listener_remove(pn_subscribe_manager_t* mgr,
                                   pn_listener_handle_t    handle);
 
 /**
+ * @brief Detach every per-subscription listener bound to a handle slot.
+ *
+ * Removes all listeners whose @c bound_slot_index equals @p slot_index via
+ * the deferred-removal path of pn_subscribe_listener_remove(), so it is safe
+ * to call from within a listener callback. The caller must hold the context
+ * lock.
+ *
+ * @param mgr        Manager (non-NULL).
+ * @param slot_index Handle slot whose listeners are detached.
+ */
+void pn_subscribe_listener_remove_for_slot(pn_subscribe_manager_t* mgr,
+                                           uint16_t                slot_index);
+
+/**
+ * @brief Detach every per-set listener bound to a subscription set.
+ *
+ * Removes all listeners whose @c bound_set_index equals @p set_index via the
+ * deferred-removal path of pn_subscribe_listener_remove(), so it is safe to
+ * call from within a listener callback. The caller must hold the context
+ * lock.
+ *
+ * @param mgr       Manager (non-NULL).
+ * @param set_index Set whose listeners are detached.
+ */
+void pn_subscribe_listener_remove_for_set(pn_subscribe_manager_t* mgr,
+                                          uint16_t                set_index);
+
+/**
  * @brief Emit a status event to all registered listeners.
  *
  * Builds a public pubnub_subscribe_status_event_t on the stack from
@@ -516,20 +736,18 @@ void pn_subscribe_emit_status(pn_subscribe_manager_t*         mgr,
  *
  * Invokes the callback matching the message type (on_message,
  * on_signal, on_presence, on_message_action, on_app_context, on_file).
- * The event is already in public form inside the dispatch entry.
  *
  * @param mgr   Manager (non-NULL).
- * @param entry Dispatch entry (borrowed, valid for call duration).
+ * @param event Event (borrowed, valid for call duration).
  */
-void pn_subscribe_emit_message(pn_subscribe_manager_t*              mgr,
-                               const pn_subscribe_dispatch_entry_t* entry);
+void pn_subscribe_emit_message(pn_subscribe_manager_t*         mgr,
+                               const pubnub_subscribe_event_t* event);
 
 /**
  * @brief Build the comma-separated channel string for the wire.
  *
- * Iterates all occupied entries of type PN_ENTITY_CHANNEL and writes
- * their names (plus -pnpres variants when with_presence is set) into
- * @p buf. Returns the number of bytes written (excluding NUL).
+ * Iterates active path-eligible entries and writes their unique names
+ * (plus -pnpres variants when with_presence is set) into @p buf.
  *
  * @param mgr     Manager (non-NULL).
  * @param buf     Output buffer (NUL-terminated on success).
@@ -628,47 +846,19 @@ char* pn_subscribe_build_heartbeat_group_string_alloc(
 int pn_subscribe_subscriptions_empty(const pn_subscribe_manager_t* mgr);
 
 /**
- * @brief Check whether an entry is a member of a subscription set.
+ * @brief Check whether any member of a set resolves to a given entry.
+ *
+ * Scans the set's member handle slots and matches on the entry each
+ * member resolves to (tracked_subs[slot]->entry_index).
  *
  * @param mgr         Manager (non-NULL).
  * @param set_index   Set index to check.
- * @param entry_index Entry index to search for in the set.
- * @return 1 if the entry is a member, 0 otherwise.
+ * @param entry_index Entry index to search for among the set's members.
+ * @return 1 if a member resolves to the entry, 0 otherwise.
  */
 int pn_subscription_set_contains(const pn_subscribe_manager_t* mgr,
                                  uint16_t                      set_index,
                                  uint16_t                      entry_index);
-
-/**
- * @brief Remove an entry from a subscription set by entry_index.
- *
- * Scans the set's entry_indices[] for a match. If found, shifts
- * remaining elements down (memmove), decrements count, and releases
- * the ref_count via pn_subscription_release.
- *
- * @param mgr         Manager (non-NULL).
- * @param set_index   Set index.
- * @param entry_index Entry to remove.
- * @return 1 if found and removed, 0 if not found.
- */
-int pn_subscription_set_remove_entry(pn_subscribe_manager_t* mgr,
-                                     uint16_t                set_index,
-                                     uint16_t                entry_index);
-
-/**
- * @brief Resolve a channel name to its entry index in the registry.
- *
- * Strips the `-pnpres` suffix before lookup. Returns UINT16_MAX
- * when the channel name cannot be matched to any occupied entry.
- *
- * @param mgr         Manager (non-NULL).
- * @param channel_ptr Channel name string.
- * @param channel_len Length in bytes.
- * @return Entry index on success, UINT16_MAX on not found.
- */
-uint16_t pn_subscribe_resolve_entry(const pn_subscribe_manager_t* mgr,
-                                    const char*                   channel_ptr,
-                                    size_t                        channel_len);
 
 /**
  * @brief Feature cleanup callback for the feature registry.

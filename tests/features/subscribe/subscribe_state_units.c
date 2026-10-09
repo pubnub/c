@@ -22,10 +22,6 @@
 #include "features/subscribe/subscribe_event_queue.h"
 #include "features/subscribe/subscribe_internal.h"
 
-/* ================================================================== */
-/* UNSUBSCRIBED state                                                   */
-/* ================================================================== */
-
 static void test_unsubscribed_subscription_changed_nonempty(void** state)
 {
     (void)state;
@@ -84,10 +80,6 @@ static void test_unsubscribed_ignores_disconnect(void** state)
     assert_int_equal(PN_SUBSCRIBE_STATE_UNSUBSCRIBED, result.new_state);
     assert_int_equal(0, result.effect_count);
 }
-
-/* ================================================================== */
-/* HANDSHAKING state                                                    */
-/* ================================================================== */
 
 static void test_handshaking_handshake_success(void** state)
 {
@@ -212,10 +204,6 @@ static void test_handshaking_unsubscribe_all(void** state)
     assert_int_equal(PN_SUB_EE_EFFECT_CANCEL_HANDSHAKE, result.effects[0].type);
 }
 
-/* ================================================================== */
-/* HANDSHAKE_FAILED state                                              */
-/* ================================================================== */
-
 static void test_handshake_failed_reconnect(void** state)
 {
     (void)state;
@@ -272,10 +260,6 @@ static void test_handshake_failed_unsubscribe_all(void** state)
     assert_int_equal(PN_SUBSCRIBE_STATE_UNSUBSCRIBED, result.new_state);
     assert_int_equal(0, result.effect_count);
 }
-
-/* ================================================================== */
-/* HANDSHAKE_STOPPED state                                             */
-/* ================================================================== */
 
 static void test_handshake_stopped_reconnect(void** state)
 {
@@ -336,10 +320,6 @@ static void test_handshake_stopped_subscription_restored_nonempty(void** state)
     assert_int_equal(PN_SUBSCRIBE_STATE_HANDSHAKE_STOPPED, result.new_state);
     assert_int_equal(0, result.effect_count);
 }
-
-/* ================================================================== */
-/* RECEIVING state                                                      */
-/* ================================================================== */
 
 static void test_receiving_receive_success(void** state)
 {
@@ -477,10 +457,6 @@ static void test_receiving_subscription_restored_empty(void** state)
     assert_int_equal(PN_SUB_EE_STATUS_DISCONNECTED, result.effects[1].status);
 }
 
-/* ================================================================== */
-/* RECEIVE_FAILED state                                                */
-/* ================================================================== */
-
 static void test_receive_failed_reconnect(void** state)
 {
     (void)state;
@@ -537,10 +513,6 @@ static void test_receive_failed_unsubscribe_all(void** state)
     assert_int_equal(PN_SUBSCRIBE_STATE_UNSUBSCRIBED, result.new_state);
     assert_int_equal(0, result.effect_count);
 }
-
-/* ================================================================== */
-/* RECEIVE_STOPPED state                                               */
-/* ================================================================== */
 
 static void test_receive_stopped_reconnect(void** state)
 {
@@ -614,10 +586,6 @@ static void test_receive_stopped_unsubscribe_all(void** state)
     assert_int_equal(0, result.effect_count);
 }
 
-/* ================================================================== */
-/* Cross-cutting: UNSUBSCRIBE_ALL from multiple states                 */
-/* ================================================================== */
-
 static void test_unsubscribe_all_from_handshake_failed(void** state)
 {
     (void)state;
@@ -639,10 +607,6 @@ static void test_unsubscribe_all_from_handshake_stopped(void** state)
 
     assert_int_equal(PN_SUBSCRIBE_STATE_UNSUBSCRIBED, result.new_state);
 }
-
-/* ================================================================== */
-/* NULL event safety                                                    */
-/* ================================================================== */
 
 static void test_null_event_returns_same_state(void** state)
 {

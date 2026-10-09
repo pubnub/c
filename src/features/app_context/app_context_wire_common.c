@@ -2,6 +2,7 @@
 /* See LICENSE in the root directory of this source tree. */
 
 #include "app_context_internal.h"
+#include "core/clear_value_internal.h"
 
 #include "core/pn_format.h"
 #include "core/runtime/middleware/middleware_internal.h"
@@ -235,16 +236,27 @@ pubnub_res_t pn_app_context_set_custom_field(pubnub_serialization_provider_t* se
     }
 
     if (NULL != custom_raw) {
-        if (NULL == serial->value_create_raw) {
+        int                  is_clear_value = PN_IS_CLEAR_VALUE(custom_raw);
+        pubnub_json_value_t* val;
+        pubnub_res_t         rc;
+
+        if ((NULL == serial->value_create_raw && !is_clear_value)
+            || (NULL == serial->value_create_null && is_clear_value)) {
             return PUBNUB_ERR_NOT_SUPPORTED;
         }
-        size_t clen = (0 == custom_raw_len) ? strlen(custom_raw) : custom_raw_len;
-        pubnub_json_value_t* val =
-            serial->value_create_raw(serial, (const uint8_t*)custom_raw, clen);
+
+        if (!is_clear_value) {
+            size_t clen =
+                (0 == custom_raw_len) ? strlen(custom_raw) : custom_raw_len;
+            val = serial->value_create_raw(serial, (const uint8_t*)custom_raw, clen);
+        } else {
+            val = serial->value_create_null(serial);
+        }
+
         if (NULL == val) {
             return PUBNUB_ERR_OUT_OF_MEMORY;
         }
-        pubnub_res_t rc = serial->object_set(serial, obj, "custom", 6, val);
+        rc = serial->object_set(serial, obj, "custom", 6, val);
         if (PUBNUB_OK != rc) {
             serial->value_destroy(serial, val);
         }
@@ -252,6 +264,14 @@ pubnub_res_t pn_app_context_set_custom_field(pubnub_serialization_provider_t* se
     }
 
     return PUBNUB_OK;
+}
+
+void pn_app_context_discard_custom(pubnub_serialization_provider_t* serial,
+                                   pubnub_json_value_t* custom_value)
+{
+    if (NULL != custom_value && NULL != serial && NULL != serial->value_destroy) {
+        serial->value_destroy(serial, custom_value);
+    }
 }
 
 pubnub_res_t pn_app_context_response_validator(const uint8_t* body,
@@ -327,6 +347,34 @@ pubnub_res_t pn_app_context_parse_page(pubnub_serialization_provider_t* serial,
     }
 
     return PUBNUB_OK;
+}
+
+pubnub_res_t pn_app_context_set_string_field(pubnub_serialization_provider_t* serial,
+                                             pubnub_json_value_t* obj,
+                                             const char*          key,
+                                             size_t               key_len,
+                                             const char*          value)
+{
+    pubnub_json_value_t* val;
+    pubnub_res_t         rc;
+
+    if (!PN_IS_CLEAR_VALUE(value)) {
+        val = serial->value_create_string(serial, value, strlen(value));
+    } else {
+        if (NULL == serial->value_create_null) {
+            return PUBNUB_ERR_NOT_SUPPORTED;
+        }
+        val = serial->value_create_null(serial);
+    }
+
+    if (NULL == val) {
+        return PUBNUB_ERR_OUT_OF_MEMORY;
+    }
+    rc = serial->object_set(serial, obj, key, key_len, val);
+    if (PUBNUB_OK != rc) {
+        serial->value_destroy(serial, val);
+    }
+    return rc;
 }
 
 pubnub_json_value_t* pn_app_context_get_data_array(pubnub_serialization_provider_t* serial,

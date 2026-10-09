@@ -417,6 +417,13 @@ pubnub_json_value_t* pn_request_get_parsed_body(pn_request_t* req,
                                                 pubnub_serialization_provider_t* serial);
 
 /**
+ * @brief Destroy the slot's cached parse tree and clear the cache.
+ *
+ * @param req Slot whose parse cache is released (borrowed, may be NULL).
+ */
+void pn_request_release_parsed_body(pn_request_t* req);
+
+/**
  * @brief Resolve the slot behind @p future when result data is stable.
  *
  * Returns NULL in all of the following cases, so callers do not need

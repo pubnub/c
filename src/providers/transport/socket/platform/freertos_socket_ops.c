@@ -47,6 +47,18 @@ struct pn_lwip_poll_internal {
 PUBNUB_STATIC_ASSERT(sizeof(struct pn_lwip_poll_internal) <= PN_POLL_SET_PLATFORM_SIZE,
                      "pn_lwip_poll_internal exceeds PN_POLL_SET_PLATFORM_SIZE");
 
+/* lwIP socket fds are allocated from a fixed pool starting at
+ * LWIP_SOCKET_OFFSET, so the highest fd is offset + count - 1. It must fit
+ * within FD_SETSIZE so FD_SET never writes out of bounds. */
+#ifndef LWIP_SOCKET_OFFSET
+#define LWIP_SOCKET_OFFSET 0
+#endif
+PUBNUB_STATIC_ASSERT(LWIP_SOCKET_OFFSET + PN_SOCKET_TRANSPORT_MAX_FDS <= FD_SETSIZE,
+                     "lwIP socket offset + in-flight request count exceeds "
+                     "FD_SETSIZE; increase FD_SETSIZE, reduce "
+                     "LWIP_SOCKET_OFFSET, or reduce "
+                     "PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS");
+
 /** @brief Cast opaque poll_set to internal struct. */
 static inline struct pn_lwip_poll_internal* pn_poll_set_internal(pn_poll_set_t* poll_set)
 {
@@ -606,21 +618,6 @@ static int freertos_poll_wait(const pn_socket_platform_ops_t* self,
         tv.tv_usec = (timeout_ms % 1000) * 1000;
         tv_ptr     = &tv;
     }
-
-    /* lwIP socket fds are allocated from a fixed pool bounded by
-     * MEMP_NUM_NETCONN, starting at LWIP_SOCKET_OFFSET (typically 0
-     * but configurable). The highest fd value is therefore
-     * LWIP_SOCKET_OFFSET + count - 1. Verify that the offset plus
-     * our in-flight count fits within FD_SETSIZE so FD_SET never
-     * writes out of bounds. */
-#ifndef LWIP_SOCKET_OFFSET
-#define LWIP_SOCKET_OFFSET 0
-#endif
-    PUBNUB_STATIC_ASSERT(LWIP_SOCKET_OFFSET + PN_SOCKET_TRANSPORT_MAX_FDS <= FD_SETSIZE,
-                         "lwIP socket offset + in-flight request count exceeds "
-                         "FD_SETSIZE — increase FD_SETSIZE, reduce "
-                         "LWIP_SOCKET_OFFSET, or reduce "
-                         "PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS");
 
     select_ret = lwip_select(max_fd + 1, &readfds, &writefds, &exceptfds, tv_ptr);
 

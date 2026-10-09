@@ -347,6 +347,36 @@ jobs:
       - name: Test
         run: ctest --test-dir build/win-curl -C Release --output-on-failure --timeout 60
 
+  windows-shared:
+    name: "Windows / shared library"
+    continue-on-error: true
+    runs-on:
+      group: windows-gh
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+      - name: Configure (shared)
+        run: |
+          cmake -B build/win-shared `
+            -DPUBNUB_PROFILE=full `
+            -DPUBNUB_PROVIDER_TRANSPORT=socket `
+            -DPUBNUB_PROVIDER_PLATFORM=windows `
+            -DPUBNUB_SOCKET_TLS_BACKEND=openssl `
+            -DPUBNUB_ENABLE_PROXY=ON `
+            -DPUBNUB_BUILD_SHARED=ON `
+            -DPUBNUB_BUILD_TESTS=OFF `
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build pubnub.dll
+        run: cmake --build build/win-shared --config Release --target pubnub
+
+      - name: PUBNUB_CLEAR_VALUE expectation test (block scope OK, file scope C2099)
+        run: |
+          cmake -S tests/ci -B build/ci-clear-value `
+            -DPN_SDK_INCLUDE_DIR="$PWD/include" `
+            -DPN_SDK_CONFIG_INCLUDE_DIR="$PWD/build/win-shared/include"
+
   res-str-disabled:
     name: "Dev preset / PUBNUB_CFG_RES_STR=OFF"
     runs-on:
@@ -370,6 +400,30 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build/dev-no-resstr --output-on-failure
+
+  jsmn-serialization:
+    name: "jsmn serialization / Linux"
+    runs-on:
+      group: organization/Default
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build \
+            libcurl4-openssl-dev libssl-dev
+
+      - name: Configure (PUBNUB_PROVIDER_SERIALIZATION=jsmn)
+        run: cmake --preset dev -DPUBNUB_PROVIDER_SERIALIZATION=jsmn -B build/jsmn
+
+      - name: Build
+        run: cmake --build build/jsmn
+
+      - name: Test
+        run: ctest --test-dir build/jsmn --output-on-failure
 
   sanitizers:
     name: "ASan + UBSan / curl / ${{ matrix.os }}"
@@ -761,6 +815,7 @@ jobs:
       - windows-socket
       - windows-curl
       - res-str-disabled
+      - jsmn-serialization
       - sanitizers
       - binary-size
       - tsan

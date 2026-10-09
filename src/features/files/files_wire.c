@@ -790,60 +790,47 @@ pn_file_extract_form_fields(pubnub_serialization_provider_t* serial,
     return PUBNUB_OK;
 }
 
-pubnub_res_t pn_file_parse_generate_url_response(pubnub_serialization_provider_t* serial,
-                                                 const uint8_t*        body,
-                                                 size_t                len,
-                                                 pn_file_send_state_t* state)
+pubnub_res_t pn_file_parse_generate_url_tree(pubnub_serialization_provider_t* serial,
+                                             const pubnub_json_value_t* tree,
+                                             pn_file_send_state_t*      state)
 {
-    if (NULL == serial || NULL == body || 0 == len || NULL == state) {
+    if (NULL == serial || NULL == tree || NULL == state) {
         return PUBNUB_ERR_INVALID_ARGUMENT;
     }
 
-    if (NULL == serial->parse || NULL == serial->value_type
-        || NULL == serial->object_get || NULL == serial->value_as_string
-        || NULL == serial->array_size || NULL == serial->array_iter_init
-        || NULL == serial->array_iter_next || NULL == serial->value_destroy) {
-        return PUBNUB_ERR_SERIALIZATION;
-    }
-
-    pubnub_json_value_t* tree = serial->parse(serial, body, len);
-    if (NULL == tree) {
+    if (NULL == serial->value_type || NULL == serial->object_get
+        || NULL == serial->value_as_string || NULL == serial->array_size
+        || NULL == serial->array_iter_init || NULL == serial->array_iter_next) {
         return PUBNUB_ERR_SERIALIZATION;
     }
 
     if (PUBNUB_JSON_OBJECT != serial->value_type(tree)) {
-        serial->value_destroy(serial, tree);
         return PUBNUB_ERR_SERIALIZATION;
     }
 
     /* Extract data.id and data.name. */
     const pubnub_json_value_t* data_node = serial->object_get(tree, "data", 4);
     if (NULL == data_node || PUBNUB_JSON_OBJECT != serial->value_type(data_node)) {
-        serial->value_destroy(serial, tree);
         return PUBNUB_ERR_SERIALIZATION;
     }
 
     const pubnub_json_value_t* id_node = serial->object_get(data_node, "id", 2);
     if (NULL == id_node || PUBNUB_JSON_STRING != serial->value_type(id_node)) {
-        serial->value_destroy(serial, tree);
         return PUBNUB_ERR_SERIALIZATION;
     }
     size_t      id_len = 0;
     const char* id_ptr = serial->value_as_string(id_node, &id_len);
     if (NULL == id_ptr || 0 == id_len) {
-        serial->value_destroy(serial, tree);
         return PUBNUB_ERR_SERIALIZATION;
     }
 
     const pubnub_json_value_t* name_node = serial->object_get(data_node, "name", 4);
     if (NULL == name_node || PUBNUB_JSON_STRING != serial->value_type(name_node)) {
-        serial->value_destroy(serial, tree);
         return PUBNUB_ERR_SERIALIZATION;
     }
     size_t      name_len = 0;
     const char* name_ptr = serial->value_as_string(name_node, &name_len);
     if (NULL == name_ptr || 0 == name_len) {
-        serial->value_destroy(serial, tree);
         return PUBNUB_ERR_SERIALIZATION;
     }
 
@@ -851,19 +838,16 @@ pubnub_res_t pn_file_parse_generate_url_response(pubnub_serialization_provider_t
     const pubnub_json_value_t* fur_node =
         serial->object_get(tree, "file_upload_request", 19);
     if (NULL == fur_node || PUBNUB_JSON_OBJECT != serial->value_type(fur_node)) {
-        serial->value_destroy(serial, tree);
         return PUBNUB_ERR_SERIALIZATION;
     }
 
     const pubnub_json_value_t* url_node = serial->object_get(fur_node, "url", 3);
     if (NULL == url_node || PUBNUB_JSON_STRING != serial->value_type(url_node)) {
-        serial->value_destroy(serial, tree);
         return PUBNUB_ERR_SERIALIZATION;
     }
     size_t      url_len = 0;
     const char* url_ptr = serial->value_as_string(url_node, &url_len);
     if (NULL == url_ptr || 0 == url_len) {
-        serial->value_destroy(serial, tree);
         return PUBNUB_ERR_SERIALIZATION;
     }
 
@@ -871,7 +855,6 @@ pubnub_res_t pn_file_parse_generate_url_response(pubnub_serialization_provider_t
         serial->object_get(fur_node, "form_fields", 11);
     if (NULL == fields_node
         || PUBNUB_JSON_ARRAY != serial->value_type(fields_node)) {
-        serial->value_destroy(serial, tree);
         return PUBNUB_ERR_SERIALIZATION;
     }
 
@@ -881,7 +864,6 @@ pubnub_res_t pn_file_parse_generate_url_response(pubnub_serialization_provider_t
     pubnub_res_t          rc          = pn_file_extract_form_fields(
         serial, fields_node, state->allocator, &fields, &field_count);
     if (PUBNUB_OK != rc) {
-        serial->value_destroy(serial, tree);
         return rc;
     }
 
@@ -889,7 +871,6 @@ pubnub_res_t pn_file_parse_generate_url_response(pubnub_serialization_provider_t
     state->file_id = pn_strndup(id_ptr, id_len, state->allocator);
     if (NULL == state->file_id) {
         PN_FREE(state->allocator, fields);
-        serial->value_destroy(serial, tree);
         return PUBNUB_ERR_OUT_OF_MEMORY;
     }
 
@@ -898,7 +879,6 @@ pubnub_res_t pn_file_parse_generate_url_response(pubnub_serialization_provider_t
         pn_strfree(state->file_id, state->allocator);
         state->file_id = NULL;
         PN_FREE(state->allocator, fields);
-        serial->value_destroy(serial, tree);
         return PUBNUB_ERR_OUT_OF_MEMORY;
     }
 
@@ -910,16 +890,46 @@ pubnub_res_t pn_file_parse_generate_url_response(pubnub_serialization_provider_t
         pn_strfree(state->file_id, state->allocator);
         state->file_id = NULL;
         PN_FREE(state->allocator, fields);
-        serial->value_destroy(serial, tree);
         return PUBNUB_ERR_OUT_OF_MEMORY;
     }
 
-    /* Store results. The tree is kept alive so form-field views
-     * remain valid until the upload step consumes them. */
-    state->form_fields       = fields;
-    state->form_field_count  = field_count;
-    state->generate_url_tree = tree;
+    state->form_fields      = fields;
+    state->form_field_count = field_count;
 
+    return PUBNUB_OK;
+}
+
+pubnub_res_t pn_file_parse_generate_url_response(pubnub_serialization_provider_t* serial,
+                                                 const uint8_t*        body,
+                                                 size_t                len,
+                                                 pn_file_send_state_t* state)
+{
+    pubnub_json_value_t* tree;
+    pubnub_res_t         rc;
+
+    if (NULL == serial || NULL == body || 0 == len || NULL == state) {
+        return PUBNUB_ERR_INVALID_ARGUMENT;
+    }
+
+    if (NULL == serial->parse || NULL == serial->value_type
+        || NULL == serial->object_get || NULL == serial->value_as_string
+        || NULL == serial->array_size || NULL == serial->array_iter_init
+        || NULL == serial->array_iter_next || NULL == serial->value_destroy) {
+        return PUBNUB_ERR_SERIALIZATION;
+    }
+
+    tree = serial->parse(serial, body, len);
+    if (NULL == tree) {
+        return PUBNUB_ERR_SERIALIZATION;
+    }
+
+    rc = pn_file_parse_generate_url_tree(serial, tree, state);
+    if (PUBNUB_OK != rc) {
+        serial->value_destroy(serial, tree);
+        return rc;
+    }
+
+    state->generate_url_tree = tree;
     return PUBNUB_OK;
 }
 

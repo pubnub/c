@@ -559,6 +559,113 @@ static void test_cbor_cleanup_null_safe(void** state)
     pn_cbor_cleanup(NULL, NULL);
 }
 
+#define CBOR_TEST_CAP 256U
+
+/* Minimal CBOR writer: enough for small maps of text keys. */
+typedef struct cbor_test_buf {
+    uint8_t data[CBOR_TEST_CAP];
+    size_t  len;
+} cbor_test_buf_t;
+
+static void cbor_put_byte(cbor_test_buf_t* b, uint8_t v)
+{
+    assert_true(b->len < CBOR_TEST_CAP);
+    b->data[b->len++] = v;
+}
+
+static void cbor_put_map(cbor_test_buf_t* b, uint8_t entries)
+{
+    assert_true(entries < 24U);
+    cbor_put_byte(b, (uint8_t)(0xA0U | entries));
+}
+
+static void cbor_put_text(cbor_test_buf_t* b, const char* s)
+{
+    size_t n = strlen(s);
+    size_t i;
+
+    assert_true(n < 24U);
+    cbor_put_byte(b, (uint8_t)(0x60U | n));
+    for (i = 0; i < n; ++i) {
+        cbor_put_byte(b, (uint8_t)s[i]);
+    }
+}
+
+static void cbor_put_uint(cbor_test_buf_t* b, uint16_t v)
+{
+    if (v < 24U) {
+        cbor_put_byte(b, (uint8_t)v);
+    } else if (v < 256U) {
+        cbor_put_byte(b, 0x18U);
+        cbor_put_byte(b, (uint8_t)v);
+    } else {
+        cbor_put_byte(b, 0x19U);
+        cbor_put_byte(b, (uint8_t)(v >> 8));
+        cbor_put_byte(b, (uint8_t)(v & 0xFFU));
+    }
+}
+
+/* Start a token map with v=2, t=1000, ttl=60 plus @p extra entries. */
+static void cbor_token_begin(cbor_test_buf_t* b, uint8_t extra)
+{
+    memset(b, 0, sizeof(*b));
+    cbor_put_map(b, (uint8_t)(3U + extra));
+    cbor_put_text(b, "v");
+    cbor_put_uint(b, 2);
+    cbor_put_text(b, "t");
+    cbor_put_uint(b, 1000);
+    cbor_put_text(b, "ttl");
+    cbor_put_uint(b, 60);
+}
+
+/* Unpadded base64url encoding; the token decoder restores padding. */
+static void cbor_to_token(const cbor_test_buf_t* b, char* out, size_t out_cap)
+{
+    static const char alphabet[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    size_t i = 0;
+    size_t o = 0;
+
+    while (i < b->len) {
+        uint32_t chunk = (uint32_t)b->data[i] << 16;
+        size_t   rem   = b->len - i;
+
+        if (rem > 1U) {
+            chunk |= (uint32_t)b->data[i + 1U] << 8;
+        }
+        if (rem > 2U) {
+            chunk |= (uint32_t)b->data[i + 2U];
+        }
+        assert_true(o + 4U < out_cap);
+        out[o++] = alphabet[(chunk >> 18) & 0x3FU];
+        out[o++] = alphabet[(chunk >> 12) & 0x3FU];
+        if (rem > 1U) {
+            out[o++] = alphabet[(chunk >> 6) & 0x3FU];
+        }
+        if (rem > 2U) {
+            out[o++] = alphabet[chunk & 0x3FU];
+        }
+        i += (rem > 3U) ? 3U : rem;
+    }
+    out[o] = '\0';
+}
+
+static pubnub_res_t parse_cbor_token(const cbor_test_buf_t*   b,
+                                     pn_access_token_state_t* out)
+{
+    char token[512];
+
+    cbor_to_token(b, token, sizeof(token));
+    return pn_access_parse_token_impl(token, &s_alloc, out);
+}
+
+static void release_token_state(pn_access_token_state_t* out)
+{
+    pn_cbor_cleanup(out->parsed_tree, &s_alloc);
+    real_free(&s_alloc, out->decoded_buf);
+    memset(out, 0, sizeof(*out));
+}
+
 /* ---------------------------------------------------------------
  * Group 2: Token Parse Integration Tests
  * --------------------------------------------------------------- */
@@ -845,6 +952,264 @@ static void test_parse_token_no_resources(void** state)
     real_free(&s_alloc, out.decoded_buf);
 }
 
+static void test_parse_token_category_both(void** state)
+{
+    (void)state;
+    cbor_test_buf_t         b;
+    pn_access_token_state_t out = {0};
+
+    cbor_token_begin(&b, 1);
+    cbor_put_text(&b, "cat");
+    cbor_put_map(&b, 2);
+    cbor_put_text(&b, "chan");
+    cbor_put_uint(&b, 32);
+    cbor_put_text(&b, "uuid");
+    cbor_put_uint(&b, 32);
+
+    assert_int_equal(PUBNUB_OK, parse_cbor_token(&b, &out));
+    assert_int_equal(32, (int)out.result.channels_category_permissions);
+    assert_int_equal(32, (int)out.result.uuids_category_permissions);
+    assert_int_equal(60, (int)out.result.ttl);
+    release_token_state(&out);
+}
+
+static void test_parse_token_category_only_chan(void** state)
+{
+    (void)state;
+    cbor_test_buf_t         b;
+    pn_access_token_state_t out = {0};
+
+    cbor_token_begin(&b, 1);
+    cbor_put_text(&b, "cat");
+    cbor_put_map(&b, 1);
+    cbor_put_text(&b, "chan");
+    cbor_put_uint(&b, 32);
+
+    assert_int_equal(PUBNUB_OK, parse_cbor_token(&b, &out));
+    assert_int_equal(32, (int)out.result.channels_category_permissions);
+    assert_int_equal(0, (int)out.result.uuids_category_permissions);
+    release_token_state(&out);
+}
+
+static void test_parse_token_category_only_uuid(void** state)
+{
+    (void)state;
+    cbor_test_buf_t         b;
+    pn_access_token_state_t out = {0};
+
+    cbor_token_begin(&b, 1);
+    cbor_put_text(&b, "cat");
+    cbor_put_map(&b, 1);
+    cbor_put_text(&b, "uuid");
+    cbor_put_uint(&b, 32);
+
+    assert_int_equal(PUBNUB_OK, parse_cbor_token(&b, &out));
+    assert_int_equal(0, (int)out.result.channels_category_permissions);
+    assert_int_equal(32, (int)out.result.uuids_category_permissions);
+    release_token_state(&out);
+}
+
+static void test_parse_token_category_empty_map(void** state)
+{
+    (void)state;
+    cbor_test_buf_t         b;
+    pn_access_token_state_t out = {0};
+
+    cbor_token_begin(&b, 1);
+    cbor_put_text(&b, "cat");
+    cbor_put_map(&b, 0);
+
+    assert_int_equal(PUBNUB_OK, parse_cbor_token(&b, &out));
+    assert_int_equal(0, (int)out.result.channels_category_permissions);
+    assert_int_equal(0, (int)out.result.uuids_category_permissions);
+    release_token_state(&out);
+}
+
+static void test_parse_token_category_wrong_value_type(void** state)
+{
+    (void)state;
+    cbor_test_buf_t         b;
+    pn_access_token_state_t out = {0};
+
+    /* Both sub-values are text, not unsigned integers. */
+    cbor_token_begin(&b, 1);
+    cbor_put_text(&b, "cat");
+    cbor_put_map(&b, 2);
+    cbor_put_text(&b, "chan");
+    cbor_put_text(&b, "x");
+    cbor_put_text(&b, "uuid");
+    cbor_put_text(&b, "y");
+
+    assert_int_equal(PUBNUB_OK, parse_cbor_token(&b, &out));
+    assert_int_equal(0, (int)out.result.channels_category_permissions);
+    assert_int_equal(0, (int)out.result.uuids_category_permissions);
+    release_token_state(&out);
+
+    /* One bad sub-value must not poison its well-typed sibling. */
+    cbor_token_begin(&b, 1);
+    cbor_put_text(&b, "cat");
+    cbor_put_map(&b, 2);
+    cbor_put_text(&b, "chan");
+    cbor_put_map(&b, 0);
+    cbor_put_text(&b, "uuid");
+    cbor_put_uint(&b, 32);
+
+    assert_int_equal(PUBNUB_OK, parse_cbor_token(&b, &out));
+    assert_int_equal(0, (int)out.result.channels_category_permissions);
+    assert_int_equal(32, (int)out.result.uuids_category_permissions);
+    release_token_state(&out);
+}
+
+static void test_parse_token_category_not_a_map(void** state)
+{
+    (void)state;
+    cbor_test_buf_t         b;
+    pn_access_token_state_t out = {0};
+
+    cbor_token_begin(&b, 1);
+    cbor_put_text(&b, "cat");
+    cbor_put_uint(&b, 32);
+    assert_int_equal(PUBNUB_OK, parse_cbor_token(&b, &out));
+    assert_int_equal(0, (int)out.result.channels_category_permissions);
+    assert_int_equal(0, (int)out.result.uuids_category_permissions);
+    release_token_state(&out);
+
+    cbor_token_begin(&b, 1);
+    cbor_put_text(&b, "cat");
+    cbor_put_text(&b, "chan");
+    assert_int_equal(PUBNUB_OK, parse_cbor_token(&b, &out));
+    assert_int_equal(0, (int)out.result.channels_category_permissions);
+    assert_int_equal(0, (int)out.result.uuids_category_permissions);
+    release_token_state(&out);
+}
+
+static void test_parse_token_no_category_yields_zero(void** state)
+{
+    (void)state;
+    pn_access_token_state_t out = {0};
+
+    assert_int_equal(
+        PUBNUB_OK,
+        pn_access_parse_token_impl(TEST_TOKEN_PYTHON_SDK, &s_alloc, &out));
+    assert_int_equal(0, (int)out.result.channels_category_permissions);
+    assert_int_equal(0, (int)out.result.uuids_category_permissions);
+    release_token_state(&out);
+}
+
+static void test_parse_token_category_with_resources_and_patterns(void** state)
+{
+    (void)state;
+    cbor_test_buf_t         b;
+    pn_access_token_state_t out = {0};
+
+    /* res.uuid and pat.uuid are maps carrying their own "uuid" key; the
+     * category uuid value must come from "cat", never from those. */
+    cbor_token_begin(&b, 3);
+    cbor_put_text(&b, "res");
+    cbor_put_map(&b, 2);
+    cbor_put_text(&b, "chan");
+    cbor_put_map(&b, 1);
+    cbor_put_text(&b, "c1");
+    cbor_put_uint(&b, 255);
+    cbor_put_text(&b, "uuid");
+    cbor_put_map(&b, 1);
+    cbor_put_text(&b, "u1");
+    cbor_put_uint(&b, 255);
+    cbor_put_text(&b, "pat");
+    cbor_put_map(&b, 1);
+    cbor_put_text(&b, "uuid");
+    cbor_put_map(&b, 2);
+    cbor_put_text(&b, "^a");
+    cbor_put_uint(&b, 1);
+    cbor_put_text(&b, "^b");
+    cbor_put_uint(&b, 2);
+    cbor_put_text(&b, "cat");
+    cbor_put_map(&b, 2);
+    cbor_put_text(&b, "chan");
+    cbor_put_uint(&b, 32);
+    cbor_put_text(&b, "uuid");
+    cbor_put_uint(&b, 32);
+
+    assert_int_equal(PUBNUB_OK, parse_cbor_token(&b, &out));
+    assert_int_equal(32, (int)out.result.channels_category_permissions);
+    assert_int_equal(32, (int)out.result.uuids_category_permissions);
+    assert_int_equal(1, (int)out.result.channel_count);
+    assert_int_equal(1, (int)out.result.uuid_count);
+    assert_int_equal(2, (int)out.result.uuid_pattern_count);
+    release_token_state(&out);
+
+    /* Only "chan" in cat: uuid category stays 0 even though pat.uuid and
+     * res.uuid exist. */
+    cbor_token_begin(&b, 2);
+    cbor_put_text(&b, "pat");
+    cbor_put_map(&b, 1);
+    cbor_put_text(&b, "uuid");
+    cbor_put_map(&b, 1);
+    cbor_put_text(&b, "^a");
+    cbor_put_uint(&b, 1);
+    cbor_put_text(&b, "cat");
+    cbor_put_map(&b, 1);
+    cbor_put_text(&b, "chan");
+    cbor_put_uint(&b, 32);
+
+    assert_int_equal(PUBNUB_OK, parse_cbor_token(&b, &out));
+    assert_int_equal(32, (int)out.result.channels_category_permissions);
+    assert_int_equal(0, (int)out.result.uuids_category_permissions);
+    assert_int_equal(1, (int)out.result.uuid_pattern_count);
+    release_token_state(&out);
+}
+
+static void test_parse_token_category_reparse_replaces_values(void** state)
+{
+    (void)state;
+    cbor_test_buf_t         b;
+    pn_access_token_state_t out = {0};
+
+    cbor_token_begin(&b, 1);
+    cbor_put_text(&b, "cat");
+    cbor_put_map(&b, 2);
+    cbor_put_text(&b, "chan");
+    cbor_put_uint(&b, 32);
+    cbor_put_text(&b, "uuid");
+    cbor_put_uint(&b, 32);
+    assert_int_equal(PUBNUB_OK, parse_cbor_token(&b, &out));
+    assert_int_equal(32, (int)out.result.channels_category_permissions);
+    assert_int_equal(32, (int)out.result.uuids_category_permissions);
+    pn_cbor_cleanup(out.parsed_tree, &s_alloc);
+    real_free(&s_alloc, out.decoded_buf);
+
+    /* Re-parse into the same state object: a token without "cat" must not
+     * inherit the earlier values. */
+    cbor_token_begin(&b, 0);
+    assert_int_equal(PUBNUB_OK, parse_cbor_token(&b, &out));
+    assert_int_equal(0, (int)out.result.channels_category_permissions);
+    assert_int_equal(0, (int)out.result.uuids_category_permissions);
+    release_token_state(&out);
+}
+
+static void test_parse_token_failure_zeroes_category_fields(void** state)
+{
+    (void)state;
+    pn_access_token_state_t out = {0};
+
+    out.result.channels_category_permissions = 32;
+    out.result.uuids_category_permissions    = 32;
+
+    assert_int_equal(PUBNUB_ERR_SERIALIZATION,
+                     pn_access_parse_token_impl("AAAA", &s_alloc, &out));
+    assert_int_equal(0, (int)out.result.channels_category_permissions);
+    assert_int_equal(0, (int)out.result.uuids_category_permissions);
+    assert_null(out.parsed_tree);
+    assert_null(out.decoded_buf);
+
+    out.result.channels_category_permissions = 32;
+    out.result.uuids_category_permissions    = 32;
+    assert_int_equal(PUBNUB_ERR_SERIALIZATION,
+                     pn_access_parse_token_impl("!!!invalid!!!", &s_alloc, &out));
+    assert_int_equal(0, (int)out.result.channels_category_permissions);
+    assert_int_equal(0, (int)out.result.uuids_category_permissions);
+}
+
 static void test_token_state_cleanup_null_safe(void** state)
 {
     (void)state;
@@ -902,6 +1267,16 @@ int main(void)
         cmocka_unit_test(test_parse_token_minimal_valid),
         cmocka_unit_test(test_parse_token_no_resources),
         cmocka_unit_test(test_token_state_cleanup_null_safe),
+        cmocka_unit_test(test_parse_token_category_both),
+        cmocka_unit_test(test_parse_token_category_only_chan),
+        cmocka_unit_test(test_parse_token_category_only_uuid),
+        cmocka_unit_test(test_parse_token_category_empty_map),
+        cmocka_unit_test(test_parse_token_category_wrong_value_type),
+        cmocka_unit_test(test_parse_token_category_not_a_map),
+        cmocka_unit_test(test_parse_token_no_category_yields_zero),
+        cmocka_unit_test(test_parse_token_category_with_resources_and_patterns),
+        cmocka_unit_test(test_parse_token_category_reparse_replaces_values),
+        cmocka_unit_test(test_parse_token_failure_zeroes_category_fields),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

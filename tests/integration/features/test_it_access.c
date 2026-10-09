@@ -728,6 +728,193 @@ static void history_with_token_for_wrong_channel_returns_403(void** state)
     assert_int_equal(403, http);
 }
 
+static void grant_and_parse(pam_state_t*                     s,
+                            const pubnub_grant_token_opts_t* opts,
+                            pubnub_parsed_token_t*           out_tok)
+{
+    pubnub_future_t fut = pubnub_grant_token(s->base->pam_ctx, opts);
+    pubnub_res_t    st  = pubnub_await(fut);
+    if (PUBNUB_OK != st) {
+        pubnub_string_view_t errmsg = pubnub_response_error_message(fut);
+        print_error("grant_token failed: %s (http=%d msg=%.*s)",
+                    pubnub_res_str(st),
+                    pubnub_response_status_code(fut),
+                    (int)errmsg.len,
+                    errmsg.ptr ? errmsg.ptr : "");
+    }
+    assert_int_equal(PUBNUB_OK, st);
+
+    pubnub_grant_token_result_t res = pubnub_grant_token_result(fut);
+    assert_true(20 < (int)res.token.len);
+    snprintf(s->token, sizeof(s->token), "%.*s", (int)res.token.len, res.token.ptr);
+    pubnub_future_release(fut);
+
+    pubnub_parse_token_opts_t popts = PUBNUB_PARSE_TOKEN_OPTS_INIT;
+    popts.token                     = s->token;
+
+    pubnub_res_t pst = pubnub_parse_token(s->base->pam_ctx, &popts, out_tok);
+    if (PUBNUB_OK != pst) {
+        print_error("parse_token failed: %s", pubnub_res_str(pst));
+    }
+    assert_int_equal(PUBNUB_OK, pst);
+}
+
+static void assert_no_resources_or_patterns(const pubnub_parsed_token_t* tok)
+{
+    assert_int_equal(0, (int)tok->channel_count);
+    assert_int_equal(0, (int)tok->group_count);
+    assert_int_equal(0, (int)tok->uuid_count);
+    assert_int_equal(0, (int)tok->channel_pattern_count);
+    assert_int_equal(0, (int)tok->group_pattern_count);
+    assert_int_equal(0, (int)tok->uuid_pattern_count);
+}
+
+static void grant_token_channels_category_only_round_trips(void** state)
+{
+    pam_state_t*              s    = *state;
+    pubnub_parsed_token_t     tok  = {0};
+    pubnub_grant_token_opts_t opts = PUBNUB_GRANT_TOKEN_OPTS_INIT;
+
+    opts.ttl                           = 1;
+    opts.channels_category_permissions = PUBNUB_ACCESS_GET;
+
+    grant_and_parse(s, &opts, &tok);
+
+    assert_int_equal(PUBNUB_ACCESS_GET, tok.channels_category_permissions);
+    assert_int_equal(0, (int)tok.uuids_category_permissions);
+    assert_no_resources_or_patterns(&tok);
+}
+
+static void grant_token_uuids_category_only_round_trips(void** state)
+{
+    pam_state_t*              s    = *state;
+    pubnub_parsed_token_t     tok  = {0};
+    pubnub_grant_token_opts_t opts = PUBNUB_GRANT_TOKEN_OPTS_INIT;
+
+    opts.ttl                        = 1;
+    opts.uuids_category_permissions = PUBNUB_ACCESS_GET;
+
+    grant_and_parse(s, &opts, &tok);
+
+    assert_int_equal(0, (int)tok.channels_category_permissions);
+    assert_int_equal(PUBNUB_ACCESS_GET, tok.uuids_category_permissions);
+    assert_no_resources_or_patterns(&tok);
+}
+
+static void grant_token_both_categories_only_round_trips(void** state)
+{
+    pam_state_t*              s    = *state;
+    pubnub_parsed_token_t     tok  = {0};
+    pubnub_grant_token_opts_t opts = PUBNUB_GRANT_TOKEN_OPTS_INIT;
+
+    opts.ttl                           = 1;
+    opts.channels_category_permissions = PUBNUB_ACCESS_GET;
+    opts.uuids_category_permissions    = PUBNUB_ACCESS_GET;
+
+    grant_and_parse(s, &opts, &tok);
+
+    assert_int_equal(PUBNUB_ACCESS_GET, tok.channels_category_permissions);
+    assert_int_equal(PUBNUB_ACCESS_GET, tok.uuids_category_permissions);
+    assert_no_resources_or_patterns(&tok);
+}
+
+static void grant_token_categories_coexist_with_resources_and_patterns(void** state)
+{
+    pam_state_t*                        s   = *state;
+    pubnub_parsed_token_t               tok = {0};
+    pubnub_access_resource_permission_t ch  = {
+         .name        = s->base->channel,
+         .permissions = PUBNUB_ACCESS_READ,
+    };
+    pubnub_access_resource_permission_t pat = {
+        .name        = "cat-test-.*",
+        .permissions = PUBNUB_ACCESS_READ,
+    };
+    pubnub_grant_token_opts_t opts = PUBNUB_GRANT_TOKEN_OPTS_INIT;
+
+    opts.ttl                           = 1;
+    opts.channels                      = &ch;
+    opts.channel_count                 = 1;
+    opts.channel_patterns              = &pat;
+    opts.channel_pattern_count         = 1;
+    opts.channels_category_permissions = PUBNUB_ACCESS_GET;
+    opts.uuids_category_permissions    = PUBNUB_ACCESS_GET;
+
+    grant_and_parse(s, &opts, &tok);
+
+    assert_int_equal(PUBNUB_ACCESS_GET, tok.channels_category_permissions);
+    assert_int_equal(PUBNUB_ACCESS_GET, tok.uuids_category_permissions);
+    assert_int_equal(1, (int)tok.channel_count);
+    assert_int_equal(1, (int)tok.channel_pattern_count);
+    assert_int_equal(0, (int)tok.group_count);
+    assert_int_equal(0, (int)tok.uuid_count);
+    assert_int_equal(0, (int)tok.group_pattern_count);
+    assert_int_equal(0, (int)tok.uuid_pattern_count);
+}
+
+static void grant_token_resources_only_omits_patterns_and_categories(void** state)
+{
+    pam_state_t*                        s   = *state;
+    pubnub_parsed_token_t               tok = {0};
+    pubnub_access_resource_permission_t ch  = {
+         .name        = s->base->channel,
+         .permissions = PUBNUB_ACCESS_READ,
+    };
+    pubnub_grant_token_opts_t opts = PUBNUB_GRANT_TOKEN_OPTS_INIT;
+
+    opts.ttl           = 1;
+    opts.channels      = &ch;
+    opts.channel_count = 1;
+
+    grant_and_parse(s, &opts, &tok);
+
+    assert_int_equal(0, (int)tok.channels_category_permissions);
+    assert_int_equal(0, (int)tok.uuids_category_permissions);
+    assert_int_equal(1, (int)tok.channel_count);
+    assert_int_equal(0, (int)tok.channel_pattern_count);
+    assert_int_equal(0, (int)tok.group_count);
+    assert_int_equal(0, (int)tok.uuid_count);
+}
+
+static void grant_token_patterns_only_omits_resources_and_categories(void** state)
+{
+    pam_state_t*                        s   = *state;
+    pubnub_parsed_token_t               tok = {0};
+    pubnub_access_resource_permission_t pat = {
+        .name        = "pat-only-.*",
+        .permissions = PUBNUB_ACCESS_READ,
+    };
+    pubnub_grant_token_opts_t opts = PUBNUB_GRANT_TOKEN_OPTS_INIT;
+
+    opts.ttl                   = 1;
+    opts.channel_patterns      = &pat;
+    opts.channel_pattern_count = 1;
+
+    grant_and_parse(s, &opts, &tok);
+
+    assert_int_equal(0, (int)tok.channels_category_permissions);
+    assert_int_equal(0, (int)tok.uuids_category_permissions);
+    assert_int_equal(1, (int)tok.channel_pattern_count);
+    assert_int_equal(0, (int)tok.channel_count);
+    assert_int_equal(0, (int)tok.group_count);
+    assert_int_equal(0, (int)tok.uuid_count);
+}
+
+static void grant_token_invalid_category_bits_rejected_synchronously(void** state)
+{
+    pam_state_t*              s    = *state;
+    pubnub_grant_token_opts_t opts = PUBNUB_GRANT_TOKEN_OPTS_INIT;
+
+    opts.ttl                           = 1;
+    opts.channels_category_permissions = PUBNUB_ACCESS_READ;
+
+    pubnub_future_t fut = pubnub_grant_token(s->base->pam_ctx, &opts);
+    pubnub_res_t    st  = pubnub_await(fut);
+    pubnub_future_release(fut);
+
+    assert_int_equal(PUBNUB_ERR_INVALID_ARGUMENT, st);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -766,6 +953,20 @@ int main(void)
             publish_with_read_only_token_returns_403, setup, teardown),
         cmocka_unit_test_setup_teardown(
             history_with_token_for_wrong_channel_returns_403, setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            grant_token_channels_category_only_round_trips, setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            grant_token_uuids_category_only_round_trips, setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            grant_token_both_categories_only_round_trips, setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            grant_token_categories_coexist_with_resources_and_patterns, setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            grant_token_resources_only_omits_patterns_and_categories, setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            grant_token_patterns_only_omits_resources_and_categories, setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            grant_token_invalid_category_bits_rejected_synchronously, setup, teardown),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

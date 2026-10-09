@@ -188,9 +188,41 @@ jobs:
       - name: Check CMake formatting
         run: |
           find . \( -name 'CMakeLists.txt' -o -name '*.cmake' \) \
-            -not -path '*/build/*' \
+            -not -path '*/build*/*' \
             -not -path '*/_deps/*' \
             | xargs gersemi --check
+      - name: Cancel workflow runs for commit on error
+        if: ${{ failure() }}
+        uses: ./.github/.release/actions/actions/utils/fast-jobs-failure
+
+  c99-syntax:
+    name: C99 syntax (-pedantic-errors)
+    runs-on:
+      group: organization/Default
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+      - name: Checkout validator action
+        uses: actions/checkout@v5
+        with:
+          repository: pubnub/client-engineering-deployment-tools
+          ref: v1
+          token: ${{ secrets.GH_TOKEN }}
+          path: .github/.release/actions
+      - name: Install LLVM 22
+        run: |
+          wget -qO- https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
+          sudo add-apt-repository -y "deb http://apt.llvm.org/$(lsb_release -cs)/ llvm-toolchain-$(lsb_release -cs)-22 main"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build clang-22 \
+            libcurl4-openssl-dev libmbedtls-dev
+      - name: Configure (generate compile_commands.json)
+        env:
+          CC: clang-22
+        run: cmake --preset ci-lint
+      - name: Run C99 syntax check
+        run: tools/c99-check.sh build/ci-lint
       - name: Cancel workflow runs for commit on error
         if: ${{ failure() }}
         uses: ./.github/.release/actions/actions/utils/fast-jobs-failure
@@ -204,6 +236,7 @@ jobs:
       - cppcheck
       - clang-format
       - gersemi
+      - c99-syntax
     runs-on:
       group: organization/Default
     steps:

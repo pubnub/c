@@ -35,16 +35,22 @@
  * `<sys/random.h>`, so the OpenBSD branch is handled separately to
  * avoid a missing-header compile error.
  */
-#if defined(__OpenBSD__)
+#if defined(__APPLE__)
+#define PN_PLATFORM_POSIX_HAS_ARC4RANDOM 1
+#include <stdlib.h>
+#elif defined(__OpenBSD__)
 #define PN_PLATFORM_POSIX_HAS_GETENTROPY 1
+#define PN_PLATFORM_POSIX_HAS_ARC4RANDOM 0
 /* getentropy declared in <unistd.h>, already included above. */
-#elif defined(__APPLE__) || defined(__FreeBSD__) \
-    || (defined(__GLIBC__)                       \
+#elif defined(__FreeBSD__) \
+    || (defined(__GLIBC__) \
         && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 25)))
 #define PN_PLATFORM_POSIX_HAS_GETENTROPY 1
+#define PN_PLATFORM_POSIX_HAS_ARC4RANDOM 0
 #include <sys/random.h>
 #else
 #define PN_PLATFORM_POSIX_HAS_GETENTROPY 0
+#define PN_PLATFORM_POSIX_HAS_ARC4RANDOM 0
 #include <fcntl.h>
 #endif
 
@@ -100,8 +106,8 @@ static void posix_sleep_ms(pubnub_platform_provider_t* self, uint32_t ms)
     }
 }
 
-#if !PN_PLATFORM_POSIX_HAS_GETENTROPY
-/* Fallback: fill from /dev/urandom when getentropy unavailable. */
+#if !PN_PLATFORM_POSIX_HAS_GETENTROPY && !PN_PLATFORM_POSIX_HAS_ARC4RANDOM
+/* Fallback: fill from /dev/urandom when getentropy/arc4random unavailable. */
 static int posix_random_bytes_urandom(uint8_t* buf, size_t len)
 {
     int fd = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
@@ -157,6 +163,9 @@ static int posix_random_bytes(pubnub_platform_provider_t* self, uint8_t* buf, si
         off += chunk;
     }
 
+    return 0;
+#elif PN_PLATFORM_POSIX_HAS_ARC4RANDOM
+    arc4random_buf(buf, len);
     return 0;
 #else
     return posix_random_bytes_urandom(buf, len);

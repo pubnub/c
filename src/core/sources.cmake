@@ -7,6 +7,7 @@
 set(PN_CORE_BASE_SOURCES
     "${CMAKE_CURRENT_LIST_DIR}/pn_format.c"
     "${CMAKE_CURRENT_LIST_DIR}/client.c"
+    "${CMAKE_CURRENT_LIST_DIR}/clear_value.c"
     "${CMAKE_CURRENT_LIST_DIR}/config.c"
     "${CMAKE_CURRENT_LIST_DIR}/response.c"
     "${CMAKE_CURRENT_LIST_DIR}/error.c"

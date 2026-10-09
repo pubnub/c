@@ -37,40 +37,51 @@ typedef struct build_set_extras {
  * @param id_key_len Length of id_key.
  * @param extras     Optional fields (status, type, custom). May be
  *                   NULL to skip all optional fields.
- * @return Owned JSON object node, or NULL on failure.
+ * @param out_rc     Receives the failure code when NULL is returned.
+ * @return Owned JSON object node, or NULL on failure. @p extras->custom_value
+ *         is consumed on every path.
  */
 static pubnub_json_value_t* build_set_item(pubnub_serialization_provider_t* serial,
                                            const char*               id_value,
                                            const char*               id_key,
                                            size_t                    id_key_len,
-                                           const build_set_extras_t* extras)
+                                           const build_set_extras_t* extras,
+                                           pubnub_res_t*             out_rc)
 {
-    pubnub_json_value_t* item = serial->value_create_object(serial);
+    pubnub_res_t         rc = PUBNUB_OK;
+    pubnub_json_value_t* item;
+    pubnub_json_value_t* id_obj;
+    pubnub_json_value_t* id_str;
+    /* Owned from entry; cleared once set_custom_field consumes it. */
+    pubnub_json_value_t* pending = (NULL != extras) ? extras->custom_value : NULL;
+
+    item = serial->value_create_object(serial);
     if (NULL == item) {
-        return NULL;
+        goto fail;
     }
 
     /* Build inner identifier object: {"id": "<id_value>"}. */
-    pubnub_json_value_t* id_obj = serial->value_create_object(serial);
+    id_obj = serial->value_create_object(serial);
     if (NULL == id_obj) {
         goto fail;
     }
 
-    pubnub_json_value_t* id_str =
-        serial->value_create_string(serial, id_value, strlen(id_value));
+    id_str = serial->value_create_string(serial, id_value, strlen(id_value));
     if (NULL == id_str) {
         serial->value_destroy(serial, id_obj);
         goto fail;
     }
 
-    if (PUBNUB_OK != serial->object_set(serial, id_obj, "id", 2, id_str)) {
+    rc = serial->object_set(serial, id_obj, "id", 2, id_str);
+    if (PUBNUB_OK != rc) {
         serial->value_destroy(serial, id_str);
         serial->value_destroy(serial, id_obj);
         goto fail;
     }
 
     /* Attach the identifier object under the direction key. */
-    if (PUBNUB_OK != serial->object_set(serial, item, id_key, id_key_len, id_obj)) {
+    rc = serial->object_set(serial, item, id_key, id_key_len, id_obj);
+    if (PUBNUB_OK != rc) {
         serial->value_destroy(serial, id_obj);
         goto fail;
     }
@@ -79,34 +90,27 @@ static pubnub_json_value_t* build_set_item(pubnub_serialization_provider_t* seri
     if (NULL != extras) {
         /* Optional: status. */
         if (NULL != extras->status) {
-            pubnub_json_value_t* val = serial->value_create_string(
-                serial, extras->status, strlen(extras->status));
-            if (NULL == val) {
-                goto fail;
-            }
-            if (PUBNUB_OK != serial->object_set(serial, item, "status", 6, val)) {
-                serial->value_destroy(serial, val);
+            rc = pn_app_context_set_string_field(
+                serial, item, "status", 6, extras->status);
+            if (PUBNUB_OK != rc) {
                 goto fail;
             }
         }
 
         /* Optional: type. */
         if (NULL != extras->type) {
-            pubnub_json_value_t* val = serial->value_create_string(
-                serial, extras->type, strlen(extras->type));
-            if (NULL == val) {
-                goto fail;
-            }
-            if (PUBNUB_OK != serial->object_set(serial, item, "type", 4, val)) {
-                serial->value_destroy(serial, val);
+            rc = pn_app_context_set_string_field(
+                serial, item, "type", 4, extras->type);
+            if (PUBNUB_OK != rc) {
                 goto fail;
             }
         }
 
         /* Optional: custom (JSON value tree or raw string). */
-        if (PUBNUB_OK
-            != pn_app_context_set_custom_field(
-                serial, item, extras->custom_value, extras->custom, extras->custom_len)) {
+        pending = NULL;
+        rc      = pn_app_context_set_custom_field(
+            serial, item, extras->custom_value, extras->custom, extras->custom_len);
+        if (PUBNUB_OK != rc) {
             goto fail;
         }
     }
@@ -114,7 +118,11 @@ static pubnub_json_value_t* build_set_item(pubnub_serialization_provider_t* seri
     return item;
 
 fail:
-    serial->value_destroy(serial, item);
+    *out_rc = (PUBNUB_OK != rc) ? rc : PUBNUB_ERR_OUT_OF_MEMORY;
+    pn_app_context_discard_custom(serial, pending);
+    if (NULL != item) {
+        serial->value_destroy(serial, item);
+    }
     return NULL;
 }
 
@@ -124,34 +132,41 @@ fail:
  * Constructs {"channel":{"id":"..."}} or {"uuid":{"id":"..."}}.
  */
 static pubnub_json_value_t* build_remove_item(pubnub_serialization_provider_t* serial,
-                                              const char* id_value,
-                                              const char* id_key,
-                                              size_t      id_key_len)
+                                              const char*   id_value,
+                                              const char*   id_key,
+                                              size_t        id_key_len,
+                                              pubnub_res_t* out_rc)
 {
+    pubnub_res_t         rc = PUBNUB_OK;
+    pubnub_json_value_t* id_obj;
+    pubnub_json_value_t* id_str;
     pubnub_json_value_t* item = serial->value_create_object(serial);
+
     if (NULL == item) {
+        *out_rc = PUBNUB_ERR_OUT_OF_MEMORY;
         return NULL;
     }
 
-    pubnub_json_value_t* id_obj = serial->value_create_object(serial);
+    id_obj = serial->value_create_object(serial);
     if (NULL == id_obj) {
         goto fail;
     }
 
-    pubnub_json_value_t* id_str =
-        serial->value_create_string(serial, id_value, strlen(id_value));
+    id_str = serial->value_create_string(serial, id_value, strlen(id_value));
     if (NULL == id_str) {
         serial->value_destroy(serial, id_obj);
         goto fail;
     }
 
-    if (PUBNUB_OK != serial->object_set(serial, id_obj, "id", 2, id_str)) {
+    rc = serial->object_set(serial, id_obj, "id", 2, id_str);
+    if (PUBNUB_OK != rc) {
         serial->value_destroy(serial, id_str);
         serial->value_destroy(serial, id_obj);
         goto fail;
     }
 
-    if (PUBNUB_OK != serial->object_set(serial, item, id_key, id_key_len, id_obj)) {
+    rc = serial->object_set(serial, item, id_key, id_key_len, id_obj);
+    if (PUBNUB_OK != rc) {
         serial->value_destroy(serial, id_obj);
         goto fail;
     }
@@ -159,6 +174,7 @@ static pubnub_json_value_t* build_remove_item(pubnub_serialization_provider_t* s
     return item;
 
 fail:
+    *out_rc = (PUBNUB_OK != rc) ? rc : PUBNUB_ERR_OUT_OF_MEMORY;
     serial->value_destroy(serial, item);
     return NULL;
 }
@@ -303,11 +319,36 @@ PUBNUB_STATIC_ASSERT(offsetof(pn_relation_input_view_t, custom_value)
                          == offsetof(pubnub_member_input_t, custom_value),
                      "custom_value offset mismatch with member");
 
+/** @brief Discard view[from..count) custom trees; NULL view is a no-op. */
+static void discard_customs_from(pubnub_serialization_provider_t* serial,
+                                 const pn_relation_input_view_t*  view,
+                                 size_t                           from,
+                                 size_t                           count)
+{
+    size_t i;
+
+    if (NULL == view) {
+        return;
+    }
+    for (i = from; i < count; ++i) {
+        pn_app_context_discard_custom(serial, view[i].custom_value);
+    }
+}
+
+void pn_app_context_discard_relation_customs(pubnub_serialization_provider_t* serial,
+                                             const void* items,
+                                             size_t      count)
+{
+    discard_customs_from(serial, (const pn_relation_input_view_t*)items, 0, count);
+}
+
 /**
  * @brief Build the "set" JSON array and attach it to @p root under "set".
  *
  * On success the array is owned by @p root. On failure the partially-built
  * array is destroyed and @p root is left untouched for the caller to free.
+ * Every entry's @c custom_value is consumed on all paths, including the
+ * entries not yet reached when a failure occurs.
  *
  * @param serial      Serialization provider.
  * @param root        Parent object to receive the "set" array.
@@ -330,6 +371,7 @@ static pubnub_res_t build_set_array(pubnub_serialization_provider_t* serial,
     pubnub_json_value_t* arr = serial->value_create_array(serial);
 
     if (NULL == arr) {
+        discard_customs_from(serial, set_view, 0, set_count);
         return PUBNUB_ERR_OUT_OF_MEMORY;
     }
 
@@ -339,6 +381,7 @@ static pubnub_res_t build_set_array(pubnub_serialization_provider_t* serial,
 
         if (NULL == set_view[i].id) {
             serial->value_destroy(serial, arr);
+            discard_customs_from(serial, set_view, i, set_count);
             return PUBNUB_ERR_INVALID_ARGUMENT;
         }
         extras.status       = set_view[i].status;
@@ -346,15 +389,18 @@ static pubnub_res_t build_set_array(pubnub_serialization_provider_t* serial,
         extras.custom       = set_view[i].custom;
         extras.custom_len   = set_view[i].custom_len;
         extras.custom_value = set_view[i].custom_value;
-        item = build_set_item(serial, set_view[i].id, id_key, id_key_len, &extras);
+        item                = build_set_item(
+            serial, set_view[i].id, id_key, id_key_len, &extras, &rc);
         if (NULL == item) {
             serial->value_destroy(serial, arr);
-            return PUBNUB_ERR_OUT_OF_MEMORY;
+            discard_customs_from(serial, set_view, i + 1, set_count);
+            return rc;
         }
         rc = serial->array_append(serial, arr, item);
         if (PUBNUB_OK != rc) {
             serial->value_destroy(serial, item);
             serial->value_destroy(serial, arr);
+            discard_customs_from(serial, set_view, i + 1, set_count);
             return rc;
         }
     }
@@ -404,10 +450,11 @@ static pubnub_res_t build_delete_array(pubnub_serialization_provider_t* serial,
             serial->value_destroy(serial, arr);
             return PUBNUB_ERR_INVALID_ARGUMENT;
         }
-        item = build_remove_item(serial, remove_view[i].id, id_key, id_key_len);
+        item =
+            build_remove_item(serial, remove_view[i].id, id_key, id_key_len, &rc);
         if (NULL == item) {
             serial->value_destroy(serial, arr);
-            return PUBNUB_ERR_OUT_OF_MEMORY;
+            return rc;
         }
         rc = serial->array_append(serial, arr, item);
         if (PUBNUB_OK != rc) {
@@ -442,28 +489,30 @@ static pubnub_res_t build_set_remove_body(pubnub_serialization_provider_t* seria
                                           pubnub_string_view_t id_key,
                                           pubnub_buffer_t*     body_buf)
 {
-    pubnub_res_t rc = validate_serial_for_body(serial, body_buf);
+    const pn_relation_input_view_t* set_view =
+        (const pn_relation_input_view_t*)set_items;
+    const pn_relation_input_view_t* rem_view =
+        (const pn_relation_input_view_t*)remove_items;
+    pubnub_json_value_t* root;
+    pubnub_res_t         rc = validate_serial_for_body(serial, body_buf);
 
     if (PUBNUB_OK != rc) {
-        return rc;
+        goto reject;
     }
     if (0 == set_count && 0 == remove_count) {
         return PUBNUB_ERR_INVALID_ARGUMENT;
     }
     if ((set_count > 0 && NULL == set_items)
         || (remove_count > 0 && NULL == remove_items)) {
-        return PUBNUB_ERR_INVALID_ARGUMENT;
+        rc = PUBNUB_ERR_INVALID_ARGUMENT;
+        goto reject;
     }
 
-    pubnub_json_value_t* root = serial->value_create_object(serial);
+    root = serial->value_create_object(serial);
     if (NULL == root) {
-        return PUBNUB_ERR_OUT_OF_MEMORY;
+        rc = PUBNUB_ERR_OUT_OF_MEMORY;
+        goto reject;
     }
-
-    const pn_relation_input_view_t* set_view =
-        (const pn_relation_input_view_t*)set_items;
-    const pn_relation_input_view_t* rem_view =
-        (const pn_relation_input_view_t*)remove_items;
 
     if (set_count > 0) {
         rc = build_set_array(
@@ -485,6 +534,10 @@ static pubnub_res_t build_set_remove_body(pubnub_serialization_provider_t* seria
 
 cleanup:
     serial->value_destroy(serial, root);
+    return rc;
+
+reject:
+    discard_customs_from(serial, set_view, 0, set_count);
     return rc;
 }
 

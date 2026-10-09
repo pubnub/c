@@ -22,18 +22,56 @@
 #include "pubnub/error.h"
 #include "pubnub/features/subscribe_types.h"
 #include "pubnub/providers/allocator.h"
+#include "pubnub/providers/logger.h"
 #include "pubnub/providers/serialization.h"
 #include "pubnub/providers/transport_types.h"
 #include "pubnub/types.h"
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 #ifdef __cplusplus
 // clang-format off
 extern "C" {
 // clang-format on
 #endif
+
+/** @brief The `-pnpres` presence suffix literal. */
+#define PN_PNPRES_SUFFIX "-pnpres"
+/** @brief Byte length of the `-pnpres` suffix (excludes NUL). */
+#define PN_PNPRES_SUFFIX_LEN ((size_t)7)
+
+/**
+ * @brief Test whether a name ends with `-pnpres` over a non-empty base.
+ *
+ * @param ptr Name bytes, not necessarily NUL-terminated; may be NULL.
+ * @param len Byte count of @p ptr.
+ * @retval 1 Name is `<base>-pnpres` with a non-empty base.
+ * @retval 0 Otherwise.
+ */
+static inline int pn_pnpres_has_suffix(const char* ptr, size_t len)
+{
+    if (NULL == ptr || len <= PN_PNPRES_SUFFIX_LEN) {
+        return 0;
+    }
+    return 0
+        == memcmp(ptr + len - PN_PNPRES_SUFFIX_LEN,
+                  PN_PNPRES_SUFFIX,
+                  PN_PNPRES_SUFFIX_LEN);
+}
+
+/**
+ * @brief Return the base-name length with any `-pnpres` suffix removed.
+ *
+ * @param ptr Name bytes; may be NULL.
+ * @param len Number of bytes in @p ptr.
+ * @return @p len minus the suffix when present, otherwise @p len.
+ */
+static inline size_t pn_pnpres_base_len(const char* ptr, size_t len)
+{
+    return pn_pnpres_has_suffix(ptr, len) ? len - PN_PNPRES_SUFFIX_LEN : len;
+}
 
 /**
  * @brief Subscribe cursor holding the timetoken and region from the
@@ -74,31 +112,6 @@ typedef struct pn_subscribe_wire_inputs {
 } pn_subscribe_wire_inputs_t;
 
 /**
- * @brief A parsed message from the subscribe V2 response, ready for
- *        dispatch to listeners.
- *
- * Embeds the public event struct directly so no conversion is needed
- * at dispatch time. The @c entry_index routing field is internal to
- * the filtered listener dispatch logic.
- *
- * All string views in @c event alias memory inside the parsed JSON
- * tree held by @ref pn_subscribe_parsed_response_t._tree. They become
- * invalid once the tree is destroyed.
- */
-typedef struct pn_subscribe_dispatch_entry {
-    /** Public event — populated directly by the parser. */
-    pubnub_subscribe_event_t event;
-    /** Index into the manager's entries[] for this message's source
-     *  channel. UINT16_MAX if the channel could not be resolved to a
-     *  registry entry (e.g., wildcard match without exact entry). Used
-     *  by the filtered listener dispatch logic. */
-    uint16_t entry_index;
-} pn_subscribe_dispatch_entry_t;
-
-/** Maximum messages parsed from a single subscribe response.
- *  Controlled by PUBNUB_CFG_SUBSCRIBE_MAX_BATCH_SIZE in config.h. */
-
-/**
  * @brief Parsed subscribe V2 response envelope.
  *
  * Callers MUST destroy the tree after processing by calling
@@ -108,12 +121,16 @@ typedef struct pn_subscribe_dispatch_entry {
 typedef struct pn_subscribe_parsed_response {
     /** Updated cursor (timetoken + region) for the next request. */
     pn_subscribe_cursor_t cursor;
-    /** Parsed message batch. */
-    pn_subscribe_dispatch_entry_t messages[PUBNUB_CFG_SUBSCRIBE_MAX_BATCH_SIZE];
+    /** Parsed message batch. String views in each event alias memory
+     *  owned by @c _tree and become invalid once the tree is destroyed. */
+    pubnub_subscribe_event_t messages[PUBNUB_CFG_SUBSCRIBE_MAX_BATCH_SIZE];
     /** Number of valid entries in @c messages. */
     uint16_t message_count;
     /** 1 if the response contained more messages than the batch cap. */
     uint8_t truncated;
+    /** 1 if an inspected message lacked a usable channel; the whole batch
+     *  is dropped (@c message_count = 0) and only the cursor survives. */
+    uint8_t malformed;
     /**
      * Parsed JSON tree (caller-owned). Must be destroyed via
      * `serial->value_destroy(serial, _tree)` after processing.
@@ -172,16 +189,26 @@ pubnub_res_t pn_subscribe_build_receive(pubnub_http_request_t* request,
  * message batch alias tree-owned memory).
  *
  * @param serial   Serialization provider for JSON parsing.
+ * @param log      Logger provider for debug diagnostics; may be NULL, in
+ *                 which case nothing is logged.
  * @param body     Raw response body bytes.
  * @param body_len Length of @p body in bytes.
  * @param out      Parsed response (caller-owned, zero-initialized on
  *                 entry). On success, caller must destroy @c _tree.
- * @return PUBNUB_OK on success, PUBNUB_ERR_SERIALIZATION on parse
- *         failure or malformed envelope.
+ * @return PUBNUB_OK when the envelope parsed and the cursor was extracted
+ *         (even if the batch is unusable — see @c malformed);
+ *         PUBNUB_ERR_SERIALIZATION when the body is not a parseable JSON
+ *         object or the cursor is missing or invalid.
+ * @note A bad message array sets @c malformed (with @c message_count 0), not
+ *       the return code — advance the cursor and deliver nothing. Elements
+ *       with a non-integer or out-of-range @c e are skipped (not counted in
+ *       @c message_count) and logged at debug level, even if the batch is
+ *       later dropped as malformed.
  */
 pubnub_res_t pn_subscribe_parse_response(pubnub_serialization_provider_t* serial,
-                                         const uint8_t* body,
-                                         size_t         body_len,
+                                         pubnub_logger_provider_t* log,
+                                         const uint8_t*            body,
+                                         size_t                    body_len,
                                          pn_subscribe_parsed_response_t* out);
 
 /**

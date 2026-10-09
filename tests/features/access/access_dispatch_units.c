@@ -168,12 +168,98 @@ static void parse_token_null_token_returns_error(void** state)
     pubnub_destroy(ctx);
 }
 
+/*
+ * Category tokens (CBOR, base64url):
+ * - CAT_BOTH:      v=2 t=1000 ttl=60 cat={chan:32, uuid:32}
+ * - CAT_UUID_ONLY: v=2 t=1000 ttl=60 cat={uuid:32}
+ * - CAT_NONE:      v=2 t=1000 ttl=60
+ */
+static const char* const TEST_TOKEN_CAT_BOTH =
+    "pGF2AmF0GQPoY3R0bBg8Y2NhdKJkY2hhbhggZHV1aWQYIA";
+static const char* const TEST_TOKEN_CAT_UUID_ONLY =
+    "pGF2AmF0GQPoY3R0bBg8Y2NhdKFkdXVpZBgg";
+static const char* const TEST_TOKEN_CAT_NONE = "o2F2AmF0GQPoY3R0bBg8";
+
+static void parse_token_category_permissions_exposed(void** state)
+{
+    (void)state;
+    pubnub_config_t   cfg = chain_only_config();
+    pubnub_context_t* ctx = pubnub_create(&cfg);
+    assert_non_null(ctx);
+
+    pubnub_parse_token_opts_t opts = PUBNUB_PARSE_TOKEN_OPTS_INIT;
+    opts.token                     = TEST_TOKEN_CAT_BOTH;
+
+    pubnub_parsed_token_t parsed = {0};
+    assert_int_equal(PUBNUB_OK, pubnub_parse_token(ctx, &opts, &parsed));
+    assert_int_equal(32, (int)parsed.channels_category_permissions);
+    assert_int_equal(32, (int)parsed.uuids_category_permissions);
+    assert_int_equal(0, parsed.channel_count);
+    assert_int_equal(0, parsed.uuid_count);
+
+    pubnub_destroy(ctx);
+}
+
+static void parse_token_category_reparse_replaces_previous(void** state)
+{
+    (void)state;
+    pubnub_config_t   cfg = chain_only_config();
+    pubnub_context_t* ctx = pubnub_create(&cfg);
+    assert_non_null(ctx);
+
+    pubnub_parse_token_opts_t opts   = PUBNUB_PARSE_TOKEN_OPTS_INIT;
+    pubnub_parsed_token_t     parsed = {0};
+
+    opts.token = TEST_TOKEN_CAT_BOTH;
+    assert_int_equal(PUBNUB_OK, pubnub_parse_token(ctx, &opts, &parsed));
+    assert_int_equal(32, (int)parsed.channels_category_permissions);
+    assert_int_equal(32, (int)parsed.uuids_category_permissions);
+
+    opts.token = TEST_TOKEN_CAT_UUID_ONLY;
+    assert_int_equal(PUBNUB_OK, pubnub_parse_token(ctx, &opts, &parsed));
+    assert_int_equal(0, (int)parsed.channels_category_permissions);
+    assert_int_equal(32, (int)parsed.uuids_category_permissions);
+
+    opts.token = TEST_TOKEN_CAT_NONE;
+    assert_int_equal(PUBNUB_OK, pubnub_parse_token(ctx, &opts, &parsed));
+    assert_int_equal(0, (int)parsed.channels_category_permissions);
+    assert_int_equal(0, (int)parsed.uuids_category_permissions);
+
+    pubnub_destroy(ctx);
+}
+
+static void parse_token_failure_zeroes_category_result(void** state)
+{
+    (void)state;
+    pubnub_config_t   cfg = chain_only_config();
+    pubnub_context_t* ctx = pubnub_create(&cfg);
+    assert_non_null(ctx);
+
+    pubnub_parse_token_opts_t opts   = PUBNUB_PARSE_TOKEN_OPTS_INIT;
+    pubnub_parsed_token_t     parsed = {0};
+
+    opts.token = TEST_TOKEN_CAT_BOTH;
+    assert_int_equal(PUBNUB_OK, pubnub_parse_token(ctx, &opts, &parsed));
+    assert_int_equal(32, (int)parsed.channels_category_permissions);
+
+    /* Reuse the dirty result object with an undecodable token. */
+    opts.token = "!!!not-valid-base64-at-all@@@###$$$";
+    assert_int_not_equal(PUBNUB_OK, pubnub_parse_token(ctx, &opts, &parsed));
+    assert_int_equal(0, (int)parsed.channels_category_permissions);
+    assert_int_equal(0, (int)parsed.uuids_category_permissions);
+
+    pubnub_destroy(ctx);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(parse_token_indexed_channels),
         cmocka_unit_test(parse_token_invalid_base64_returns_error),
         cmocka_unit_test(parse_token_null_token_returns_error),
+        cmocka_unit_test(parse_token_category_permissions_exposed),
+        cmocka_unit_test(parse_token_category_reparse_replaces_previous),
+        cmocka_unit_test(parse_token_failure_zeroes_category_result),
     };
 
     return cmocka_run_group_tests(tests, NULL, NULL);

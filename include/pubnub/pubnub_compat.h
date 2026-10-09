@@ -24,7 +24,8 @@
  *
  * Resolves to C11 @c _Static_assert when available. On C99-only toolchains
  * it falls back to a typedef'd negative-size array trick whose name is
- * disambiguated by @c __COUNTER__ (when supported) or @c __LINE__.
+ * disambiguated by @c __COUNTER__ (when supported and accepted by the
+ * compiler in the selected language mode) or @c __LINE__.
  *
  * @param cond Compile-time integer-constant expression. Asserted non-zero.
  * @param msg  Diagnostic message (used by the C11 path; ignored by the
@@ -32,14 +33,15 @@
  *             typedef names).
  *
  * @note Same-line restriction: on compilers without @c __COUNTER__
- *       (notably IAR pre-9.30 and ARMCC pre-6), two
- *       @c PUBNUB_STATIC_ASSERT invocations on the same source line will
- *       collide on the typedef name. Place each on its own line. C11 and
- *       @c __COUNTER__ paths are immune.
+ *       (notably IAR pre-9.30 and ARMCC pre-6), and on Clang in C99 mode
+ *       (where @c __COUNTER__ is rejected under strict pedantic checks),
+ *       two @c PUBNUB_STATIC_ASSERT invocations on the same source line
+ *       will collide on the typedef name. Place each on its own line. C11
+ *       and the @c __COUNTER__ path are immune.
  */
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
 #define PUBNUB_STATIC_ASSERT(cond, msg) _Static_assert((cond), msg)
-#elif defined(__COUNTER__)
+#elif defined(__COUNTER__) && !defined(__clang__)
 #define PUBNUB_STATIC_ASSERT(cond, msg) \
     typedef char PUBNUB_PASTE(pubnub_sa_, __COUNTER__)[(cond) ? 1 : -1]
 #else
