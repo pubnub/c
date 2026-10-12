@@ -138,7 +138,7 @@ static void conn_fail(pn_socket_connection_t* conn,
                       pubnub_res_t            error_code)
 {
     PUBNUB_LOG(transport->logger,
-               PUBNUB_LOG_LEVEL_WARNING,
+               PUBNUB_LOG_LEVEL_ERROR,
                "conn[%d] connection failed: %u (%s)",
                (int)(conn - transport->connections),
                (unsigned)error_code,
@@ -268,7 +268,7 @@ static int conn_try_connect(pn_socket_connection_t* conn,
             transport->ops->socket_create(transport->ops, addr->family, 0);
         if (PN_INVALID_SOCKET == sock) {
             PUBNUB_LOG_TEXT(transport->logger,
-                            PUBNUB_LOG_LEVEL_WARNING,
+                            PUBNUB_LOG_LEVEL_ERROR,
                             "socket_create failed");
             conn->addr_current++;
             continue;
@@ -277,7 +277,7 @@ static int conn_try_connect(pn_socket_connection_t* conn,
         int rc = transport->ops->socket_set_nonblocking(transport->ops, sock);
         if (rc < 0) {
             PUBNUB_LOG(transport->logger,
-                       PUBNUB_LOG_LEVEL_WARNING,
+                       PUBNUB_LOG_LEVEL_ERROR,
                        "socket_set_nonblocking failed: rc=%d",
                        rc);
             transport->ops->socket_destroy(transport->ops, sock);
@@ -300,14 +300,14 @@ static int conn_try_connect(pn_socket_connection_t* conn,
             PUBNUB_LOG(transport->logger,
                        PUBNUB_LOG_LEVEL_TRACE,
                        "TCP connect -> [%x:%x:%x:%x:%x:%x:%x:%x]:%u (%s)",
-                       (unsigned)((b[0] << 8) | b[1]),
-                       (unsigned)((b[2] << 8) | b[3]),
-                       (unsigned)((b[4] << 8) | b[5]),
-                       (unsigned)((b[6] << 8) | b[7]),
-                       (unsigned)((b[8] << 8) | b[9]),
-                       (unsigned)((b[10] << 8) | b[11]),
-                       (unsigned)((b[12] << 8) | b[13]),
-                       (unsigned)((b[14] << 8) | b[15]),
+                       ((unsigned)b[0] << 8U) | b[1],
+                       ((unsigned)b[2] << 8U) | b[3],
+                       ((unsigned)b[4] << 8U) | b[5],
+                       ((unsigned)b[6] << 8U) | b[7],
+                       ((unsigned)b[8] << 8U) | b[9],
+                       ((unsigned)b[10] << 8U) | b[11],
+                       ((unsigned)b[12] << 8U) | b[13],
+                       ((unsigned)b[14] << 8U) | b[15],
                        (unsigned)addr->port,
                        conn_effective_host(conn));
             (void)b;
@@ -342,7 +342,7 @@ static int conn_try_connect(pn_socket_connection_t* conn,
 
     /* All addresses exhausted. */
     PUBNUB_LOG_TEXT(
-        transport->logger, PUBNUB_LOG_LEVEL_WARNING, "all addresses exhausted");
+        transport->logger, PUBNUB_LOG_LEVEL_ERROR, "all addresses exhausted");
     return -1;
 }
 
@@ -789,6 +789,14 @@ static int conn_transition_to_tls_or_http(pn_socket_connection_t* conn,
                                                     transport->ops,
                                                     hostname);
         if (rc < 0) {
+            PUBNUB_LOG(
+                transport->logger,
+                PUBNUB_LOG_LEVEL_ERROR,
+                "conn[%d] conn_transition_to_tls_or_http: TLS session create "
+                "failed for host: %s (rc=%d)",
+                (int)(conn - transport->connections),
+                hostname,
+                rc);
             return -1;
         }
         conn->state = PN_CONN_TLS_HANDSHAKING;
@@ -841,6 +849,14 @@ static int conn_transition_after_connect(pn_socket_connection_t* conn,
             transport->proxy_module, conn, transport, target_host, target_port);
 
         if (PN_PROXY_ERROR == rc) {
+            PUBNUB_LOG(
+                transport->logger,
+                PUBNUB_LOG_LEVEL_ERROR,
+                "conn[%d] conn_transition_after_connect: proxy tunnel start "
+                "failed for target host: %s:%u",
+                (int)(conn - transport->connections),
+                target_host,
+                (unsigned)target_port);
             return -1;
         }
         if (PN_PROXY_COMPLETE == rc) {
@@ -906,6 +922,15 @@ static pn_conn_state_t tick_dns_resolving(pn_socket_connection_t* conn,
         transport->resolver.state = PN_DNS_STATE_IDLE;
 
         if (rc < 0 || 0 == count) {
+            PUBNUB_LOG(
+                transport->logger,
+                PUBNUB_LOG_LEVEL_ERROR,
+                "conn[%d] tick_dns_resolving: DNS result unusable for host: %s "
+                "(rc=%d, count=%u)",
+                (int)(conn - transport->connections),
+                conn->dns_hostname,
+                rc,
+                (unsigned)count);
             conn_fail(conn, transport, PUBNUB_ERR_TRANSPORT);
             return conn->state;
         }
@@ -932,7 +957,7 @@ static pn_conn_state_t tick_dns_resolving(pn_socket_connection_t* conn,
          * a fresh DNS lookup after a failure. */
         transport->resolver.state = PN_DNS_STATE_IDLE;
         PUBNUB_LOG(transport->logger,
-                   PUBNUB_LOG_LEVEL_WARNING,
+                   PUBNUB_LOG_LEVEL_ERROR,
                    "DNS resolution failed for host: %s",
                    conn_effective_host(conn));
         conn_fail(conn, transport, PUBNUB_ERR_TRANSPORT);
@@ -990,6 +1015,15 @@ static void conn_fallback_next_addr(pn_socket_connection_t* conn,
             conn_fail(conn, transport, PUBNUB_ERR_TRANSPORT);
         }
     } else if (-1 == try_rc) {
+        PUBNUB_LOG(
+            transport->logger,
+            PUBNUB_LOG_LEVEL_DEBUG,
+            "conn[%d] conn_fallback_next_addr: all addresses exhausted for "
+            "host: %s (addr_count=%u, addr_current=%u)",
+            (int)(conn - transport->connections),
+            conn_effective_host(conn),
+            (unsigned)conn->addr_count,
+            (unsigned)conn->addr_current);
         conn_fail(conn, transport, PUBNUB_ERR_TRANSPORT);
     }
 }
@@ -1085,6 +1119,15 @@ static pn_conn_state_t tick_connecting(pn_socket_connection_t* conn,
         if (0 == rc) {
             return conn->state;
         }
+        PUBNUB_LOG(
+            transport->logger,
+            PUBNUB_LOG_LEVEL_DEBUG,
+            "conn[%d] tick_connecting: all addresses exhausted before socket "
+            "creation for host: %s (addr_count=%u, addr_current=%u)",
+            (int)(conn - transport->connections),
+            conn_effective_host(conn),
+            (unsigned)conn->addr_count,
+            (unsigned)conn->addr_current);
         conn_fail(conn, transport, PUBNUB_ERR_TRANSPORT);
         return conn->state;
     }
@@ -1170,6 +1213,13 @@ static pn_conn_state_t tick_proxy_negotiating(pn_socket_connection_t* conn,
                                              transport->allocator);
             conn->proxy_session = NULL;
         }
+        PUBNUB_LOG(
+            transport->logger,
+            PUBNUB_LOG_LEVEL_ERROR,
+            "conn[%d] tick_proxy_negotiating: proxy tunnel negotiation failed "
+            "for host: %s",
+            (int)(conn - transport->connections),
+            conn_effective_host(conn));
         conn_fail(conn, transport, PUBNUB_ERR_TRANSPORT);
         return conn->state;
     }
@@ -1194,6 +1244,15 @@ static pn_conn_state_t tick_tls_handshaking(pn_socket_connection_t* conn,
                                             pn_socket_transport_t*  transport)
 {
     if (NULL == transport->tls_backend || NULL == conn->tls_session) {
+        PUBNUB_LOG(transport->logger,
+                   PUBNUB_LOG_LEVEL_DEBUG,
+                   "conn[%d] tick_tls_handshaking: cannot start handshake for "
+                   "host: %s "
+                   "(%s)",
+                   (int)(conn - transport->connections),
+                   conn_effective_host(conn),
+                   (NULL == transport->tls_backend) ? "no TLS backend"
+                                                    : "no TLS session");
         conn_fail(conn, transport, PUBNUB_ERR_TRANSPORT);
         return conn->state;
     }
@@ -1281,6 +1340,15 @@ static pn_conn_state_t tick_tls_handshaking(pn_socket_connection_t* conn,
              * before TLS. tls_session was cleared by conn_close_all. */
             conn->state = PN_CONN_CONNECTING;
         } else {
+            PUBNUB_LOG(
+                transport->logger,
+                PUBNUB_LOG_LEVEL_DEBUG,
+                "conn[%d] tick_tls_handshaking: TLS error and all addresses "
+                "exhausted for host: %s (addr_count=%u, addr_current=%u)",
+                (int)(conn - transport->connections),
+                conn_effective_host(conn),
+                (unsigned)conn->addr_count,
+                (unsigned)conn->addr_current);
             conn_fail(conn, transport, PUBNUB_ERR_TRANSPORT);
         }
     }
@@ -1348,7 +1416,7 @@ static pn_conn_state_t tick_sending_headers(pn_socket_connection_t* conn,
     }
 
     PUBNUB_LOG(
-        transport->logger, PUBNUB_LOG_LEVEL_WARNING, "header send error: rc=%d", rc);
+        transport->logger, PUBNUB_LOG_LEVEL_ERROR, "header send error: rc=%d", rc);
     conn_fail(conn, transport, PUBNUB_ERR_TRANSPORT);
     return conn->state;
 }
@@ -1408,7 +1476,7 @@ static pn_conn_state_t tick_sending_body(pn_socket_connection_t* conn,
     }
 
     PUBNUB_LOG(
-        transport->logger, PUBNUB_LOG_LEVEL_WARNING, "body send error: rc=%d", rc);
+        transport->logger, PUBNUB_LOG_LEVEL_ERROR, "body send error: rc=%d", rc);
     conn_fail(conn, transport, PUBNUB_ERR_TRANSPORT);
     return conn->state;
 }
@@ -1554,14 +1622,12 @@ static void conn_log_recv_error(pn_socket_connection_t* conn,
      * leaving the status code unreferenced. */
     (void)rc;
 
-    PUBNUB_LOG(transport->logger, PUBNUB_LOG_LEVEL_WARNING, "recv error: rc=%d", rc);
+    PUBNUB_LOG(transport->logger, PUBNUB_LOG_LEVEL_ERROR, "recv error: rc=%d", rc);
 
     if (NULL != conn->tls_session && NULL != transport->tls_backend) {
         int tls_err = transport->tls_backend->get_session_error(conn->tls_session);
-        PUBNUB_LOG(transport->logger,
-                   PUBNUB_LOG_LEVEL_WARNING,
-                   "TLS recv error: %d",
-                   tls_err);
+        PUBNUB_LOG(
+            transport->logger, PUBNUB_LOG_LEVEL_ERROR, "TLS recv error: %d", tls_err);
         (void)tls_err;
     }
 }
@@ -1576,6 +1642,14 @@ static pn_conn_state_t tick_receiving_response(pn_socket_connection_t* conn,
     int    rc;
 
     if (NULL == conn->rx_buf.data) {
+        PUBNUB_LOG(
+            transport->logger,
+            PUBNUB_LOG_LEVEL_ERROR,
+            "conn[%d] tick_receiving_response: no receive buffer for host: %s "
+            "(rx_buf.len=%lu)",
+            (int)(conn - transport->connections),
+            conn_effective_host(conn),
+            (unsigned long)conn->rx_buf.len);
         conn_fail(conn, transport, PUBNUB_ERR_TRANSPORT);
         return conn->state;
     }
@@ -1611,6 +1685,15 @@ static pn_conn_state_t tick_receiving_response(pn_socket_connection_t* conn,
         }
 
         if (PN_HTTP_PARSE_ERROR == result) {
+            PUBNUB_LOG(
+                transport->logger,
+                PUBNUB_LOG_LEVEL_ERROR,
+                "conn[%d] tick_receiving_response: HTTP response parse error "
+                "for host: %s (rx_buf.len=%lu, requests_on_connection=%u)",
+                (int)(conn - transport->connections),
+                conn_effective_host(conn),
+                (unsigned long)conn->rx_buf.len,
+                (unsigned)conn->requests_on_connection);
             conn_fail(conn, transport, PUBNUB_ERR_TRANSPORT);
             return conn->state;
         }
@@ -1636,6 +1719,17 @@ static pn_conn_state_t tick_receiving_response(pn_socket_connection_t* conn,
         if (PN_HTTP_PARSE_COMPLETE == pn_http_parser_signal_eof(&conn->parser)) {
             conn_finalize_response(conn, transport);
         } else {
+            PUBNUB_LOG(
+                transport->logger,
+                PUBNUB_LOG_LEVEL_ERROR,
+                "conn[%d] tick_receiving_response: peer closed before response "
+                "completed for host: %s (fd=%d, requests_on_connection=%u, "
+                "rx_buf.len=%lu)",
+                (int)(conn - transport->connections),
+                conn_effective_host(conn),
+                (int)conn->socket,
+                (unsigned)conn->requests_on_connection,
+                (unsigned long)conn->rx_buf.len);
             conn_fail(conn, transport, PUBNUB_ERR_TRANSPORT);
         }
         return conn->state;
@@ -1665,6 +1759,15 @@ static int tick_complete_handle_redirect(pn_socket_connection_t* conn,
     pubnub_res_t         prc;
 
     if (conn->redirect_count >= PUBNUB_CFG_SOCKET_MAX_REDIRECTS) {
+        PUBNUB_LOG(
+            transport->logger,
+            PUBNUB_LOG_LEVEL_ERROR,
+            "conn[%d] tick_complete_handle_redirect: redirect limit reached "
+            "for host: %s (redirect_count=%u, max=%u)",
+            (int)(conn - transport->connections),
+            conn_effective_host(conn),
+            (unsigned)conn->redirect_count,
+            (unsigned)PUBNUB_CFG_SOCKET_MAX_REDIRECTS);
         conn_free_redirect(conn, transport);
         conn_close_all(conn, transport);
         if (NULL != conn->response) {
@@ -1711,7 +1814,7 @@ static int tick_complete_handle_redirect(pn_socket_connection_t* conn,
      * secure origin must never be talked out of TLS by a Location header. */
     if (conn_effective_secure(conn) && 0 == new_secure) {
         PUBNUB_LOG_TEXT(transport->logger,
-                        PUBNUB_LOG_LEVEL_WARNING,
+                        PUBNUB_LOG_LEVEL_ERROR,
                         "rejecting redirect: https->http downgrade blocked");
         pn_strfree(new_host, transport->allocator);
         pn_strfree(new_path, transport->allocator);
@@ -2080,6 +2183,14 @@ static int conn_begin_dns(pn_socket_connection_t* conn,
     transport->resolver.state = PN_DNS_STATE_IDLE;
 
     if (rc < 0 || 0 == count) {
+        PUBNUB_LOG(transport->logger,
+                   PUBNUB_LOG_LEVEL_ERROR,
+                   "conn[%d] conn_begin_dns: no usable addresses for host: %s "
+                   "(rc=%d, count=%u)",
+                   (int)(conn - transport->connections),
+                   hostname,
+                   rc,
+                   (unsigned)count);
         return -1;
     }
     conn->addr_count   = (uint8_t)count;
@@ -2116,6 +2227,13 @@ int pn_connection_start(pn_socket_connection_t*      conn,
     }
 
     if (PN_CONN_IDLE != conn->state && PN_CONN_KEEP_ALIVE_IDLE != conn->state) {
+        PUBNUB_LOG(
+            transport->logger,
+            PUBNUB_LOG_LEVEL_ERROR,
+            "conn[%d] pn_connection_start: rejected, connection state=%d is "
+            "neither IDLE nor KEEP_ALIVE_IDLE",
+            (int)(conn - transport->connections),
+            (int)conn->state);
         return -1;
     }
 
@@ -2159,6 +2277,14 @@ int pn_connection_start(pn_socket_connection_t*      conn,
 
     /* Build headers early (needed for both reuse and fresh paths). */
     if (0 != conn_build_headers(conn, request)) {
+        PUBNUB_LOG(
+            transport->logger,
+            PUBNUB_LOG_LEVEL_ERROR,
+            "conn[%d] pn_connection_start: request header build failed for "
+            "host: %s (header buffer %lu bytes)",
+            (int)(conn - transport->connections),
+            (NULL != request->host) ? request->host : "(null)",
+            (unsigned long)sizeof(conn->header_buf));
         return -1;
     }
 

@@ -387,6 +387,10 @@ static void redispatch_slot(pn_middleware_retry_t* mw, pn_retry_slot_t* slot)
         /* Inner chain rejected immediately — report transport error
          * so the core routes this to FAILED instead of hanging on
          * PENDING indefinitely. */
+        PUBNUB_LOG_TEXT(mw->logger,
+                        PUBNUB_LOG_LEVEL_ERROR,
+                        "retry middleware: inner chain rejected redispatch, "
+                        "reporting transport error");
         slot->internal_response.completion      = PUBNUB_HTTP_ERROR;
         slot->internal_response.transport_error = PUBNUB_ERR_TRANSPORT;
         finalize_slot(slot);

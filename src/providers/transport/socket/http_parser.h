@@ -33,22 +33,20 @@ typedef enum pn_http_parse_result {
 } pn_http_parse_result_t;
 
 /** HTTP response flags. */
-enum pn_http_parser_flags {
-    /** Transfer-Encoding: chunked. */
-    PN_HTTP_FLAG_CHUNKED = 0x01,
-    /** Content-Encoding: gzip. */
-    PN_HTTP_FLAG_GZIP = 0x02,
-    /** Content-Encoding: deflate. */
-    PN_HTTP_FLAG_DEFLATE = 0x04,
-    /** Connection: close. */
-    PN_HTTP_FLAG_CONNECTION_CLOSE = 0x08,
-    /**
-     * A Content-Length header was present. Distinguishes an explicit
-     * Content-Length: 0 (zero-length body) from a response with no
-     * Content-Length and no Transfer-Encoding (body framed by close).
-     */
-    PN_HTTP_FLAG_HAS_CONTENT_LENGTH = 0x10
-};
+/** Transfer-Encoding: chunked. */
+#define PN_HTTP_FLAG_CHUNKED 0x01U
+/** Content-Encoding: gzip. */
+#define PN_HTTP_FLAG_GZIP 0x02U
+/** Content-Encoding: deflate. */
+#define PN_HTTP_FLAG_DEFLATE 0x04U
+/** Connection: close. */
+#define PN_HTTP_FLAG_CONNECTION_CLOSE 0x08U
+/**
+ * A Content-Length header was present. Distinguishes an explicit
+ * Content-Length: 0 (zero-length body) from a response with no
+ * Content-Length and no Transfer-Encoding (body framed by close).
+ */
+#define PN_HTTP_FLAG_HAS_CONTENT_LENGTH 0x10U
 
 /** HTTP parser internal state. */
 typedef enum pn_http_parser_state {

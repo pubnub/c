@@ -25,6 +25,10 @@ static pubnub_transport_handle_t* auth_send(pubnub_transport_provider_t* self,
     }
     pn_middleware_auth_t* mw = (pn_middleware_auth_t*)self;
     if (NULL == mw->next) {
+        PUBNUB_LOG_TEXT(
+            mw->logger,
+            PUBNUB_LOG_LEVEL_ERROR,
+            "auth middleware: no next transport layer, request not sent");
         response->completion = PUBNUB_HTTP_ERROR;
         return NULL;
     }
@@ -52,6 +56,11 @@ static pubnub_transport_handle_t* auth_send(pubnub_transport_provider_t* self,
          * failed allocation leaves the old (stale but safe) cached values
          * intact for the next call. */
         if (NULL == raw_copy) {
+            PUBNUB_LOG(
+                mw->logger,
+                PUBNUB_LOG_LEVEL_ERROR,
+                "auth middleware: allocation of %lu-byte token copy failed",
+                (unsigned long)(tok_len + 1));
             response->completion = PUBNUB_HTTP_ERROR;
             return NULL;
         }
@@ -71,6 +80,11 @@ static pubnub_transport_handle_t* auth_send(pubnub_transport_provider_t* self,
         encoded = pn_url_encode_alloc_n(
             (const uint8_t*)tok, tok_len, mw->allocator, PN_ENCODE_FULL);
         if (NULL == encoded) {
+            PUBNUB_LOG(mw->logger,
+                       PUBNUB_LOG_LEVEL_ERROR,
+                       "auth middleware: URL encoding of auth token failed "
+                       "(token_len=%lu)",
+                       (unsigned long)tok_len);
             PN_FREE(mw->allocator, raw_copy);
             response->completion = PUBNUB_HTTP_ERROR;
             return NULL;
@@ -85,6 +99,9 @@ static pubnub_transport_handle_t* auth_send(pubnub_transport_provider_t* self,
 
     pubnub_string_view_t val = {mw->cached_encoded, strlen(mw->cached_encoded)};
     if (PUBNUB_OK != pn_request_add_query_param_view(request, "auth", val)) {
+        PUBNUB_LOG(mw->logger,
+                   PUBNUB_LOG_LEVEL_ERROR,
+                   "auth middleware: failed to add auth query parameter");
         response->completion = PUBNUB_HTTP_ERROR;
         return NULL;
     }

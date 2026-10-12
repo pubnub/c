@@ -141,6 +141,14 @@ pubnub_res_t pn_request_dispatch(pn_pipeline_t*              pipeline,
         if (PUBNUB_OK == err) {
             err = PUBNUB_ERR_TRANSPORT;
         }
+        PUBNUB_LOG(
+            pipeline->logger,
+            PUBNUB_LOG_LEVEL_ERROR,
+            "pn_request_dispatch: chain rejected request, transport_error=%u "
+            "(%s)%s",
+            (unsigned)err,
+            pubnub_res_str(err),
+            (PUBNUB_OK == req->http_response.transport_error) ? " [defaulted]" : "");
         req->state = PN_REQUEST_IN_FLIGHT;
         PN_REQUEST_ON_FAILURE(req, err);
 
