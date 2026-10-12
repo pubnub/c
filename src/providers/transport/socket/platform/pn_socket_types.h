@@ -54,9 +54,9 @@ typedef struct pn_sockaddr {
  * Used by the poll abstraction to indicate which I/O events are ready on a
  * socket. Multiple flags may be bitwise-ORed together.
  */
-#define PN_POLL_READ  0x01 /**< Socket is readable (data available). */
-#define PN_POLL_WRITE 0x02 /**< Socket is writable (send buffer has space). */
-#define PN_POLL_ERROR 0x04 /**< Error condition on socket. */
-#define PN_POLL_HUP   0x08 /**< Hang-up (peer closed connection). */
+#define PN_POLL_READ  0x01U /**< Socket is readable (data available). */
+#define PN_POLL_WRITE 0x02U /**< Socket is writable (send buffer has space). */
+#define PN_POLL_ERROR 0x04U /**< Error condition on socket. */
+#define PN_POLL_HUP   0x08U /**< Hang-up (peer closed connection). */
 
-#endif                     /* PN_SOCKET_TYPES_H */
+#endif                      /* PN_SOCKET_TYPES_H */

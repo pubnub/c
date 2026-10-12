@@ -47,12 +47,12 @@ pubnub_transport_provider_t* pn_transport_default(pubnub_allocator_provider_t* a
  * index + generation by the DECODE macros. Generation starts at 1
  * (pn_connection_init) so ENCODE(0, gen) is never NULL.
  */
-#define PN_SOCKET_HANDLE_ENCODE(idx, gen)                           \
-    ((pubnub_transport_handle_t*)(uintptr_t)(((uint32_t)(gen) << 8) \
+#define PN_SOCKET_HANDLE_ENCODE(idx, gen)                            \
+    ((pubnub_transport_handle_t*)(uintptr_t)(((uint32_t)(gen) << 8U) \
                                              | ((uint32_t)(idx) & 0xFFu)))
 
 #define PN_SOCKET_HANDLE_INDEX(h) ((int)((uintptr_t)(h) & 0xFFu))
-#define PN_SOCKET_HANDLE_GEN(h)   ((uint16_t)(((uintptr_t)(h) >> 8) & 0xFFFFu))
+#define PN_SOCKET_HANDLE_GEN(h)   ((uint16_t)(((uintptr_t)(h) >> 8U) & 0xFFFFu))
 
 /**
  * @brief Outcome of one decompression attempt.
@@ -348,6 +348,14 @@ static pubnub_transport_handle_t* socket_send(pubnub_transport_provider_t* self,
 
     int rc = pn_connection_start(conn, request, response, t);
     if (0 != rc) {
+        PUBNUB_LOG(
+            t->logger,
+            PUBNUB_LOG_LEVEL_ERROR,
+            "socket_send: conn[%d] pn_connection_start failed for host: %s "
+            "(rc=%d)",
+            slot,
+            (NULL != request->host) ? request->host : "(null)",
+            rc);
         response->completion      = PUBNUB_HTTP_ERROR;
         response->transport_error = PUBNUB_ERR_TRANSPORT;
         return NULL;
@@ -452,6 +460,14 @@ static pn_decomp_result_t socket_decomp_try(pn_socket_transport_t*  t,
     cap = conn->response->body_len * PN_DECOMP_CAP_RETRY_MULT;
     if (PUBNUB_CFG_SOCKET_DECOMP_MAX_BUFFER_SIZE > 0
         && cap > PUBNUB_CFG_SOCKET_DECOMP_MAX_BUFFER_SIZE) {
+        PUBNUB_LOG(t->logger,
+                   PUBNUB_LOG_LEVEL_ERROR,
+                   "inflate retry needs %u bytes, exceeding "
+                   "PUBNUB_CFG_SOCKET_DECOMP_MAX_BUFFER_SIZE=%u "
+                   "(body_len=%u)",
+                   (unsigned)cap,
+                   (unsigned)PUBNUB_CFG_SOCKET_DECOMP_MAX_BUFFER_SIZE,
+                   (unsigned)conn->response->body_len);
         socket_free_decomp_scratch(alloc, res.buf);
         socket_decomp_fail(conn, PUBNUB_ERR_TRANSPORT);
         res.buf = NULL;

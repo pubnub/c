@@ -24,7 +24,10 @@
 
 #include <string.h>
 
-#if PUBNUB_CFG_LOG_LEVEL_COMPILED || (PUBNUB_CFG_MAX_LOG_MESSAGE_SIZE > 0)
+/** @brief Consecutive malformed batches tolerated before RECEIVE_FAILURE. */
+#define PN_SUBSCRIBE_MALFORMED_CEILING ((uint8_t)3)
+
+#if PUBNUB_CFG_MAX_LOG_MESSAGE_SIZE > 0
 /** @brief Human-readable name for an EE state (debug logging). */
 static const char* pn_sub_state_str(pn_subscribe_ee_state_t s)
 {
@@ -85,7 +88,7 @@ static const char* pn_sub_status_str(pn_subscribe_ee_status_t s)
     default: return "?";
     }
 }
-#endif /* PUBNUB_CFG_LOG_LEVEL_COMPILED || MAX_LOG_MESSAGE_SIZE > 0 */
+#endif /* PUBNUB_CFG_MAX_LOG_MESSAGE_SIZE > 0 */
 
 #if PUBNUB_ENABLE_CRYPTO
 /* Forward declaration — avoids cross-feature include coupling.
@@ -236,6 +239,7 @@ static int apply_response_cursor(pn_subscribe_manager_t*     mgr,
 
     memset(&parsed, 0, sizeof(parsed));
     prc = pn_subscribe_parse_response(serial,
+                                      pn_context_logger(mgr->ctx),
                                       request->http_response.body,
                                       request->http_response.body_len,
                                       &parsed);
@@ -375,18 +379,12 @@ static void pn_subscribe_on_complete(pn_request_t* request,
 }
 
 /**
- * @brief Cancel a detached previous-request transport handle.
+ * @brief Push a handshake or receive failure event.
  *
- * Runs the transport chain-head cancel outside any pool lock (cancel may
- * call the allocator or fire callbacks). On the curl transport this
- * releases the prior request's rx_buf, freeing an arena slot; on the
- * socket transport a stale generation makes the cancel a bounded no-op,
- * preserving the reused keep-alive connection.
- *
- * @param mgr    Manager (non-NULL).
- * @param handle Detached handle to cancel; NULL is a no-op.
+ * @param mgr          Manager (non-NULL).
+ * @param is_handshake Non-zero to push a handshake failure, zero for a
+ *                     receive failure.
  */
-/** @brief Push a handshake or receive failure event. */
 static void push_dispatch_failure_event(pn_subscribe_manager_t* mgr, int is_handshake)
 {
     pn_subscribe_ee_event_t evt;
@@ -397,6 +395,12 @@ static void push_dispatch_failure_event(pn_subscribe_manager_t* mgr, int is_hand
     pn_subscribe_push_event_or_report(mgr, &evt);
 }
 
+/**
+ * @brief Cancel a detached previous-request transport handle.
+ *
+ * @param mgr    Manager (non-NULL).
+ * @param handle Detached handle to cancel; NULL is a no-op.
+ */
 static void reap_prev_transport_handle(pn_subscribe_manager_t*    mgr,
                                        pubnub_transport_handle_t* handle)
 {
@@ -698,13 +702,13 @@ static void cancel_active_request(pn_subscribe_manager_t* mgr)
  * @brief Decrypt and dispatch a single message to listeners.
  *
  * @param mgr          Subscribe manager.
- * @param entry        Parsed dispatch entry.
+ * @param event        Parsed event.
  * @param serial       Serialization provider.
  * @param crypto_mod   Crypto module (may be NULL).
  * @param crypto_alloc Allocator for decryption (may be NULL).
  */
 static void dispatch_single_message(pn_subscribe_manager_t*          mgr,
-                                    pn_subscribe_dispatch_entry_t*   entry,
+                                    pubnub_subscribe_event_t*        event,
                                     pubnub_serialization_provider_t* serial,
                                     pubnub_crypto_module_t*          crypto_mod,
                                     pubnub_allocator_provider_t* crypto_alloc)
@@ -713,17 +717,16 @@ static void dispatch_single_message(pn_subscribe_manager_t*          mgr,
 
 #if PUBNUB_ENABLE_CRYPTO
     /* Attempt decryption for regular messages and file events with
-     * string payloads. Encrypted content is base64 in the "d" field.
-     * On failure: pass-through unchanged (JS SDK behavior). */
+     * string payloads. */
     if (NULL != crypto_mod && NULL != crypto_alloc
-        && (PUBNUB_SUBSCRIBE_MESSAGE == entry->event.type
-            || PUBNUB_SUBSCRIBE_FILE == entry->event.type)
-        && NULL != entry->event.payload && NULL != serial && NULL != serial->value_type
+        && (PUBNUB_SUBSCRIBE_MESSAGE == event->type
+            || PUBNUB_SUBSCRIBE_FILE == event->type)
+        && NULL != event->payload && NULL != serial && NULL != serial->value_type
         && NULL != serial->value_as_string && NULL != serial->parse
-        && PUBNUB_JSON_STRING == serial->value_type(entry->event.payload)) {
+        && PUBNUB_JSON_STRING == serial->value_type(event->payload)) {
         size_t      cipher_len = 0;
         const char* cipher_ptr =
-            serial->value_as_string(entry->event.payload, &cipher_len);
+            serial->value_as_string(event->payload, &cipher_len);
         if (NULL != cipher_ptr && cipher_len > 2) {
             uint8_t*     dec_buf = NULL;
             size_t       dec_len = 0;
@@ -733,7 +736,7 @@ static void dispatch_single_message(pn_subscribe_manager_t*          mgr,
                 decrypted_tree = serial->parse(serial, dec_buf, dec_len);
                 PN_FREE(crypto_alloc, dec_buf);
                 if (NULL != decrypted_tree) {
-                    entry->event.payload = decrypted_tree;
+                    event->payload = decrypted_tree;
                 }
             } else if (NULL != dec_buf) {
                 PN_FREE(crypto_alloc, dec_buf);
@@ -745,7 +748,7 @@ static void dispatch_single_message(pn_subscribe_manager_t*          mgr,
     (void)crypto_alloc;
 #endif
 
-    pn_subscribe_emit_message(mgr, entry);
+    pn_subscribe_emit_message(mgr, event);
 
     if (NULL != decrypted_tree) {
         serial->value_destroy(serial, decrypted_tree);
@@ -775,16 +778,9 @@ static uint32_t pn_subscribe_parse_region(const uint8_t* scan, size_t avail)
  * @brief Extract the subscribe cursor from a raw response body without
  *        allocating memory.
  *
- * Used as a fallback when the full jsmn parse fails (e.g., Zone B OOM).
- * Scans the raw bytes for the pattern "t":{"t":"<17-digit-timetoken>"
- * which is always present in a PubNub subscribe v2 response envelope.
- * Zero allocations — safe to call when the arena is completely
- * exhausted.
- *
- * @note Relies on the PubNub subscribe V2 wire format placing the cursor
- *       object ("t":{}) before the messages array ("m":[]) in the
- *       response body. The first match is treated as the envelope cursor,
- *       not a user-payload pattern.
+ * @warning Relies on the subscribe V2 wire format placing the cursor object
+ *          ("t":{}) before the messages array; the first match is taken as
+ *          the envelope cursor, not a user payload.
  *
  * @param body     Raw HTTP response body (borrowed, may not be
  *                 NUL-terminated).
@@ -875,12 +871,96 @@ static pubnub_res_t pn_subscribe_extract_cursor_raw(const uint8_t* body,
 }
 
 /**
+ * @brief Drop a malformed batch and trip RECEIVE_FAILURE on a sustained run.
+ *
+ * The cursor has already advanced past the batch, so the stream cannot stall.
+ *
+ * @param mgr    Subscribe manager owning the malformed-run counter.
+ * @param serial Serialization provider used to free the parsed tree.
+ * @param tree   Parsed response tree to destroy; may be NULL.
+ */
+static void handle_malformed_batch(pn_subscribe_manager_t*          mgr,
+                                   pubnub_serialization_provider_t* serial,
+                                   pubnub_json_value_t*             tree)
+{
+    PN_LOG_ERROR_ENTRY(
+        mgr->ctx,
+        (int)PUBNUB_ERR_SERIALIZATION,
+        "subscribe batch dropped: message missing channel, cursor advanced",
+        NULL);
+
+    if (NULL != tree) {
+        serial->value_destroy(serial, tree);
+    }
+
+    if (++mgr->consecutive_malformed >= PN_SUBSCRIBE_MALFORMED_CEILING) {
+        pn_subscribe_ee_event_t fail_evt;
+        PN_LOG_ERROR_ENTRY(mgr->ctx,
+                           (int)PUBNUB_ERR_SERIALIZATION,
+                           "subscribe: too many malformed batches, failing "
+                           "receive",
+                           NULL);
+        memset(&fail_evt, 0, sizeof(fail_evt));
+        fail_evt.type           = PN_SUB_EVENT_RECEIVE_FAILURE;
+        fail_evt.failure_reason = PUBNUB_ERR_SERIALIZATION;
+        pn_subscribe_push_event_or_report(mgr, &fail_evt);
+        mgr->consecutive_malformed = 0;
+    }
+}
+
+/**
+ * @brief Handle a failed full parse of the subscribe response.
+ *
+ * Tries zero-alloc cursor extraction to step past the batch; when that also
+ * fails, pushes a receive-failure event so the state machine reconnects
+ * with a fresh cursor instead of replaying the stale one.
+ *
+ * @param mgr      Subscribe manager (non-NULL).
+ * @param slot     Completed request slot holding the response body.
+ * @param platform Platform provider used for the context lock.
+ * @param lock     Context lock memory.
+ */
+static void handle_parse_failure(pn_subscribe_manager_t*     mgr,
+                                 const pn_request_t*         slot,
+                                 pubnub_platform_provider_t* platform,
+                                 pubnub_lock_t*              lock)
+{
+    pn_subscribe_cursor_t fallback_cursor;
+    memset(&fallback_cursor, 0, sizeof(fallback_cursor));
+    if (PUBNUB_OK
+        == pn_subscribe_extract_cursor_raw(slot->http_response.body,
+                                           slot->http_response.body_len,
+                                           &fallback_cursor)) {
+        PN_LOG_ERROR_ENTRY(
+            mgr->ctx,
+            (int)PUBNUB_ERR_SERIALIZATION,
+            "subscribe batch dropped: parse OOM, cursor advanced",
+            NULL);
+        pn_ctx_lock(platform, lock);
+        mgr->cursor = fallback_cursor;
+        pn_ctx_unlock(platform, lock);
+    } else {
+        pn_subscribe_ee_event_t fail_evt;
+        PN_LOG_ERROR_ENTRY(
+            mgr->ctx,
+            (int)PUBNUB_ERR_SERIALIZATION,
+            "subscribe parse failed, cursor extraction also failed",
+            NULL);
+        memset(&fail_evt, 0, sizeof(fail_evt));
+        fail_evt.type           = PN_SUB_EVENT_RECEIVE_FAILURE;
+        fail_evt.failure_reason = PUBNUB_ERR_SERIALIZATION;
+        pn_subscribe_push_event_or_report(mgr, &fail_evt);
+    }
+}
+
+/**
  * @brief Process messages from the completed subscribe response.
  *
- * Parses the response body, updates the cursor, and dispatches each
- * message to registered listeners. Parsing and listener dispatch
- * happen outside the context lock; only cursor update and slot_id
- * read require the lock.
+ * Parses the response body, updates the cursor, and dispatches each message
+ * to registered listeners. A response containing a message without a usable
+ * channel is dropped as a whole batch, but the cursor still advances.
+ *
+ * @param mgr Subscribe manager (non-NULL).
  */
 static void emit_messages(pn_subscribe_manager_t* mgr)
 {
@@ -927,56 +1007,37 @@ static void emit_messages(pn_subscribe_manager_t* mgr)
         return;
     }
 
-    rc = pn_subscribe_parse_response(
-        serial, slot->http_response.body, slot->http_response.body_len, &parsed);
+    rc = pn_subscribe_parse_response(serial,
+                                     pn_context_logger(mgr->ctx),
+                                     slot->http_response.body,
+                                     slot->http_response.body_len,
+                                     &parsed);
 
     if (PUBNUB_OK != rc) {
-        /* Full parse failed (likely Zone B OOM). Attempt zero-alloc
-         * cursor extraction to advance past this batch. */
-        pn_subscribe_cursor_t fallback_cursor;
-        memset(&fallback_cursor, 0, sizeof(fallback_cursor));
-        if (PUBNUB_OK
-            == pn_subscribe_extract_cursor_raw(slot->http_response.body,
-                                               slot->http_response.body_len,
-                                               &fallback_cursor)) {
-            PN_LOG_ERROR_ENTRY(
-                mgr->ctx,
-                (int)PUBNUB_ERR_SERIALIZATION,
-                "subscribe batch dropped: parse OOM, cursor advanced",
-                NULL);
-            pn_ctx_lock(platform, lock);
-            mgr->cursor = fallback_cursor;
-            pn_ctx_unlock(platform, lock);
-        } else {
-            /* Even raw cursor extraction failed — push failure event
-             * so the EE transitions to RECEIVE_FAILED and breaks the
-             * stale-cursor loop via reconnect (tt=0). */
-            pn_subscribe_ee_event_t fail_evt;
-            PN_LOG_ERROR_ENTRY(
-                mgr->ctx,
-                (int)PUBNUB_ERR_SERIALIZATION,
-                "subscribe parse failed, cursor extraction also failed",
-                NULL);
-            memset(&fail_evt, 0, sizeof(fail_evt));
-            fail_evt.type           = PN_SUB_EVENT_RECEIVE_FAILURE;
-            fail_evt.failure_reason = PUBNUB_ERR_SERIALIZATION;
-            pn_subscribe_push_event_or_report(mgr, &fail_evt);
-        }
+        handle_parse_failure(mgr, slot, platform, lock);
         return;
     }
 
-    /* Update cursor under lock for the next request cycle. */
+    /* The cursor MUST advance even on a malformed batch: otherwise a
+     * malformed response would replay forever (infinite stall). */
     pn_ctx_lock(platform, lock);
     mgr->cursor = parsed.cursor;
     pn_ctx_unlock(platform, lock);
 
-    /* Resolve crypto module once for the entire batch. */
-    if (PUBNUB_ENABLE_CRYPTO) {
-        crypto_mod = pn_context_crypto_module(mgr->ctx);
-        if (NULL != crypto_mod) {
-            crypto_alloc = pn_context_allocator(mgr->ctx);
-        }
+    if (parsed.malformed) {
+        handle_malformed_batch(mgr, serial, parsed._tree);
+        return;
     }
+
+    mgr->consecutive_malformed = 0;
+
+#if PUBNUB_ENABLE_CRYPTO
+    /* Resolve crypto module once for the entire batch. */
+    crypto_mod = pn_context_crypto_module(mgr->ctx);
+    if (NULL != crypto_mod) {
+        crypto_alloc = pn_context_allocator(mgr->ctx);
+    }
+#endif
 
     /* Dispatch messages to all registered listeners (outside lock). */
     {
@@ -1082,11 +1143,7 @@ void pn_subscribe_tick(pn_subscribe_manager_t* mgr)
     lock     = pn_context_mutex_mem(mgr->ctx);
 
     /* Drain event queue through the state machine one event at a time.
-     * Pop + transition + state update under lock; effect execution
-     * outside lock (effects do transport I/O and invoke callbacks).
-     * Double-release is prevented by the atomic-claim pattern on
-     * active_slot_id: cancel_active_request reads-and-clears it under
-     * lock, so only one consumer ever acts on a given slot_id. */
+     * Pop + transition + state update under lock. */
     for (;;) {
         pn_subscribe_ee_event_t             event;
         pn_subscribe_ee_transition_result_t result;
@@ -1098,17 +1155,9 @@ void pn_subscribe_tick(pn_subscribe_manager_t* mgr)
             break;
         }
 
-        /* Discard stale SUBSCRIPTION_CHANGED / SUBSCRIPTION_RESTORED
-         * events. When multiple subscription mutations happen before
-         * the EE drains the queue, only the latest matters — earlier
-         * events would produce the same channel set and cause
-         * redundant cancel+redispatch cycles. Signed difference
-         * handles uint32_t wraparound via two's complement.
-         *
-         * Exception: never discard events with subscriptions_empty=1.
-         * These represent "all subscriptions removed" and must always
-         * drive the EE through UNSUBSCRIBED so that a subsequent
-         * subscribe triggers a fresh handshake and CONNECTED status. */
+        /* Discard stale SUBSCRIPTION_CHANGED/RESTORED events — only the
+         * latest mutation matters. Exception: subscriptions_empty must
+         * always reach UNSUBSCRIBED so a later subscribe re-handshakes. */
         if ((PN_SUB_EVENT_SUBSCRIPTION_CHANGED == event.type
              || PN_SUB_EVENT_SUBSCRIPTION_RESTORED == event.type)
             && !event.subscriptions_empty

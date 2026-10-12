@@ -24,6 +24,7 @@
 #include "pubnub/pubnub_compat.h"
 
 #include "core/runtime/timer_internal.h"
+#include "middleware_internal.h"
 
 #include <stdint.h>
 
@@ -108,7 +109,7 @@ typedef struct pn_retry_slot {
  * Embeds pubnub_transport_provider_t as first member for safe
  * cast to/from the transport interface.
  */
-typedef struct pn_middleware_retry {
+struct pn_middleware_retry {
     /** Transport vtable (must be first member). */
     pubnub_transport_provider_t base;
 
@@ -138,7 +139,7 @@ typedef struct pn_middleware_retry {
 
     /** Retry tracking slots (one per possible in-flight request). */
     pn_retry_slot_t slots[PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS];
-} pn_middleware_retry_t;
+};
 
 PUBNUB_STATIC_ASSERT(sizeof(pn_retry_slot_t) <= 512,
                      "retry slot exceeds 512-byte per-slot embedded budget");

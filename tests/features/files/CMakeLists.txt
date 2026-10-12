@@ -18,3 +18,6 @@ target_include_directories(test_feature_files_dispatch_units PRIVATE "${CMAKE_SO
 
 pubnub_add_unit_test(test_feature_files_timeout_units SOURCES files_timeout_units.c LIBS pubnub)
 target_include_directories(test_feature_files_timeout_units PRIVATE "${CMAKE_SOURCE_DIR}/src")
+
+pubnub_add_unit_test(test_feature_files_send_leak_units SOURCES files_send_leak_units.c LIBS pubnub)
+target_include_directories(test_feature_files_send_leak_units PRIVATE "${CMAKE_SOURCE_DIR}/src")

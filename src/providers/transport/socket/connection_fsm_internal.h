@@ -6,6 +6,7 @@
 
 #include "http_parser.h"
 #include "providers/transport/socket/platform/pn_socket_types.h"
+#include "providers/transport/socket/proxy/proxy_interface.h"
 #include "pubnub/providers/allocator.h"
 #include "pubnub/providers/transport_types.h"
 
@@ -17,9 +18,6 @@
 extern "C" {
 // clang-format on
 #endif
-
-/** @brief Forward declaration for the owning transport instance. */
-typedef struct pn_socket_transport pn_socket_transport_t;
 
 /**
  * @brief Connection FSM states.
@@ -97,7 +95,7 @@ static inline int pn_is_connection_refused(int err)
  * The transport owns an array of these, sized by
  * PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS.
  */
-typedef struct pn_socket_connection {
+struct pn_socket_connection {
     /** Current FSM state. */
     pn_conn_state_t state;
 
@@ -268,7 +266,7 @@ typedef struct pn_socket_connection {
      * typical request rates.
      */
     uint16_t generation;
-} pn_socket_connection_t;
+};
 
 /**
  * @brief Initialize a connection FSM to the idle state.

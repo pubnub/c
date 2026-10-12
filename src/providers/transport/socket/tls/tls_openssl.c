@@ -61,8 +61,9 @@ struct pn_openssl_ctx {
  * connection hostname used as the cache key.
  */
 struct pn_openssl_session {
-    SSL*          ssl;          /**< OpenSSL session handle. */
-    unsigned long last_error;   /**< Last ERR_get_error() value. */
+    SSL*                      ssl;        /**< OpenSSL session handle. */
+    unsigned long             last_error; /**< Last ERR_get_error() value. */
+    pubnub_logger_provider_t* logger;     /**< Borrowed; may be NULL. */
 #if PUBNUB_CFG_TLS_SESSION_CACHE_SIZE > 0
     struct pn_openssl_ctx* ctx; /**< Owning context (for cache access). */
     char    hostname[PUBNUB_CFG_MAX_HOSTNAME_LEN + 1]; /**< Connection host. */
@@ -639,6 +640,7 @@ static int pn_tls_openssl_session_create(void**      out_session,
 
     sess->ssl        = ssl;
     sess->last_error = 0;
+    sess->logger     = pctx->logger;
 #if PUBNUB_CFG_TLS_SESSION_CACHE_SIZE > 0
     sess->ctx              = pctx;
     sess->resume_attempted = 0;
@@ -728,6 +730,25 @@ static int pn_tls_openssl_handshake(void* session)
     }
 #endif
     sess->last_error = ERR_get_error();
+    if (PUBNUB_CFG_MAX_LOG_MESSAGE_SIZE > 0
+        && PUBNUB_LOG_LEVEL_ENABLED(PUBNUB_LOG_LEVEL_ERROR)
+        && NULL != sess->logger && NULL != sess->logger->log) {
+        if (0 != sess->last_error) {
+            char ebuf[120];
+            ERR_error_string_n(sess->last_error, ebuf, sizeof(ebuf));
+            PUBNUB_LOG(sess->logger,
+                       PUBNUB_LOG_LEVEL_ERROR,
+                       "TLS handshake failed: ssl_error=%d openssl=%s",
+                       err,
+                       ebuf);
+        } else {
+            PUBNUB_LOG(sess->logger,
+                       PUBNUB_LOG_LEVEL_ERROR,
+                       "TLS handshake failed: ssl_error=%d "
+                       "(no OpenSSL error queued)",
+                       err);
+        }
+    }
     return -1;
 }
 

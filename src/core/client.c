@@ -182,6 +182,14 @@ PUBNUB_STATIC_ASSERT(PUBNUB_CFG_MAX_HOSTNAME_LEN >= 16
                          && PUBNUB_CFG_MAX_HOSTNAME_LEN <= 512,
                      "PUBNUB_CFG_MAX_HOSTNAME_LEN must be 16..512");
 
+/* pn_process_tick stack arrays are bounded only on no-heap builds; CMake
+ * enforces the same limit at configure time. */
+#if PUBNUB_CFG_NO_HEAP
+PUBNUB_STATIC_ASSERT(
+    PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS <= 16,
+    "Stack array for completing slots assumes <= 16 in-flight");
+#endif
+
 static void pn_context_retry_resolve_defaults(pubnub_config_t* cfg)
 {
 #if PUBNUB_ENABLE_RETRY
@@ -2348,10 +2356,6 @@ static uint16_t pn_process_tick_collect_deferred(pubnub_context_t* ctx,
  */
 pubnub_res_t pn_process_tick(pubnub_context_t* ctx, unsigned int poll_timeout_ms)
 {
-    PUBNUB_STATIC_ASSERT(
-        PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS <= 16,
-        "Stack array for completing slots assumes <= 16 in-flight");
-
     uint16_t     completing[PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS];
     uint16_t     completing_count = 0;
     uint16_t     expired_ids[PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS];

@@ -743,10 +743,10 @@ PUBNUB_STATIC_ASSERT(
     sizeof(pn_macos_dns_state_t) <= PUBNUB_CFG_DNS_PLATFORM_STATE_SIZE,
     "macOS DNS state exceeds PUBNUB_CFG_DNS_PLATFORM_STATE_SIZE");
 
-static void macos_dns_callback(DNSServiceRef          sdRef,
+static void macos_dns_callback(DNSServiceRef          sd_ref,
                                DNSServiceFlags        flags,
-                               uint32_t               interfaceIndex,
-                               DNSServiceErrorType    errorCode,
+                               uint32_t               interface_index,
+                               DNSServiceErrorType    error_code,
                                const char*            hostname,
                                const struct sockaddr* address,
                                uint32_t               ttl,
@@ -754,12 +754,12 @@ static void macos_dns_callback(DNSServiceRef          sdRef,
 {
     pn_macos_dns_state_t* st = (pn_macos_dns_state_t*)context;
 
-    (void)sdRef;
-    (void)interfaceIndex;
+    (void)sd_ref;
+    (void)interface_index;
     (void)hostname;
     (void)ttl;
 
-    if (kDNSServiceErr_NoError != errorCode) {
+    if (kDNSServiceErr_NoError != error_code) {
         if (!(flags & kDNSServiceFlagsMoreComing)) {
             st->error    = (0 == st->count) ? 1 : 0;
             st->complete = 1;

@@ -28,10 +28,12 @@ if(APPLE AND EXISTS "/opt/homebrew/opt/mbedtls@3")
     list(APPEND CMAKE_PREFIX_PATH "/opt/homebrew/opt/mbedtls@3")
 endif()
 
-find_package(OpenSSL QUIET)
 find_package(MbedTLS QUIET)
+if(MbedTLS_FOUND)
+    pubnub_resolve_openssl(OPTIONAL)
+endif()
 
-if(OpenSSL_FOUND AND MbedTLS_FOUND)
+if(TARGET OpenSSL::Crypto AND MbedTLS_FOUND)
     set(PN_OPENSSL_CRYPTO_DIR "${CMAKE_SOURCE_DIR}/src/providers/crypto/openssl")
     set(PN_MBEDTLS_CRYPTO_DIR "${CMAKE_SOURCE_DIR}/src/providers/crypto/mbedtls")
 

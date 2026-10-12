@@ -1,6 +1,7 @@
 /* Copyright (c) PubNub Inc. */
 /* See LICENSE in the root directory of this source tree. */
 
+#define _CRT_RAND_S
 #include "it_channel.h"
 
 /* libc snprintf is acceptable — this file is test-only host code that

@@ -387,6 +387,21 @@ void pn_request_deliver_notification(pn_request_t* req)
     }
 }
 
+void pn_request_release_parsed_body(pn_request_t* req)
+{
+    if (NULL == req) {
+        return;
+    }
+    if (NULL != req->parsed_body_tree && NULL != req->parsed_body_owner
+        && NULL != req->parsed_body_owner->value_destroy) {
+        req->parsed_body_owner->value_destroy(req->parsed_body_owner,
+                                              req->parsed_body_tree);
+    }
+    req->parsed_body_tree      = NULL;
+    req->parsed_body_owner     = NULL;
+    req->parsed_body_attempted = 0;
+}
+
 pubnub_json_value_t* pn_request_get_parsed_body(pn_request_t* req,
                                                 pubnub_serialization_provider_t* serial)
 {

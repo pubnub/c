@@ -14,9 +14,9 @@
 # nanosleep, clock_gettime). Must be set on the compiler command line
 # before any system header is included. MSVC ignores these.
 add_compile_definitions(
-    _POSIX_C_SOURCE=200809L
-    _DEFAULT_SOURCE
-    $<$<PLATFORM_ID:Darwin>:_DARWIN_C_SOURCE>
+    $<$<NOT:$<PLATFORM_ID:Windows>>:_POSIX_C_SOURCE=200809L>
+    $<$<NOT:$<PLATFORM_ID:Windows>>:_DEFAULT_SOURCE>
+    $<$<BOOL:${APPLE}>:_DARWIN_C_SOURCE>
 )
 
 if(PUBNUB_ENABLE_PAM)
