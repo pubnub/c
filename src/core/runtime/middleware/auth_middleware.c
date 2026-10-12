@@ -99,9 +99,9 @@ static pubnub_transport_handle_t* auth_send(pubnub_transport_provider_t* self,
 
     pubnub_string_view_t val = {mw->cached_encoded, strlen(mw->cached_encoded)};
     if (PUBNUB_OK != pn_request_add_query_param_view(request, "auth", val)) {
-        PUBNUB_LOG(mw->logger,
-                   PUBNUB_LOG_LEVEL_ERROR,
-                   "auth middleware: failed to add auth query parameter");
+        PUBNUB_LOG_TEXT(mw->logger,
+                        PUBNUB_LOG_LEVEL_ERROR,
+                        "auth middleware: failed to add auth query parameter");
         response->completion = PUBNUB_HTTP_ERROR;
         return NULL;
     }
