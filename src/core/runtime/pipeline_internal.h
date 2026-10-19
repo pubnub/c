@@ -162,6 +162,21 @@ pubnub_res_t pn_request_dispatch(pn_pipeline_t*              pipeline,
                                  pn_request_t*               req,
                                  pubnub_platform_provider_t* platform);
 
+/**
+ * @brief Drop retries that would still target a previous origin.
+ *
+ * Forwards to the retry middleware when the pipeline contains one; a no-op
+ * otherwise.
+ *
+ * @param pipeline           Initialized pipeline (borrowed); NULL is a no-op.
+ * @param current_generation Current context origin generation; requests
+ *                           dispatched under it are left alone.
+ * @note Call only from the thread that owns the transport.
+ * @see pn_middleware_retry_cancel_waiting
+ */
+void pn_pipeline_cancel_waiting_retries(pn_pipeline_t* pipeline,
+                                        uint16_t       current_generation);
+
 #ifdef __cplusplus
 // clang-format off
 }

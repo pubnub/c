@@ -128,6 +128,17 @@ struct pn_socket_transport {
     /** Self-pipe write end (written by wake()). */
     pn_socket_t wake_pipe_wr;
 
+    /**
+     * 1 once the wake read end reported an error or hang-up; the transport
+     * then behaves as if it had no wake pipe. The pipe pair stays open until
+     * deinit because wake() may still use the write end.
+     *
+     * Written on the poll thread only. The user-thread read via
+     * events_for_conn() happens only in TLS_HANDSHAKING, which a slot never
+     * holds at send time, so the plain read is benign.
+     */
+    uint8_t wake_degraded;
+
     /** 1 if init() has been called successfully, 0 otherwise. */
     uint8_t initialized;
 };

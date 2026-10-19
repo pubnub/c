@@ -58,8 +58,8 @@ pn_access_populate_resource_obj(pubnub_serialization_provider_t* serial,
  * @brief Build the "resources" or "patterns" sub-object containing
  *        channels, groups, and uuids keys.
  *
- * Always creates all three child objects (server requires them even
- * when empty).
+ * Always creates all three child objects, even when empty; callers decide
+ * whether to attach it.
  *
  * @param serial      Serialization provider (borrowed).
  * @param channels    Channel permissions (or NULL).
@@ -148,6 +148,181 @@ pn_access_build_scope_obj(pubnub_serialization_provider_t*           serial,
     return scope;
 }
 
+/**
+ * @brief Attach "resources" and "patterns" objects to permissions.
+ *
+ * Builds and attaches resource/pattern scope objects. Reads channel, group, and
+ * UUID arrays (exact and pattern-based) from @p opts. On failure, destroys only
+ * what it created and not yet attached.
+ *
+ * @param serial  Serialization provider (borrowed).
+ * @param perms   Permissions object to attach to (owned by caller).
+ * @param opts    Grant-token options struct (borrowed); arrays read from
+ *                @c channels, @c channel_count, @c groups, @c group_count,
+ *                @c uuids, @c uuid_count, @c channel_patterns,
+ *                @c channel_pattern_count, @c group_patterns,
+ *                @c group_pattern_count, @c uuid_patterns,
+ *                @c uuid_pattern_count.
+ * @return PUBNUB_OK on success, or an error code.
+ */
+static pubnub_res_t
+pn_access_attach_resources_and_patterns(pubnub_serialization_provider_t* serial,
+                                        pubnub_json_value_t*             perms,
+                                        const pubnub_grant_token_opts_t* opts)
+{
+    pubnub_res_t         rc        = PUBNUB_OK;
+    pubnub_json_value_t* resources = NULL;
+    pubnub_json_value_t* patterns  = NULL;
+
+    if (NULL == opts) {
+        return PUBNUB_ERR_INVALID_ARGUMENT;
+    }
+
+    if (opts->channel_count > 0 || opts->group_count > 0 || opts->uuid_count > 0) {
+        resources = pn_access_build_scope_obj(serial,
+                                              opts->channels,
+                                              opts->channel_count,
+                                              opts->groups,
+                                              opts->group_count,
+                                              opts->uuids,
+                                              opts->uuid_count);
+        if (NULL == resources) {
+            return PUBNUB_ERR_OUT_OF_MEMORY;
+        }
+        rc = serial->object_set(serial, perms, "resources", 9, resources);
+        if (PUBNUB_OK != rc) {
+            serial->value_destroy(serial, resources);
+            return rc;
+        }
+    }
+
+    if (opts->channel_pattern_count > 0 || opts->group_pattern_count > 0
+        || opts->uuid_pattern_count > 0) {
+        patterns = pn_access_build_scope_obj(serial,
+                                             opts->channel_patterns,
+                                             opts->channel_pattern_count,
+                                             opts->group_patterns,
+                                             opts->group_pattern_count,
+                                             opts->uuid_patterns,
+                                             opts->uuid_pattern_count);
+        if (NULL == patterns) {
+            return PUBNUB_ERR_OUT_OF_MEMORY;
+        }
+        rc = serial->object_set(serial, perms, "patterns", 8, patterns);
+        if (PUBNUB_OK != rc) {
+            serial->value_destroy(serial, patterns);
+            return rc;
+        }
+    }
+
+    return PUBNUB_OK;
+}
+
+/**
+ * @brief Attach optional "meta" and "uuid" members to permissions.
+ *
+ * @param serial            Serialization provider (borrowed).
+ * @param perms             Permissions object to attach to (owned by caller).
+ * @param meta              Raw JSON meta string (or NULL).
+ * @param authorized_uuid   Authorized UUID string (or NULL).
+ * @return PUBNUB_OK on success, or an error code.
+ */
+static pubnub_res_t pn_access_attach_meta_and_uuid(pubnub_serialization_provider_t* serial,
+                                                   pubnub_json_value_t* perms,
+                                                   const char*          meta,
+                                                   const char* authorized_uuid)
+{
+    pubnub_res_t         rc       = PUBNUB_OK;
+    pubnub_json_value_t* meta_val = NULL;
+    pubnub_json_value_t* uuid_val = NULL;
+
+    if (NULL != meta) {
+        if (NULL == serial->parse) {
+            return PUBNUB_ERR_SERIALIZATION;
+        }
+        meta_val = serial->parse(serial, (const uint8_t*)meta, strlen(meta));
+        if (NULL == meta_val) {
+            return PUBNUB_ERR_SERIALIZATION;
+        }
+        rc = serial->object_set(serial, perms, "meta", 4, meta_val);
+        if (PUBNUB_OK != rc) {
+            serial->value_destroy(serial, meta_val);
+            return rc;
+        }
+    }
+
+    if (NULL != authorized_uuid) {
+        uuid_val = serial->value_create_string(
+            serial, authorized_uuid, strlen(authorized_uuid));
+        if (NULL == uuid_val) {
+            return PUBNUB_ERR_OUT_OF_MEMORY;
+        }
+        rc = serial->object_set(serial, perms, "uuid", 4, uuid_val);
+        if (PUBNUB_OK != rc) {
+            serial->value_destroy(serial, uuid_val);
+            return rc;
+        }
+    }
+
+    return PUBNUB_OK;
+}
+
+/**
+ * @brief Build the "categories" sub-object containing channels and uuids keys.
+ *
+ * @param serial        Serialization provider (borrowed).
+ * @param chan_cat_perm Channels category permissions.
+ * @param uuid_cat_perm UUIDs category permissions.
+ * @param out_obj       Receives the owned object node on success, set to NULL
+ *                      on failure.
+ * @return PUBNUB_OK on success, or an error code.
+ */
+static pubnub_res_t pn_access_build_category_obj(pubnub_serialization_provider_t* serial,
+                                                 uint32_t chan_cat_perm,
+                                                 uint32_t uuid_cat_perm,
+                                                 pubnub_json_value_t** out_obj)
+{
+    pubnub_json_value_t* scope = serial->value_create_object(serial);
+    pubnub_json_value_t* val;
+    pubnub_res_t         rc;
+
+    *out_obj = NULL;
+
+    if (NULL == scope) {
+        return PUBNUB_ERR_OUT_OF_MEMORY;
+    }
+
+    if (PUBNUB_ACCESS_GET == chan_cat_perm) {
+        val = serial->value_create_int(serial, (int)chan_cat_perm);
+        if (NULL == val) {
+            serial->value_destroy(serial, scope);
+            return PUBNUB_ERR_OUT_OF_MEMORY;
+        }
+        rc = serial->object_set(serial, scope, "channels", 8, val);
+        if (PUBNUB_OK != rc) {
+            serial->value_destroy(serial, val);
+            serial->value_destroy(serial, scope);
+            return rc;
+        }
+    }
+    if (PUBNUB_ACCESS_GET == uuid_cat_perm) {
+        val = serial->value_create_int(serial, (int)uuid_cat_perm);
+        if (NULL == val) {
+            serial->value_destroy(serial, scope);
+            return PUBNUB_ERR_OUT_OF_MEMORY;
+        }
+        rc = serial->object_set(serial, scope, "uuids", 5, val);
+        if (PUBNUB_OK != rc) {
+            serial->value_destroy(serial, val);
+            serial->value_destroy(serial, scope);
+            return rc;
+        }
+    }
+
+    *out_obj = scope;
+    return PUBNUB_OK;
+}
+
 pubnub_res_t pn_access_grant_build_path(pubnub_http_request_t* request,
                                         const char*            subscribe_key)
 {
@@ -178,6 +353,12 @@ pubnub_res_t pn_access_grant_build_body(pubnub_serialization_provider_t* serial,
                                         size_t                           cap,
                                         size_t* out_len)
 {
+    pubnub_res_t         rc         = PUBNUB_OK;
+    pubnub_json_value_t* root       = NULL;
+    pubnub_json_value_t* ttl_val    = NULL;
+    pubnub_json_value_t* perms      = NULL;
+    pubnub_json_value_t* categories = NULL;
+
     if (NULL == serial || NULL == opts || NULL == buf || 0 == cap
         || NULL == out_len) {
         return PUBNUB_ERR_INVALID_ARGUMENT;
@@ -189,126 +370,82 @@ pubnub_res_t pn_access_grant_build_body(pubnub_serialization_provider_t* serial,
     }
 
     /* Root object. */
-    pubnub_json_value_t* root = serial->value_create_object(serial);
+    root = serial->value_create_object(serial);
     if (NULL == root) {
         return PUBNUB_ERR_OUT_OF_MEMORY;
     }
 
     /* "ttl" */
-    pubnub_json_value_t* ttl_val = serial->value_create_int(serial, (int)opts->ttl);
+    ttl_val = serial->value_create_int(serial, (int)opts->ttl);
     if (NULL == ttl_val) {
-        serial->value_destroy(serial, root);
-        return PUBNUB_ERR_OUT_OF_MEMORY;
+        rc = PUBNUB_ERR_OUT_OF_MEMORY;
+        goto cleanup_root;
     }
-    pubnub_res_t rc = serial->object_set(serial, root, "ttl", 3, ttl_val);
+    rc = serial->object_set(serial, root, "ttl", 3, ttl_val);
     if (PUBNUB_OK != rc) {
         serial->value_destroy(serial, ttl_val);
-        serial->value_destroy(serial, root);
-        return rc;
+        ttl_val = NULL;
+        goto cleanup_root;
     }
 
     /* "permissions" object */
-    pubnub_json_value_t* perms = serial->value_create_object(serial);
+    perms = serial->value_create_object(serial);
     if (NULL == perms) {
-        serial->value_destroy(serial, root);
-        return PUBNUB_ERR_OUT_OF_MEMORY;
+        rc = PUBNUB_ERR_OUT_OF_MEMORY;
+        goto cleanup_root;
     }
 
-    /* "resources" */
-    pubnub_json_value_t* resources = pn_access_build_scope_obj(serial,
-                                                               opts->channels,
-                                                               opts->channel_count,
-                                                               opts->groups,
-                                                               opts->group_count,
-                                                               opts->uuids,
-                                                               opts->uuid_count);
-    if (NULL == resources) {
-        serial->value_destroy(serial, perms);
-        serial->value_destroy(serial, root);
-        return PUBNUB_ERR_OUT_OF_MEMORY;
-    }
-    rc = serial->object_set(serial, perms, "resources", 9, resources);
+    /* Attach "resources" and "patterns". */
+    rc = pn_access_attach_resources_and_patterns(serial, perms, opts);
     if (PUBNUB_OK != rc) {
-        serial->value_destroy(serial, resources);
-        serial->value_destroy(serial, perms);
-        serial->value_destroy(serial, root);
-        return rc;
+        goto cleanup_permissions;
     }
 
-    /* "patterns" */
-    pubnub_json_value_t* patterns =
-        pn_access_build_scope_obj(serial,
-                                  opts->channel_patterns,
-                                  opts->channel_pattern_count,
-                                  opts->group_patterns,
-                                  opts->group_pattern_count,
-                                  opts->uuid_patterns,
-                                  opts->uuid_pattern_count);
-    if (NULL == patterns) {
-        serial->value_destroy(serial, perms);
-        serial->value_destroy(serial, root);
-        return PUBNUB_ERR_OUT_OF_MEMORY;
-    }
-    rc = serial->object_set(serial, perms, "patterns", 8, patterns);
+    /* Attach "meta" and "uuid". */
+    rc = pn_access_attach_meta_and_uuid(
+        serial, perms, opts->meta, opts->authorized_uuid);
     if (PUBNUB_OK != rc) {
-        serial->value_destroy(serial, patterns);
-        serial->value_destroy(serial, perms);
-        serial->value_destroy(serial, root);
-        return rc;
+        goto cleanup_permissions;
     }
 
-    /* "meta" — optional raw JSON passthrough. */
-    if (NULL != opts->meta) {
-        if (NULL == serial->parse) {
-            serial->value_destroy(serial, perms);
-            serial->value_destroy(serial, root);
-            return PUBNUB_ERR_SERIALIZATION;
-        }
-        pubnub_json_value_t* meta_val =
-            serial->parse(serial, (const uint8_t*)opts->meta, strlen(opts->meta));
-        if (NULL == meta_val) {
-            serial->value_destroy(serial, perms);
-            serial->value_destroy(serial, root);
-            return PUBNUB_ERR_SERIALIZATION;
-        }
-        rc = serial->object_set(serial, perms, "meta", 4, meta_val);
+    /* Attach categories to "permissions" object. */
+    if (PUBNUB_ACCESS_GET == opts->channels_category_permissions
+        || PUBNUB_ACCESS_GET == opts->uuids_category_permissions) {
+        rc = pn_access_build_category_obj(serial,
+                                          opts->channels_category_permissions,
+                                          opts->uuids_category_permissions,
+                                          &categories);
         if (PUBNUB_OK != rc) {
-            serial->value_destroy(serial, meta_val);
-            serial->value_destroy(serial, perms);
-            serial->value_destroy(serial, root);
-            return rc;
+            goto cleanup_permissions;
         }
-    }
-
-    /* "uuid" — optional authorized UUID. */
-    if (NULL != opts->authorized_uuid) {
-        pubnub_json_value_t* uuid_val = serial->value_create_string(
-            serial, opts->authorized_uuid, strlen(opts->authorized_uuid));
-        if (NULL == uuid_val) {
-            serial->value_destroy(serial, perms);
-            serial->value_destroy(serial, root);
-            return PUBNUB_ERR_OUT_OF_MEMORY;
-        }
-        rc = serial->object_set(serial, perms, "uuid", 4, uuid_val);
+        rc = serial->object_set(serial, perms, "categories", 10, categories);
         if (PUBNUB_OK != rc) {
-            serial->value_destroy(serial, uuid_val);
-            serial->value_destroy(serial, perms);
-            serial->value_destroy(serial, root);
-            return rc;
+            serial->value_destroy(serial, categories);
+            categories = NULL;
+            goto cleanup_permissions;
         }
     }
 
     /* Attach permissions to root. */
     rc = serial->object_set(serial, root, "permissions", 11, perms);
     if (PUBNUB_OK != rc) {
-        serial->value_destroy(serial, perms);
-        serial->value_destroy(serial, root);
-        return rc;
+        goto cleanup_permissions;
     }
 
     /* Serialize the tree into the output buffer. */
     rc = serial->serialize(serial, root, buf, cap, out_len);
     serial->value_destroy(serial, root);
+    return rc;
+
+cleanup_permissions:
+    if (NULL != perms) {
+        serial->value_destroy(serial, perms);
+    }
+cleanup_root:
+    if (NULL != root) {
+        serial->value_destroy(serial, root);
+    }
+
     return rc;
 }
 

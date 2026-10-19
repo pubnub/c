@@ -83,7 +83,13 @@ static pubnub_platform_provider_t s_mock_platform = {
     .random_bytes  = mock_random,
 };
 
-static int s_cancel_called;
+static int                        s_cancel_called;
+static pubnub_transport_handle_t* s_last_cancel_handle;
+static pubnub_context_t*          s_probe_ctx;
+static uint16_t                   s_probe_slot_id;
+static int                        s_slot_ready_at_cancel;
+static int                        s_send_returns_handle;
+static char                       s_send_handle_backing;
 
 static pubnub_transport_handle_t* mock_send(pubnub_transport_provider_t* self,
                                             pubnub_http_request_t*       req,
@@ -92,7 +98,8 @@ static pubnub_transport_handle_t* mock_send(pubnub_transport_provider_t* self,
     (void)self;
     (void)req;
     (void)resp;
-    return NULL;
+    return s_send_returns_handle ? (pubnub_transport_handle_t*)&s_send_handle_backing
+                                 : NULL;
 }
 
 static int mock_poll(pubnub_transport_provider_t* self, unsigned int timeout_ms)
@@ -106,8 +113,15 @@ static void mock_cancel(pubnub_transport_provider_t* self,
                         pubnub_transport_handle_t*   handle)
 {
     (void)self;
-    (void)handle;
-    s_cancel_called = 1;
+    s_cancel_called      = 1;
+    s_last_cancel_handle = handle;
+    if (NULL != s_probe_ctx && PUBNUB_SLOT_ID_INVALID != s_probe_slot_id) {
+        pn_request_t* probe = pn_request_pool_get(
+            pn_context_request_pool(s_probe_ctx), s_probe_slot_id);
+
+        s_slot_ready_at_cancel =
+            (NULL != probe && pn_request_is_ready(probe)) ? 1 : 0;
+    }
 }
 
 static pubnub_transport_provider_t s_mock_transport = {
@@ -235,12 +249,134 @@ static void test_cleanup_null_state(void** state)
     pn_presence_manager_cleanup((void*)0x1, NULL);
 }
 
+/** Holds a pool slot in a terminal state so the pool can be filled. */
+static uint16_t hold_slot(pubnub_context_t* ctx)
+{
+    pn_request_pool_t* pool   = pn_context_request_pool(ctx);
+    pubnub_future_t    future = {0};
+    pn_request_t*      slot;
+
+    assert_int_equal(PUBNUB_OK, pn_request_pool_acquire(pool, ctx, &future));
+    slot        = pn_request_pool_get(pool, future.slot_id);
+    slot->state = PN_REQUEST_COMPLETE;
+    PUBNUB_ATOMIC_STORE_U8(&slot->ready, 1);
+    return future.slot_id;
+}
+
+static pubnub_future_t enqueue_pending(pubnub_context_t* ctx, uint8_t feature_id)
+{
+    pn_pending_entry_t* entry = pn_prep_acquire(ctx);
+
+    assert_non_null(entry);
+    assert_int_equal(
+        PUBNUB_OK,
+        pn_pending_entry_init(
+            entry, feature_id, NULL, NULL, NULL, PUBNUB_HTTP_GET, ctx, 0));
+    return pn_dispatch_or_enqueue(ctx, entry);
+}
+
+/**
+ * Cleanup aborts the promoted pool slot of a heartbeat whose pending id is
+ * stale, and leaves an unrelated queued request alone.
+ */
+static void test_cleanup_aborts_promoted_pending_heartbeat(void** state)
+{
+    (void)state;
+    pubnub_context_t* ctx = create_ctx();
+    assert_non_null(ctx);
+    s_send_returns_handle = 1;
+    s_cancel_called       = 0;
+
+    pn_presence_manager_t* mgr = pn_presence_manager_create(ctx, &s_mock_allocator);
+    assert_non_null(mgr);
+    pn_request_pool_t*  pool  = pn_context_request_pool(ctx);
+    pn_pending_queue_t* queue = pn_context_pending_queue(ctx);
+    uint16_t            holders[PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS];
+    uint16_t            i;
+
+    for (i = 0; i < PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS; i++) {
+        holders[i] = hold_slot(ctx);
+    }
+    pubnub_future_t beat = enqueue_pending(ctx, (uint8_t)PUBNUB_FEATURE_PRESENCE);
+    pubnub_future_t other = enqueue_pending(ctx, (uint8_t)PUBNUB_FEATURE_PUBLISH);
+    assert_true(beat.slot_id >= pn_context_pool_capacity(ctx));
+    assert_int_equal(2, pn_pending_queue_count(queue));
+
+    mgr->active_slot_id         = beat.slot_id;
+    mgr->active_slot_generation = beat.generation;
+
+    pn_request_pool_lock(pool);
+    pn_request_pool_release(pool, holders[0]);
+    pn_request_pool_unlock(pool);
+    (void)pn_process_tick(ctx, 0);
+    assert_int_equal(1, pn_pending_queue_count(queue));
+
+    pn_pending_ref_t ref;
+    pn_request_pool_lock(pool);
+    ref = pn_context_pending_resolve_locked(ctx, beat.slot_id, beat.generation);
+    pn_request_pool_unlock(pool);
+    assert_int_equal(PN_PENDING_REF_REAL, ref.kind);
+    assert_int_equal(PN_REQUEST_IN_FLIGHT,
+                     pn_request_pool_get(pool, ref.real_slot)->state);
+
+    pn_presence_manager_cleanup(mgr, &s_mock_allocator);
+
+    assert_int_equal(1, s_cancel_called);
+    assert_true(pn_request_is_idle(pn_request_pool_get(pool, ref.real_slot)));
+    assert_int_equal(1, pn_pending_queue_count(queue));
+    assert_int_equal(PUBNUB_IN_PROGRESS, pubnub_future_status(other));
+
+    pubnub_destroy(ctx);
+    s_send_returns_handle = 0;
+}
+
+/**
+ * Cleanup cancels the transport handle of a completed heartbeat while its slot
+ * is still ready, and only then releases the slot.
+ */
+static void test_cleanup_cancels_terminal_handle_before_release(void** state)
+{
+    (void)state;
+    int               sentinel = 0;
+    pubnub_context_t* ctx      = create_ctx();
+    assert_non_null(ctx);
+    s_cancel_called        = 0;
+    s_last_cancel_handle   = NULL;
+    s_slot_ready_at_cancel = -1;
+
+    pn_presence_manager_t* mgr = pn_presence_manager_create(ctx, &s_mock_allocator);
+    assert_non_null(mgr);
+    pn_request_pool_t* pool = pn_context_request_pool(ctx);
+    uint16_t           sid  = hold_slot(ctx);
+    pn_request_t*      slot = pn_request_pool_get(pool, sid);
+
+    slot->transport_handle = (pubnub_transport_handle_t*)&sentinel;
+    mgr->active_slot_id    = sid;
+    s_probe_ctx            = ctx;
+    s_probe_slot_id        = sid;
+
+    pn_presence_manager_cleanup(mgr, &s_mock_allocator);
+
+    assert_int_equal(1, s_cancel_called);
+    assert_ptr_equal((void*)&sentinel, (void*)s_last_cancel_handle);
+    assert_int_equal(1, s_slot_ready_at_cancel);
+    assert_true(pn_request_is_idle(slot));
+    assert_null(slot->transport_handle);
+
+    s_probe_ctx     = NULL;
+    s_probe_slot_id = PUBNUB_SLOT_ID_INVALID;
+    pubnub_destroy(ctx);
+    assert_int_equal(1, s_cancel_called);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_cleanup_no_active_request),
         cmocka_unit_test(test_cleanup_sets_draining),
         cmocka_unit_test(test_cleanup_null_state),
+        cmocka_unit_test(test_cleanup_aborts_promoted_pending_heartbeat),
+        cmocka_unit_test(test_cleanup_cancels_terminal_handle_before_release),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

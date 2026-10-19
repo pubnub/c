@@ -158,7 +158,10 @@ target_link_libraries(
 
 target_compile_definitions(
     pubnub_provider_transport
-    PRIVATE _POSIX_C_SOURCE=200809L _DEFAULT_SOURCE $<$<PLATFORM_ID:Darwin>:_DARWIN_C_SOURCE>
+    PRIVATE
+        $<$<NOT:$<PLATFORM_ID:Windows>>:_POSIX_C_SOURCE=200809L>
+        $<$<NOT:$<PLATFORM_ID:Windows>>:_DEFAULT_SOURCE>
+        $<$<BOOL:${APPLE}>:_DARWIN_C_SOURCE>
 )
 
 if(PUBNUB_CFG_RESOLV_CONF_PATH)

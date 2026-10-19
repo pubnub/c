@@ -216,20 +216,28 @@ static int posix_socket_check_connect(const pn_socket_platform_ops_t* self,
     int       err     = 0;
     socklen_t len     = sizeof(err);
     const int gso_ret = getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len);
+    struct sockaddr_storage peer     = {0};
+    socklen_t               peer_len = sizeof(peer);
 
     if (0 != gso_ret) {
         return -errno;
     }
 
-    if (0 == err) {
+    if (0 != err) {
+        return -err;
+    }
+
+    /* SO_ERROR is 0 while the handshake is still in flight, so it cannot
+     * prove the connect finished; a connected peer address can. */
+    if (0 == getpeername(fd, (struct sockaddr*)&peer, &peer_len)) {
         return 1;
     }
 
-    if (EINPROGRESS == err) {
+    if (ENOTCONN == errno) {
         return 0;
     }
 
-    return -err;
+    return -errno;
 }
 
 static int posix_socket_send(const pn_socket_platform_ops_t* self,
@@ -743,10 +751,10 @@ PUBNUB_STATIC_ASSERT(
     sizeof(pn_macos_dns_state_t) <= PUBNUB_CFG_DNS_PLATFORM_STATE_SIZE,
     "macOS DNS state exceeds PUBNUB_CFG_DNS_PLATFORM_STATE_SIZE");
 
-static void macos_dns_callback(DNSServiceRef          sdRef,
+static void macos_dns_callback(DNSServiceRef          sd_ref,
                                DNSServiceFlags        flags,
-                               uint32_t               interfaceIndex,
-                               DNSServiceErrorType    errorCode,
+                               uint32_t               interface_index,
+                               DNSServiceErrorType    error_code,
                                const char*            hostname,
                                const struct sockaddr* address,
                                uint32_t               ttl,
@@ -754,12 +762,12 @@ static void macos_dns_callback(DNSServiceRef          sdRef,
 {
     pn_macos_dns_state_t* st = (pn_macos_dns_state_t*)context;
 
-    (void)sdRef;
-    (void)interfaceIndex;
+    (void)sd_ref;
+    (void)interface_index;
     (void)hostname;
     (void)ttl;
 
-    if (kDNSServiceErr_NoError != errorCode) {
+    if (kDNSServiceErr_NoError != error_code) {
         if (!(flags & kDNSServiceFlagsMoreComing)) {
             st->error    = (0 == st->count) ? 1 : 0;
             st->complete = 1;

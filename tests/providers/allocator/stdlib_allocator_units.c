@@ -60,8 +60,23 @@ static void alloc_should_honour_natural_alignment(void** state)
     /* MSVC C mode does not expose max_align_t reliably. MSVC malloc
      * aligns to MEMORY_ALLOCATION_ALIGNMENT (8 on x86, 16 on x64). */
     const size_t natural_align = sizeof(void*) * 2;
-#else
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
     const size_t natural_align = _Alignof(max_align_t);
+#else
+    /* C99 has no max_align_t: derive the alignment of the widest
+     * fundamental types from struct padding. */
+    struct natural_align_probe {
+        char pad;
+
+        union {
+            long long   ll;
+            long double ld;
+            double      d;
+            void*       p;
+        } widest;
+    };
+
+    const size_t natural_align = offsetof(struct natural_align_probe, widest);
 #endif
 
     void* p = alloc->alloc(alloc, 128, 0);

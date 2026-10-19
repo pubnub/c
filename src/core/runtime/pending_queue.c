@@ -5,6 +5,26 @@
 
 #include <string.h>
 
+/**
+ * @brief Drop cancelled holes from the newest end of the ring span.
+ *
+ * Keeps the invariant that the oldest and newest positions of a non-empty
+ * span are occupied, so the span never ends on a hole.
+ */
+static void pn_pending_queue_trim_tail(pn_pending_queue_t* queue)
+{
+    while (queue->count > 0) {
+        const uint16_t last =
+            (uint16_t)((queue->head + queue->count - 1U) % queue->capacity);
+
+        if (queue->entries[last].occupied) {
+            break;
+        }
+        queue->tail = last;
+        queue->count--;
+    }
+}
+
 pubnub_res_t pn_pending_queue_init(pn_pending_queue_t*          queue,
                                    uint16_t                     capacity,
                                    pubnub_allocator_provider_t* allocator)
@@ -80,11 +100,10 @@ pubnub_res_t pn_pending_queue_dequeue(pn_pending_queue_t* queue,
         return PUBNUB_IN_PROGRESS;
     }
 
-    /* Advance past cancelled head entries; count was already decremented by
-     * cancel_at, so do NOT decrement here (count tracks occupied only). */
-    while (queue->count > 0 && !queue->entries[queue->head].occupied) {
-        queue->head = (uint16_t)((queue->head + 1) % queue->capacity);
-    }
+    /* Every operation that moves head re-establishes the occupied-head
+     * invariant; this only guards a queue whose head was cleared behind its
+     * back. */
+    pn_pending_queue_trim_head(queue);
 
     if (0 == queue->count) {
         return PUBNUB_IN_PROGRESS;
@@ -96,6 +115,7 @@ pubnub_res_t pn_pending_queue_dequeue(pn_pending_queue_t* queue,
     memset(&queue->entries[queue->head], 0, sizeof(pn_pending_entry_t));
     queue->head = (uint16_t)((queue->head + 1) % queue->capacity);
     queue->count--;
+    pn_pending_queue_trim_head(queue);
 
     return PUBNUB_OK;
 }
@@ -116,6 +136,17 @@ int pn_pending_queue_is_full(const pn_pending_queue_t* queue)
     return queue->count >= queue->capacity;
 }
 
+void pn_pending_queue_trim_head(pn_pending_queue_t* queue)
+{
+    if (NULL == queue || NULL == queue->entries) {
+        return;
+    }
+    while (queue->count > 0 && !queue->entries[queue->head].occupied) {
+        queue->head = (uint16_t)((queue->head + 1U) % queue->capacity);
+        queue->count--;
+    }
+}
+
 void pn_pending_cancel_data_run(pn_pending_cancel_data_t* data)
 {
     if (NULL == data) {
@@ -129,6 +160,27 @@ void pn_pending_cancel_data_run(pn_pending_cancel_data_t* data)
                        PUBNUB_ERR_CANCELLED,
                        data->async_cb_user_data);
     }
+}
+
+pubnub_res_t pn_pending_queue_find(const pn_pending_queue_t* queue,
+                                   uint16_t                  map_index,
+                                   uint16_t*                 out_logical)
+{
+    uint16_t i;
+
+    if (NULL == queue || NULL == queue->entries || NULL == out_logical) {
+        return PUBNUB_ERR_INVALID_ARGUMENT;
+    }
+    for (i = 0; i < queue->count; i++) {
+        const pn_pending_entry_t* entry =
+            &queue->entries[(queue->head + i) % queue->capacity];
+
+        if (entry->occupied && map_index == entry->map_index) {
+            *out_logical = i;
+            return PUBNUB_OK;
+        }
+    }
+    return PUBNUB_ERR_INVALID_ARGUMENT;
 }
 
 pubnub_res_t pn_pending_queue_cancel_at(pn_pending_queue_t*       queue,
@@ -168,6 +220,18 @@ pubnub_res_t pn_pending_queue_cancel_at(pn_pending_queue_t*       queue,
     }
 
     memset(entry, 0, sizeof(*entry));
-    queue->count--;
+
+    /* count is the ring span head..tail, holes included, so an enqueue at
+     * tail can never land on a live entry. Trim from whichever end was
+     * cancelled; a mid-ring hole stays until head or tail passes it. */
+    if (index + 1U == queue->count) {
+        queue->tail = phys;
+        queue->count--;
+        pn_pending_queue_trim_tail(queue);
+    } else if (0 == index) {
+        queue->head = (uint16_t)((queue->head + 1U) % queue->capacity);
+        queue->count--;
+        pn_pending_queue_trim_head(queue);
+    }
     return PUBNUB_OK;
 }

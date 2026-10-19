@@ -58,9 +58,14 @@ typedef struct pn_presence_manager {
     /** Deferred event queue: callbacks push events here, tick drains. */
     pn_presence_event_queue_t event_queue;
 
-    /** Slot ID of the in-flight heartbeat request.
-     *  PUBNUB_SLOT_ID_INVALID when no request is active. */
+    /** Slot ID of the in-flight heartbeat request, as returned by dispatch
+     *  (a pool slot, or a pending-range id while the request waits in the
+     *  pending queue). PUBNUB_SLOT_ID_INVALID when no request is active. */
     uint16_t active_slot_id;
+
+    /** Generation returned with active_slot_id; identifies the request
+     *  behind a pending-range id after the queue recycles map entries. */
+    uint16_t active_slot_generation;
 
     /** Currently tracked channels (comma-separated, allocator-owned).
      *  NULL when no channels are active. Overwritten on JOINED,

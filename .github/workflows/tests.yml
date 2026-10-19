@@ -137,6 +137,8 @@ jobs:
         run: cmake --build build/socket
 
       - name: Test (ASan + UBSan)
+        env:
+          PN_TEST_REQUIRE_PENDING: "1"
         run: ctest --test-dir build/socket --output-on-failure
 
   socket-transport-mbedtls:
@@ -167,6 +169,8 @@ jobs:
         run: cmake --build build/socket-mbedtls
 
       - name: Test
+        env:
+          PN_TEST_REQUIRE_PENDING: "1"
         run: ctest --test-dir build/socket-mbedtls --output-on-failure
 
   socket-transport-custom-dns:
@@ -201,6 +205,8 @@ jobs:
         run: cmake --build build/socket-custom-dns
 
       - name: Test (ASan + UBSan)
+        env:
+          PN_TEST_REQUIRE_PENDING: "1"
         run: ctest --test-dir build/socket-custom-dns --output-on-failure
 
   socket-transport-no-ipv6:
@@ -233,7 +239,65 @@ jobs:
         run: cmake --build build/socket-no-ipv6
 
       - name: Test
+        env:
+          PN_TEST_REQUIRE_PENDING: "1"
         run: ctest --test-dir build/socket-no-ipv6 --output-on-failure
+
+  socket-transport-logging:
+    name: "Socket transport / ${{ matrix.name }}"
+    runs-on:
+      group: organization/Default
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: OpenSSL, logging compiled out
+            dir: socket-log-off
+            tls: openssl
+            flag: -DPUBNUB_CFG_MAX_LOG_MESSAGE_SIZE=0
+          - name: OpenSSL, TRACE logging
+            dir: socket-log-trace
+            tls: openssl
+            flag: -DPUBNUB_LOG_MIN_LEVEL=TRACE
+          - name: mbedTLS, logging compiled out
+            dir: socket-log-off-mbedtls
+            tls: mbedtls
+            flag: -DPUBNUB_CFG_MAX_LOG_MESSAGE_SIZE=0
+          - name: mbedTLS, TRACE logging
+            dir: socket-log-trace-mbedtls
+            tls: mbedtls
+            flag: -DPUBNUB_LOG_MIN_LEVEL=TRACE
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build libssl-dev libmbedtls-dev
+
+      - name: Configure (socket transport + ${{ matrix.name }})
+        run: |
+          cmake -B build/${{ matrix.dir }} -G Ninja \
+            -DPUBNUB_PROFILE=full \
+            -DPUBNUB_PROVIDER_TRANSPORT=socket \
+            -DPUBNUB_SOCKET_TLS_BACKEND=${{ matrix.tls }} \
+            -DPUBNUB_ENABLE_PROXY=ON \
+            -DPUBNUB_BUILD_TESTS=ON \
+            ${{ matrix.flag }} \
+            -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build build/${{ matrix.dir }}
+
+      - name: Test (socket transport and retry/failure suites)
+        env:
+          PN_TEST_REQUIRE_PENDING: "1"
+        run: |
+          ctest --test-dir build/${{ matrix.dir }} \
+            -R "test_provider_transport_socket|test_core_(retry_context|failure_handle)" \
+            --output-on-failure
 
   custom-dependency-paths:
     name: "Custom OpenSSL / mbedTLS dependency paths"
@@ -347,6 +411,36 @@ jobs:
       - name: Test
         run: ctest --test-dir build/win-curl -C Release --output-on-failure --timeout 60
 
+  windows-shared:
+    name: "Windows / shared library"
+    continue-on-error: true
+    runs-on:
+      group: windows-gh
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+      - name: Configure (shared)
+        run: |
+          cmake -B build/win-shared `
+            -DPUBNUB_PROFILE=full `
+            -DPUBNUB_PROVIDER_TRANSPORT=socket `
+            -DPUBNUB_PROVIDER_PLATFORM=windows `
+            -DPUBNUB_SOCKET_TLS_BACKEND=openssl `
+            -DPUBNUB_ENABLE_PROXY=ON `
+            -DPUBNUB_BUILD_SHARED=ON `
+            -DPUBNUB_BUILD_TESTS=OFF `
+            -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build pubnub.dll
+        run: cmake --build build/win-shared --config Release --target pubnub
+
+      - name: PUBNUB_CLEAR_VALUE expectation test (block scope OK, file scope C2099)
+        run: |
+          cmake -S tests/ci -B build/ci-clear-value `
+            -DPN_SDK_INCLUDE_DIR="$PWD/include" `
+            -DPN_SDK_CONFIG_INCLUDE_DIR="$PWD/build/win-shared/include"
+
   res-str-disabled:
     name: "Dev preset / PUBNUB_CFG_RES_STR=OFF"
     runs-on:
@@ -370,6 +464,30 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build/dev-no-resstr --output-on-failure
+
+  jsmn-serialization:
+    name: "jsmn serialization / Linux"
+    runs-on:
+      group: organization/Default
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build \
+            libcurl4-openssl-dev libssl-dev
+
+      - name: Configure (PUBNUB_PROVIDER_SERIALIZATION=jsmn)
+        run: cmake --preset dev -DPUBNUB_PROVIDER_SERIALIZATION=jsmn -B build/jsmn
+
+      - name: Build
+        run: cmake --build build/jsmn
+
+      - name: Test
+        run: ctest --test-dir build/jsmn --output-on-failure
 
   sanitizers:
     name: "ASan + UBSan / curl / ${{ matrix.os }}"
@@ -488,7 +606,52 @@ jobs:
       - name: Build
         run: cmake --build build/tsan -j$(nproc 2>/dev/null || sysctl -n hw.logicalcpu)
       - name: Test
+        env:
+          TSAN_OPTIONS: "halt_on_error=1 second_deadlock_stack=1"
         run: ctest --test-dir build/tsan --output-on-failure
+
+  tsan-socket:
+    name: "TSan / socket / ${{ matrix.os }}"
+    runs-on:
+      group: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ organization/Default, macos-gh ]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GH_TOKEN }}
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build libssl-dev
+
+      - name: Set OpenSSL path (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          OSSL="$(brew --prefix openssl@3 2>/dev/null || echo /usr/local/opt/openssl@3)"
+          echo "OPENSSL_ROOT_DIR=$OSSL" >> $GITHUB_ENV
+          # cmake/ninja pre-installed; Apple Clang supports TSan natively
+
+      - name: Configure (TSan, socket transport)
+        run: |
+          cmake --preset dev \
+            -DPUBNUB_PROVIDER_TRANSPORT=socket \
+            -DPUBNUB_CFG_THREAD_SAFETY=ON \
+            -DPUBNUB_ENABLE_TSAN=ON \
+            -DPUBNUB_ENABLE_ASAN=OFF \
+            -DPUBNUB_ENABLE_UBSAN=OFF \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -B build/tsan-socket
+      - name: Build
+        run: cmake --build build/tsan-socket -j$(nproc 2>/dev/null || sysctl -n hw.logicalcpu)
+      - name: Test
+        env:
+          TSAN_OPTIONS: "halt_on_error=1 second_deadlock_stack=1"
+        run: ctest --test-dir build/tsan-socket --output-on-failure
 
   valgrind:
     name: "Valgrind / curl / Linux"
@@ -757,13 +920,16 @@ jobs:
       - socket-transport-mbedtls
       - socket-transport-custom-dns
       - socket-transport-no-ipv6
+      - socket-transport-logging
       - custom-dependency-paths
       - windows-socket
       - windows-curl
       - res-str-disabled
+      - jsmn-serialization
       - sanitizers
       - binary-size
       - tsan
+      - tsan-socket
       - valgrind
       - integration-tests
       - integration-tests-socket

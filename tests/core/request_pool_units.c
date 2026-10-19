@@ -626,7 +626,7 @@ static void populate_slot_preserves_body_pointer_for_post(void** state)
     pn_request_pool_acquire(&sut, NULL, &fut);
     pn_request_t* slot = pn_request_pool_get(&sut, fut.slot_id);
 
-    static const char body_data[] = "{\"key\":\"value\"}";
+    static const uint8_t body_data[] = "{\"key\":\"value\"}";
 
     pn_pending_entry_t src;
     memset(&src, 0, sizeof(src));

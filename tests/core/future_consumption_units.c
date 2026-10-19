@@ -692,21 +692,16 @@ static void deinit_drain_fires_all_pending_callbacks(void** state)
     }
     assert_int_equal(pn_pending_queue_count(&queue), 3);
 
-    /* Simulate the fixed deinit drain loop from client.c. */
+    /* cancel_at(0) advances head itself, so the loop must not touch head. */
     while (pn_pending_queue_count(&queue) > 0) {
-        pn_pending_entry_t* head_entry = &queue.entries[queue.head];
-        if (!head_entry->occupied) {
-            /* cancel_at already decremented count. Advance head only. */
-            queue.head = (uint16_t)((queue.head + 1) % queue.capacity);
-            continue;
-        }
+        pn_pending_entry_t*      head_entry  = &queue.entries[queue.head];
         pn_pending_cancel_data_t cancel_data = {0};
         cancel_data.async_cb_future.ctx      = NULL;
         cancel_data.async_cb_future.slot_id =
             (uint16_t)(100 + head_entry->map_index);
         cancel_data.async_cb_future.status = PUBNUB_IN_PROGRESS;
-        (void)pn_pending_queue_cancel_at(&queue, 0, &cancel_data);
-        queue.head = (uint16_t)((queue.head + 1) % queue.capacity);
+        assert_int_equal(pn_pending_queue_cancel_at(&queue, 0, &cancel_data),
+                         PUBNUB_OK);
         pn_pending_cancel_data_run(&cancel_data);
     }
 
@@ -719,7 +714,7 @@ static void deinit_drain_fires_all_pending_callbacks(void** state)
 
 /**
  * Simulate the deinit drain loop with a pre-cancelled entry in the
- * middle (occupied=0 from an earlier pubnub_future_release call).
+ * middle (occupied=0 after a pubnub_future_release call).
  * The drain must skip the non-occupied entry without looping forever.
  */
 static void deinit_drain_skips_precancelled_entries(void** state)
@@ -747,9 +742,6 @@ static void deinit_drain_skips_precancelled_entries(void** state)
     }
     assert_int_equal(pn_pending_queue_count(&queue), 3);
 
-    /* Pre-cancel the middle entry (index 1) as if
-     * pubnub_future_release() already fired it. cancel_at decrements
-     * count but does NOT advance head. */
     pn_pending_cancel_data_t pre_data = {0};
     pre_data.async_cb_future.ctx      = NULL;
     pre_data.async_cb_future.slot_id  = 101;
@@ -758,8 +750,10 @@ static void deinit_drain_skips_precancelled_entries(void** state)
     assert_int_equal(rc, PUBNUB_OK);
     pn_pending_cancel_data_run(&pre_data);
 
-    /* After pre-cancel: count=2, head unchanged, middle entry zeroed. */
-    assert_int_equal(pn_pending_queue_count(&queue), 2);
+    /* After pre-cancel: the middle entry is zeroed but stays inside the ring
+     * span (count=3) because head and tail still bracket live entries. */
+    assert_int_equal(pn_pending_queue_count(&queue), 3);
+    assert_int_equal(queue.entries[1].occupied, 0);
     assert_int_equal(s_async_cb_called, 1);
     assert_int_equal(s_cleanup_called, 1);
 
@@ -767,21 +761,15 @@ static void deinit_drain_skips_precancelled_entries(void** state)
     s_async_cb_called = 0;
     s_cleanup_called  = 0;
 
-    /* Simulate the fixed deinit drain loop. */
     while (pn_pending_queue_count(&queue) > 0) {
-        pn_pending_entry_t* head_entry = &queue.entries[queue.head];
-        if (!head_entry->occupied) {
-            /* cancel_at already decremented count. Advance head only. */
-            queue.head = (uint16_t)((queue.head + 1) % queue.capacity);
-            continue;
-        }
+        pn_pending_entry_t*      head_entry  = &queue.entries[queue.head];
         pn_pending_cancel_data_t cancel_data = {0};
         cancel_data.async_cb_future.ctx      = NULL;
         cancel_data.async_cb_future.slot_id =
             (uint16_t)(200 + head_entry->map_index);
         cancel_data.async_cb_future.status = PUBNUB_IN_PROGRESS;
-        (void)pn_pending_queue_cancel_at(&queue, 0, &cancel_data);
-        queue.head = (uint16_t)((queue.head + 1) % queue.capacity);
+        assert_int_equal(pn_pending_queue_cancel_at(&queue, 0, &cancel_data),
+                         PUBNUB_OK);
         pn_pending_cancel_data_run(&cancel_data);
     }
 
@@ -943,8 +931,7 @@ static void future_cancel_terminal_returns_in_progress(void** state)
  * is held (extract-then-fire pattern).
  *
  * s_lock_held simulates a non-reentrant mutex (FreeRTOS default).
- * mock_cleanup_lock_check() asserts s_lock_held == 0 at call time, so
- * any regression that moves the call inside the lock will fail here.
+ * mock_cleanup_lock_check() asserts s_lock_held == 0 at call time.
  *
  * Pattern under test:
  *   1. Acquire lock (s_lock_held = 1)
@@ -970,21 +957,15 @@ static void cleanup_fires_outside_lock_via_cancel_data(void** state)
 
     assert_int_equal(pn_pending_queue_enqueue(&queue, &entry), PUBNUB_OK);
 
-    /* Step 1: Simulate caller acquiring the pool lock. */
     s_lock_held = 1;
 
-    /* Step 2: Extract cancel data while "lock held".
-     * cleanup must NOT fire inside cancel_at. */
     pn_pending_cancel_data_t cancel_data = {0};
     rc = pn_pending_queue_cancel_at(&queue, 0, &cancel_data);
     assert_int_equal(rc, PUBNUB_OK);
     assert_int_equal(0, s_cleanup_called);
 
-    /* Step 3: Release the lock. */
     s_lock_held = 0;
 
-    /* Step 4: Fire callbacks — lock is now free.
-     * mock_cleanup_lock_check asserts s_lock_held == 0 at this point. */
     pn_pending_cancel_data_run(&cancel_data);
     assert_int_equal(1, s_cleanup_called);
 
@@ -1327,10 +1308,9 @@ static void async_on_invalid_future_returns_error_not_fires_callback(void** stat
  * Verifies that result accessors work correctly for a promoted
  * pending-range future whose underlying slot has generation > 0.
  *
- * Regression: pn_ready_slot_for_future applied the generation check
- * unconditionally, but pending-range futures always carry generation=0.
- * After promotion to a recycled slot (generation > 0), the mismatch
- * caused all accessors to return zero/empty.
+ * The accessors must validate against the generation recorded at
+ * promotion: a pending-range future carries the identity epoch of its
+ * pending-slot-map entry, not the slot generation.
  */
 static void pending_range_future_accessor_works_after_slot_recycle(void** state)
 {
@@ -1348,8 +1328,6 @@ static void pending_range_future_accessor_works_after_slot_recycle(void** state)
 
     const uint16_t capacity = pn_context_pool_capacity(ctx);
 
-    /* Step 1: Fill all direct slots, complete, release them.
-     * This increments generation on every slot. */
     for (uint16_t cycle = 0; cycle < capacity; cycle++) {
         pn_request_pool_lock(pool);
         pubnub_future_t f;
@@ -1368,7 +1346,6 @@ static void pending_range_future_accessor_works_after_slot_recycle(void** state)
     pn_request_t* slot0 = pn_request_pool_get(pool, 0);
     assert_true(slot0->generation >= 1);
 
-    /* Step 2: Fill all slots again (they are available). */
     pubnub_future_t futs[PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS];
     pn_request_pool_lock(pool);
     for (int i = 0; i < PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS; i++) {
@@ -1376,7 +1353,6 @@ static void pending_range_future_accessor_works_after_slot_recycle(void** state)
     }
     pn_request_pool_unlock(pool);
 
-    /* Step 3: Enqueue into pending queue (all slots occupied). */
     pn_pending_entry_t entry;
     memset(&entry, 0, sizeof(entry));
     entry.http_request.host = "ps.pndsn.com";
@@ -1384,22 +1360,18 @@ static void pending_range_future_accessor_works_after_slot_recycle(void** state)
 
     pubnub_future_t pending_fut = pn_dispatch_or_enqueue(ctx, &entry);
     assert_true(pending_fut.slot_id >= capacity);
-    assert_int_equal(0, pending_fut.generation);
+    /* The epoch of a first-claimed map entry is 1; a pending future never
+     * carries a pool-slot generation. */
+    assert_int_equal(1, pending_fut.generation);
 
-    /* Step 4: Complete and release slot 0 to free a slot for promotion. */
     pn_request_t* direct_slot      = pn_request_pool_get(pool, futs[0].slot_id);
     direct_slot->http_request.host = "ps.pndsn.com";
     pn_request_dispatch(pipeline, direct_slot, pn_context_platform(ctx));
     (void)pubnub_process(ctx);
     pubnub_future_release(futs[0]);
 
-    /* Step 5: Process tick promotes pending entry to the freed slot and
-     * dispatches it. Since send() completes inline, the promoted slot
-     * should be terminal after this tick. */
     (void)pubnub_process(ctx);
 
-    /* Step 6: The pending_fut should now be ready and the accessor
-     * must return the HTTP status code, not 0. */
     assert_true(pubnub_future_is_ready(pending_fut));
     assert_int_equal(200, pubnub_response_status_code(pending_fut));
 
@@ -1642,10 +1614,8 @@ static void release_pending_future_cleans_feature_state(void** state)
  * via pubnub_future_cancel must fire the callback with
  * PUBNUB_ERR_CANCELLED (not PUBNUB_ERR_INVALID_ARGUMENT).
  *
- * Regression: resolve_pending_slot returns PN_SLOT_ID_CANCELLED but
- * pubnub_async had no check for that sentinel, so it fell through to
- * pn_request_pool_get(pool, 65534) which returned NULL and fired the
- * callback with PUBNUB_ERR_INVALID_ARGUMENT.
+ * The cancelled sentinel slot id must be handled before the slot lookup,
+ * so no invalid-argument callback fires.
  */
 static void async_on_cancelled_pending_fires_cancelled(void** state)
 {
@@ -1727,6 +1697,14 @@ static int s_leak_cancel_called;
  * exposes the handle-owned rx buffer so the test can alias response->body. */
 static int      s_leak_complete_on_poll;
 static uint8_t* s_leak_last_rx;
+/* Optional re-entrancy hooks run from inside poll() / cancel() so tests can
+ * observe what the SDK does while the transport is entered. */
+static pubnub_transport_handle_t* s_leak_sent_handle;
+static pubnub_transport_handle_t* s_leak_cancelled_handle;
+static int                        s_leak_poll_called;
+static int                        s_leak_wake_called;
+static void (*s_leak_poll_hook)(void);
+static void (*s_leak_cancel_hook)(void);
 
 #define LEAK_BODY "[1,\"Sent\",\"17\"]"
 
@@ -1743,7 +1721,8 @@ static pubnub_transport_handle_t* leak_send(pubnub_transport_provider_t* self,
     assert_non_null(handle->rx_buf);
     memcpy(handle->rx_buf, LEAK_BODY, sizeof(LEAK_BODY));
     s_leak_outstanding++;
-    s_leak_last_rx = handle->rx_buf;
+    s_leak_last_rx     = handle->rx_buf;
+    s_leak_sent_handle = (pubnub_transport_handle_t*)handle;
 
     if (!s_leak_complete_on_poll) {
         /* Complete inline; body aliases the handle-owned rx buffer. */
@@ -1759,7 +1738,17 @@ static int leak_poll(pubnub_transport_provider_t* self, uint32_t timeout_ms)
 {
     (void)self;
     (void)timeout_ms;
+    s_leak_poll_called++;
+    if (NULL != s_leak_poll_hook) {
+        s_leak_poll_hook();
+    }
     return 0;
+}
+
+static void leak_wake(pubnub_transport_provider_t* self)
+{
+    (void)self;
+    s_leak_wake_called++;
 }
 
 static void leak_cancel(pubnub_transport_provider_t* self,
@@ -1769,6 +1758,10 @@ static void leak_cancel(pubnub_transport_provider_t* self,
     leak_handle_t* handle = (leak_handle_t*)transport_handle;
     if (NULL == handle) {
         return;
+    }
+    s_leak_cancelled_handle = transport_handle;
+    if (NULL != s_leak_cancel_hook) {
+        s_leak_cancel_hook();
     }
     free(handle->rx_buf);
     free(handle);
@@ -1782,6 +1775,7 @@ static pubnub_transport_provider_t s_leak_transport = {
     .send              = leak_send,
     .poll              = leak_poll,
     .cancel            = leak_cancel,
+    .wake              = leak_wake,
     .set_tls_ca_bundle = NULL,
     .set_tls_verify    = NULL,
 };
@@ -1856,11 +1850,9 @@ static void future_release_on_success_cancels_transport_handle(void** state)
 }
 
 /**
- * When a future is released while still IN_FLIGHT, the release is deferred
- * into the process tick. Once the request completes successfully, the tick's
- * deferred-release path must cancel the (now live) transport handle outside
- * the lock, freeing the rx buffer. Without that cancel the handle leaks on the
- * deferred-of-success path even though the direct release path is fixed.
+ * Releasing an IN_FLIGHT future defers the release into the process tick.
+ * Once the request succeeds, the tick must cancel the live transport handle
+ * outside the lock so the rx buffer is freed.
  */
 static void deferred_release_in_flight_success_cancels_handle(void** state)
 {
@@ -2005,6 +1997,622 @@ static void deinit_sweeps_unreleased_success_handle(void** state)
 }
 #endif /* !PUBNUB_CFG_NO_HEAP */
 
+#if PUBNUB_CFG_THREAD_SAFETY && !PUBNUB_CFG_NO_HEAP
+
+/* Platform with a fake thread group: thread_create returns a non-NULL
+ * handle without starting anything, so pn_context_start_bg_thread publishes
+ * a background-thread handle while the test drives pn_process_tick itself,
+ * playing the part of the poll-owning thread. */
+static void* fake_thread_create(pubnub_platform_provider_t*  self,
+                                pubnub_allocator_provider_t* allocator,
+                                void (*fn)(void*),
+                                void* arg)
+{
+    static int handle;
+    (void)self;
+    (void)allocator;
+    (void)fn;
+    (void)arg;
+    return &handle;
+}
+
+static void fake_thread_join(pubnub_platform_provider_t*  self,
+                             pubnub_allocator_provider_t* allocator,
+                             void*                        thread_handle)
+{
+    (void)self;
+    (void)allocator;
+    (void)thread_handle;
+}
+
+static pubnub_platform_provider_t s_bg_platform;
+
+static void leak_reset_counters(void)
+{
+    s_leak_outstanding      = 0;
+    s_leak_cancel_called    = 0;
+    s_leak_complete_on_poll = 0;
+    s_leak_last_rx          = NULL;
+    s_leak_poll_called      = 0;
+    s_leak_wake_called      = 0;
+    s_leak_sent_handle      = NULL;
+    s_leak_cancelled_handle = NULL;
+    s_leak_poll_hook        = NULL;
+    s_leak_cancel_hook      = NULL;
+}
+
+/* Context over the leak transport; with @p bg non-zero a fake background
+ * thread handle is published. */
+static pubnub_context_t* create_leak_ctx_ex(int bg, int retry)
+{
+    leak_reset_counters();
+    pubnub_config_t cfg = test_config();
+    cfg.transport       = &s_leak_transport;
+    if (PUBNUB_ENABLE_RETRY && retry) {
+        cfg.retry_configuration.policy = PUBNUB_RETRY_LINEAR;
+    }
+    if (bg) {
+        s_bg_platform               = s_mock_platform;
+        s_bg_platform.thread_create = fake_thread_create;
+        s_bg_platform.thread_join   = fake_thread_join;
+        cfg.platform                = &s_bg_platform;
+    }
+    pubnub_context_t* ctx = pubnub_create(&cfg);
+    assert_non_null(ctx);
+    if (bg) {
+        assert_int_equal(PUBNUB_OK, pn_context_start_bg_thread(ctx));
+        assert_true(pn_context_has_bg_thread(ctx));
+    }
+    return ctx;
+}
+
+static pubnub_context_t* create_leak_ctx(int bg)
+{
+    return create_leak_ctx_ex(bg, 0);
+}
+
+static pubnub_future_t leak_dispatch(pubnub_context_t* ctx, pn_request_t** out_slot)
+{
+    pn_request_pool_t* pool = pn_context_request_pool(ctx);
+    pubnub_future_t    fut;
+
+    pn_request_pool_lock(pool);
+    assert_int_equal(PUBNUB_OK, pn_request_pool_acquire(pool, ctx, &fut));
+    *out_slot                      = pn_request_pool_get(pool, fut.slot_id);
+    (*out_slot)->http_request.host = "ps.pndsn.com";
+    pn_request_pool_unlock(pool);
+
+    pn_request_dispatch(
+        pn_context_pipeline(ctx), *out_slot, pn_context_platform(ctx));
+    return fut;
+}
+
+static pubnub_future_t leak_terminal(pubnub_context_t* ctx, pn_request_t** out_slot)
+{
+    pubnub_future_t fut = leak_dispatch(ctx, out_slot);
+
+    (void)pn_process_tick(ctx, 0);
+    assert_true(pn_request_is_terminal(*out_slot));
+    assert_non_null((*out_slot)->transport_handle);
+    return fut;
+}
+
+static void release_terminal_bg_mode_defers_cancel_to_tick(void** state)
+{
+    (void)state;
+    pubnub_context_t* ctx  = create_leak_ctx(1);
+    pn_request_t*     slot = NULL;
+    pubnub_future_t   fut  = leak_terminal(ctx, &slot);
+    uint16_t          gen  = slot->generation;
+
+    pubnub_future_release(fut);
+
+    assert_int_equal(0, s_leak_cancel_called);
+    assert_int_equal(1, s_leak_outstanding);
+    assert_false(pn_request_is_idle(slot));
+    assert_int_equal(gen, slot->generation);
+
+    (void)pn_process_tick(ctx, 0);
+
+    assert_int_equal(1, s_leak_cancel_called);
+    assert_int_equal(0, s_leak_outstanding);
+    assert_true(pn_request_is_idle(slot));
+    assert_int_equal((uint16_t)(gen + 1), slot->generation);
+
+    pubnub_destroy(ctx);
+}
+
+#if PUBNUB_ENABLE_RETRY
+/* Retry middleware hands the core its own tracking handle (the request
+ * pointer); the inner transport must still receive its own handle, and the
+ * retry bookkeeping must be reclaimed while the slot generation is intact. */
+static void release_retry_chain_forwards_inner_handle(int bg)
+{
+    pubnub_context_t* ctx  = create_leak_ctx_ex(bg, 1);
+    pn_request_t*     slot = NULL;
+    pubnub_future_t   fut  = leak_terminal(ctx, &slot);
+
+    assert_ptr_not_equal(slot->transport_handle, s_leak_sent_handle);
+
+    pubnub_future_release(fut);
+    if (bg) {
+        assert_int_equal(0, s_leak_cancel_called);
+        (void)pn_process_tick(ctx, 0);
+    }
+
+    assert_int_equal(1, s_leak_cancel_called);
+    assert_ptr_equal(s_leak_cancelled_handle, s_leak_sent_handle);
+    assert_int_equal(0, s_leak_outstanding);
+    assert_true(pn_request_is_idle(slot));
+
+    pubnub_destroy(ctx);
+}
+
+static void release_retry_chain_direct_forwards_inner_handle(void** state)
+{
+    (void)state;
+    release_retry_chain_forwards_inner_handle(0);
+}
+
+static void release_retry_chain_deferred_forwards_inner_handle(void** state)
+{
+    (void)state;
+    release_retry_chain_forwards_inner_handle(1);
+}
+#endif /* PUBNUB_ENABLE_RETRY */
+
+static void release_terminal_bg_mode_wakes_transport(void** state)
+{
+    (void)state;
+    pubnub_context_t* ctx  = create_leak_ctx(1);
+    pn_request_t*     slot = NULL;
+    pubnub_future_t   fut  = leak_terminal(ctx, &slot);
+
+    s_leak_wake_called = 0;
+    pubnub_future_release(fut);
+    assert_int_equal(1, s_leak_wake_called);
+
+    pubnub_destroy(ctx);
+}
+
+static void release_terminal_bg_mode_null_handle_releases_immediately(void** state)
+{
+    (void)state;
+    pubnub_context_t*          ctx    = create_leak_ctx(1);
+    pn_request_t*              slot   = NULL;
+    pubnub_future_t            fut    = leak_terminal(ctx, &slot);
+    pubnub_transport_handle_t* handle = slot->transport_handle;
+
+    /* Hand the handle back to the transport so the slot is terminal with no
+     * live handle, as after a failure that never produced one. */
+    slot->transport_handle            = NULL;
+    pubnub_transport_provider_t* head = pn_context_pipeline_chain_head(ctx);
+    head->cancel(head, handle);
+    assert_int_equal(1, s_leak_cancel_called);
+    s_leak_wake_called = 0;
+
+    pubnub_future_release(fut);
+
+    assert_true(pn_request_is_idle(slot));
+    assert_int_equal(1, s_leak_cancel_called);
+    assert_int_equal(0, s_leak_wake_called);
+
+    pubnub_destroy(ctx);
+}
+
+static pubnub_future_t   s_hook_fut;
+static int               s_cancels_seen_in_hook;
+static int               s_polls_seen_in_hook;
+static pubnub_res_t      s_tick_rc_in_hook;
+static pubnub_context_t* s_hook_ctx;
+
+static void hook_release_future(void)
+{
+    pubnub_future_release(s_hook_fut);
+    s_cancels_seen_in_hook = s_leak_cancel_called;
+}
+
+static void hook_tick_from_cancel(void)
+{
+    s_polls_seen_in_hook = s_leak_poll_called;
+    s_tick_rc_in_hook    = pn_process_tick(s_hook_ctx, 0);
+    s_polls_seen_in_hook = s_leak_poll_called - s_polls_seen_in_hook;
+}
+
+static void release_during_poll_defers_to_same_tick(void** state)
+{
+    (void)state;
+    pubnub_context_t* ctx  = create_leak_ctx(0);
+    pn_request_t*     slot = NULL;
+
+    s_hook_fut             = leak_terminal(ctx, &slot);
+    s_cancels_seen_in_hook = -1;
+    s_leak_poll_hook       = hook_release_future;
+
+    (void)pn_process_tick(ctx, 0);
+    s_leak_poll_hook = NULL;
+
+    assert_int_equal(0, s_cancels_seen_in_hook);
+    assert_int_equal(1, s_leak_cancel_called);
+    assert_int_equal(0, s_leak_outstanding);
+    assert_true(pn_request_is_idle(slot));
+
+    pubnub_destroy(ctx);
+}
+
+static void direct_release_claim_blocks_concurrent_tick(void** state)
+{
+    (void)state;
+    pubnub_context_t* ctx  = create_leak_ctx(0);
+    pn_request_t*     slot = NULL;
+    pubnub_future_t   fut  = leak_terminal(ctx, &slot);
+
+    s_hook_ctx           = ctx;
+    s_tick_rc_in_hook    = PUBNUB_OK;
+    s_polls_seen_in_hook = -1;
+    s_leak_cancel_hook   = hook_tick_from_cancel;
+
+    pubnub_future_release(fut);
+    s_leak_cancel_hook = NULL;
+
+    assert_int_equal(1, s_leak_cancel_called);
+    assert_int_equal(PUBNUB_IN_PROGRESS, s_tick_rc_in_hook);
+    assert_int_equal(0, s_polls_seen_in_hook);
+    assert_true(pn_request_is_idle(slot));
+
+    s_leak_poll_called = 0;
+    (void)pn_process_tick(ctx, 0);
+    assert_int_equal(1, s_leak_poll_called);
+
+    pubnub_destroy(ctx);
+}
+
+static void release_twice_in_deferral_window_cancels_once(void** state)
+{
+    (void)state;
+    pubnub_context_t* ctx  = create_leak_ctx(1);
+    pn_request_t*     slot = NULL;
+    pubnub_future_t   fut  = leak_terminal(ctx, &slot);
+
+    pubnub_future_release(fut);
+    pubnub_future_release(fut);
+    assert_int_equal(0, s_leak_cancel_called);
+
+    (void)pn_process_tick(ctx, 0);
+    assert_int_equal(1, s_leak_cancel_called);
+    assert_int_equal(0, s_leak_outstanding);
+
+    pubnub_future_release(fut);
+    assert_int_equal(1, s_leak_cancel_called);
+
+    pubnub_destroy(ctx);
+}
+
+static void destroy_flushes_deferred_terminal_release(void** state)
+{
+    (void)state;
+    pubnub_context_t* ctx  = create_leak_ctx(1);
+    pn_request_t*     slot = NULL;
+    pubnub_future_t   fut  = leak_terminal(ctx, &slot);
+
+    pubnub_future_release(fut);
+    assert_int_equal(0, s_leak_cancel_called);
+
+    pubnub_destroy(ctx);
+
+    assert_int_equal(1, s_leak_cancel_called);
+    assert_int_equal(0, s_leak_outstanding);
+}
+
+static void deferred_release_backpressure_promotes_pending(void** state)
+{
+    (void)state;
+    pubnub_context_t*   ctx   = create_leak_ctx(1);
+    pn_pending_queue_t* queue = pn_context_pending_queue(ctx);
+    const uint16_t      cap   = pn_context_pool_capacity(ctx);
+    pubnub_future_t     futs[PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS];
+    pn_request_t*       slots[PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS];
+    pn_pending_entry_t  entry;
+    pubnub_future_t     queued;
+    uint16_t            i;
+
+    for (i = 0; i < cap; i++) {
+        futs[i] = leak_dispatch(ctx, &slots[i]);
+    }
+    (void)pn_process_tick(ctx, 0);
+    assert_int_equal(cap, s_leak_outstanding);
+
+    pubnub_future_release(futs[0]);
+    memset(&entry, 0, sizeof(entry));
+    entry.http_request.host = "ps.pndsn.com";
+    queued                  = pn_dispatch_or_enqueue(ctx, &entry);
+    assert_true(queued.slot_id >= cap);
+    assert_int_equal(PUBNUB_IN_PROGRESS, queued.status);
+
+    (void)pn_process_tick(ctx, 0);
+
+    assert_int_equal(1, s_leak_cancel_called);
+    assert_false(pn_request_is_idle(slots[0]));
+    assert_int_equal(0, pn_pending_queue_count(queue));
+    (void)pn_process_tick(ctx, 0);
+    assert_true(pubnub_future_is_ready(queued));
+
+    {
+        uint16_t        n;
+        pubnub_future_t last = PUBNUB_FUTURE_INVALID;
+
+        for (n = 0; n <= queue->capacity; n++) {
+            memset(&entry, 0, sizeof(entry));
+            entry.http_request.host = "ps.pndsn.com";
+            last                    = pn_dispatch_or_enqueue(ctx, &entry);
+            if (PUBNUB_IN_PROGRESS != last.status) {
+                break;
+            }
+        }
+        assert_int_equal(PUBNUB_ERR_QUEUE_FULL, last.status);
+    }
+
+    pubnub_destroy(ctx);
+}
+
+static pubnub_future_t s_aba_new_fut;
+static pn_request_t*   s_aba_new_slot;
+static int             s_aba_fired;
+
+/* Runs inside the tick's deferred cancel: the flag is already consumed and
+ * the handle detached, so a second release of the same future sees a
+ * terminal slot without a handle. */
+static void hook_second_release_then_reacquire(void)
+{
+    if (s_aba_fired) {
+        return;
+    }
+    s_aba_fired = 1;
+    pubnub_future_release(s_hook_fut);
+    s_aba_new_fut = leak_dispatch(s_hook_ctx, &s_aba_new_slot);
+}
+
+static void deferred_release_second_release_does_not_free_new_request(void** state)
+{
+    (void)state;
+    pubnub_context_t* ctx  = create_leak_ctx(1);
+    pn_request_t*     slot = NULL;
+
+    s_hook_ctx     = ctx;
+    s_hook_fut     = leak_terminal(ctx, &slot);
+    s_aba_fired    = 0;
+    s_aba_new_slot = NULL;
+
+    pubnub_future_release(s_hook_fut);
+    s_leak_cancel_hook = hook_second_release_then_reacquire;
+    (void)pn_process_tick(ctx, 0);
+    s_leak_cancel_hook = NULL;
+
+    assert_int_equal(1, s_aba_fired);
+    assert_non_null(s_aba_new_slot);
+    /* The second release must not reclaim the slot mid-flush, so the new
+     * request lands elsewhere and survives the tick's reclaim of the old
+     * one. */
+    assert_ptr_not_equal(slot, s_aba_new_slot);
+    assert_true(pn_request_is_idle(slot));
+    assert_false(pn_request_is_idle(s_aba_new_slot));
+    assert_int_equal(s_aba_new_fut.generation, s_aba_new_slot->generation);
+    assert_non_null(s_aba_new_slot->transport_handle);
+
+    (void)pn_process_tick(ctx, 0);
+    pubnub_future_release(s_aba_new_fut);
+    (void)pn_process_tick(ctx, 0);
+    assert_int_equal(0, s_leak_outstanding);
+
+    pubnub_destroy(ctx);
+}
+
+static void release_other_cb(pubnub_future_t future, pubnub_res_t status, void* ud)
+{
+    (void)future;
+    (void)status;
+    (void)ud;
+    pubnub_future_release(s_hook_fut);
+    s_cancels_seen_in_hook = s_leak_cancel_called;
+}
+
+static void release_other_future_from_callback_bg_mode(void** state)
+{
+    (void)state;
+    pubnub_context_t* ctx    = create_leak_ctx(1);
+    pn_request_t*     slot_a = NULL;
+    pn_request_t*     slot_b = NULL;
+    pubnub_future_t   fut_b;
+
+    s_hook_fut = leak_terminal(ctx, &slot_a);
+
+    s_leak_complete_on_poll = 1;
+    fut_b                   = leak_dispatch(ctx, &slot_b);
+    assert_int_equal(PUBNUB_OK, pubnub_async(fut_b, release_other_cb, NULL));
+    s_cancels_seen_in_hook = -1;
+
+    slot_b->http_response.completion  = PUBNUB_HTTP_COMPLETE;
+    slot_b->http_response.status_code = 200;
+    slot_b->http_response.body        = s_leak_last_rx;
+    slot_b->http_response.body_len    = sizeof(LEAK_BODY) - 1;
+
+    (void)pn_process_tick(ctx, 0);
+
+    assert_int_equal(0, s_cancels_seen_in_hook);
+    assert_int_equal(1, s_leak_cancel_called);
+    assert_true(pn_request_is_idle(slot_a));
+
+    pubnub_future_release(fut_b);
+    pubnub_destroy(ctx);
+}
+
+static void future_cancel_then_release_bg_mode_single_cancel(void** state)
+{
+    (void)state;
+    pubnub_context_t* ctx  = create_leak_ctx(1);
+    pn_request_t*     slot = NULL;
+    pubnub_future_t   fut;
+
+    s_leak_complete_on_poll = 1;
+    fut                     = leak_dispatch(ctx, &slot);
+    assert_int_equal(PUBNUB_OK, pubnub_future_cancel(fut));
+    pubnub_future_release(fut);
+    assert_int_equal(0, s_leak_cancel_called);
+
+    (void)pn_process_tick(ctx, 0);
+    (void)pn_process_tick(ctx, 0);
+
+    assert_int_equal(1, s_leak_cancel_called);
+    assert_int_equal(0, s_leak_outstanding);
+    assert_true(pn_request_is_idle(slot));
+
+    pubnub_destroy(ctx);
+}
+
+static void (*s_lock_hook)(void);
+
+static size_t hook_lock_size(pubnub_platform_provider_t* self)
+{
+    (void)self;
+    return 16;
+}
+
+static int hook_lock_init(pubnub_platform_provider_t* self, pubnub_lock_t* lock)
+{
+    (void)self;
+    (void)lock;
+    return 0;
+}
+
+static void hook_lock_destroy(pubnub_platform_provider_t* self, pubnub_lock_t* lock)
+{
+    (void)self;
+    (void)lock;
+}
+
+static void hook_lock_acquire(pubnub_platform_provider_t* self, pubnub_lock_t* lock)
+{
+    void (*hook)(void) = s_lock_hook;
+
+    (void)self;
+    (void)lock;
+    if (NULL != hook) {
+        s_lock_hook = NULL;
+        hook();
+    }
+}
+
+static void hook_lock_release(pubnub_platform_provider_t* self, pubnub_lock_t* lock)
+{
+    (void)self;
+    (void)lock;
+}
+
+static void hook_promote_tick(void)
+{
+    (void)pn_process_tick(s_hook_ctx, 0);
+}
+
+/* Cooperative context whose lock acquire runs a one-shot hook, with the pool
+ * full of in-flight requests, one slot freed but not yet promoted into, and
+ * two queued futures P and Q. */
+static pubnub_context_t* promotion_race_setup(pubnub_future_t* futs,
+                                              pubnub_future_t* out_p,
+                                              pubnub_future_t* out_q)
+{
+    pubnub_config_t    cfg;
+    pubnub_context_t*  ctx;
+    pn_request_t*      slots[PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS];
+    pn_pending_entry_t entry;
+    const uint16_t     cap = (uint16_t)PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS;
+    uint16_t           i;
+
+    leak_reset_counters();
+    s_bg_platform              = s_mock_platform;
+    s_bg_platform.lock_size    = hook_lock_size;
+    s_bg_platform.lock_init    = hook_lock_init;
+    s_bg_platform.lock_destroy = hook_lock_destroy;
+    s_bg_platform.lock_acquire = hook_lock_acquire;
+    s_bg_platform.lock_release = hook_lock_release;
+    cfg                        = test_config();
+    cfg.transport              = &s_leak_transport;
+    cfg.platform               = &s_bg_platform;
+    ctx                        = pubnub_create(&cfg);
+    assert_non_null(ctx);
+    s_hook_ctx = ctx;
+
+    s_leak_complete_on_poll = 1;
+    for (i = 0; i < cap; i++) {
+        futs[i] = leak_dispatch(ctx, &slots[i]);
+    }
+    memset(&entry, 0, sizeof(entry));
+    entry.http_request.host = "ps.pndsn.com";
+    *out_p                  = pn_dispatch_or_enqueue(ctx, &entry);
+    memset(&entry, 0, sizeof(entry));
+    entry.http_request.host = "ps.pndsn.com";
+    *out_q                  = pn_dispatch_or_enqueue(ctx, &entry);
+    assert_true(out_p->slot_id >= cap);
+    assert_true(out_q->slot_id >= cap);
+
+    slots[0]->http_response.completion  = PUBNUB_HTTP_COMPLETE;
+    slots[0]->http_response.status_code = 200;
+    slots[0]->http_response.body        = s_leak_last_rx;
+    slots[0]->http_response.body_len    = sizeof(LEAK_BODY) - 1;
+    (void)pn_process_tick(ctx, 0);
+    assert_true(pn_request_is_terminal(slots[0]));
+    pubnub_future_release(futs[0]);
+    assert_true(pn_request_is_idle(slots[0]));
+    assert_int_equal(2, pn_pending_queue_count(pn_context_pending_queue(ctx)));
+    return ctx;
+}
+
+static void release_pending_after_promotion_race(void** state)
+{
+    (void)state;
+    pubnub_future_t    futs[PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS];
+    pubnub_future_t    p;
+    pubnub_future_t    q;
+    pubnub_context_t*  ctx   = promotion_race_setup(futs, &p, &q);
+    pn_request_pool_t* pool  = pn_context_request_pool(ctx);
+    pn_request_t*      slot0 = pn_request_pool_get(pool, 0);
+
+    s_lock_hook = hook_promote_tick;
+    pubnub_future_release(p);
+    assert_null(s_lock_hook);
+
+    assert_false(pn_request_is_idle(slot0));
+    assert_int_equal(1, slot0->release_deferred);
+    assert_int_equal(1, pn_pending_queue_count(pn_context_pending_queue(ctx)));
+    assert_int_equal(PUBNUB_IN_PROGRESS, pubnub_future_status(q));
+
+    pubnub_destroy(ctx);
+    assert_int_equal(0, s_leak_outstanding);
+}
+
+static void cancel_pending_after_promotion_race(void** state)
+{
+    (void)state;
+    pubnub_future_t    futs[PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS];
+    pubnub_future_t    p;
+    pubnub_future_t    q;
+    pubnub_context_t*  ctx   = promotion_race_setup(futs, &p, &q);
+    pn_request_pool_t* pool  = pn_context_request_pool(ctx);
+    pn_request_t*      slot0 = pn_request_pool_get(pool, 0);
+
+    s_lock_hook = hook_promote_tick;
+    assert_int_equal(PUBNUB_OK, pubnub_future_cancel(p));
+    assert_null(s_lock_hook);
+
+    assert_int_equal(1, slot0->cancel_requested);
+    assert_int_equal(1, pn_pending_queue_count(pn_context_pending_queue(ctx)));
+    assert_int_equal(PUBNUB_IN_PROGRESS, pubnub_future_status(q));
+
+    pubnub_destroy(ctx);
+    assert_int_equal(0, s_leak_outstanding);
+}
+
+#endif /* PUBNUB_CFG_THREAD_SAFETY && !PUBNUB_CFG_NO_HEAP */
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -2061,6 +2669,34 @@ int main(void)
         cmocka_unit_test_setup(release_pending_future_cleans_feature_state,
                                setup_test),
         cmocka_unit_test_setup(async_on_cancelled_pending_fires_cancelled, setup_test),
+#endif
+#if PUBNUB_CFG_THREAD_SAFETY && !PUBNUB_CFG_NO_HEAP
+        cmocka_unit_test_setup(release_terminal_bg_mode_defers_cancel_to_tick,
+                               setup_test),
+        cmocka_unit_test_setup(release_terminal_bg_mode_wakes_transport, setup_test),
+#if PUBNUB_ENABLE_RETRY
+        cmocka_unit_test_setup(release_retry_chain_direct_forwards_inner_handle,
+                               setup_test),
+        cmocka_unit_test_setup(release_retry_chain_deferred_forwards_inner_handle,
+                               setup_test),
+#endif
+        cmocka_unit_test_setup(
+            release_terminal_bg_mode_null_handle_releases_immediately, setup_test),
+        cmocka_unit_test_setup(release_during_poll_defers_to_same_tick, setup_test),
+        cmocka_unit_test_setup(direct_release_claim_blocks_concurrent_tick,
+                               setup_test),
+        cmocka_unit_test_setup(release_twice_in_deferral_window_cancels_once,
+                               setup_test),
+        cmocka_unit_test_setup(destroy_flushes_deferred_terminal_release, setup_test),
+        cmocka_unit_test_setup(deferred_release_backpressure_promotes_pending,
+                               setup_test),
+        cmocka_unit_test_setup(release_other_future_from_callback_bg_mode, setup_test),
+        cmocka_unit_test_setup(
+            deferred_release_second_release_does_not_free_new_request, setup_test),
+        cmocka_unit_test_setup(future_cancel_then_release_bg_mode_single_cancel,
+                               setup_test),
+        cmocka_unit_test_setup(release_pending_after_promotion_race, setup_test),
+        cmocka_unit_test_setup(cancel_pending_after_promotion_race, setup_test),
 #endif
         cmocka_unit_test_setup(
             async_on_invalid_future_returns_error_not_fires_callback, setup_test),

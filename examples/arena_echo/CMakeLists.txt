@@ -19,7 +19,9 @@ if(UNIX OR WIN32)
     target_link_libraries(_arena_echo_posix_platform PUBLIC pubnub_public_headers)
     target_compile_definitions(
         _arena_echo_posix_platform
-        PRIVATE _POSIX_C_SOURCE=200809L _DEFAULT_SOURCE
+        PRIVATE
+            $<$<NOT:$<PLATFORM_ID:Windows>>:_POSIX_C_SOURCE=200809L>
+            $<$<NOT:$<PLATFORM_ID:Windows>>:_DEFAULT_SOURCE>
     )
     find_package(Threads REQUIRED)
     target_link_libraries(_arena_echo_posix_platform PUBLIC Threads::Threads)

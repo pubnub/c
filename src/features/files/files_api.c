@@ -305,7 +305,7 @@ pubnub_future_t pubnub_send_file(pubnub_context_t*              ctx,
                                pn_file_send_state_cleanup,
                                NULL,
                                PUBNUB_HTTP_POST,
-                               cfg,
+                               ctx,
                                eff_opts.timeout_ms);
     if (PUBNUB_OK != rc) {
         pn_prep_release(ctx, entry);
@@ -443,7 +443,7 @@ pubnub_future_t pubnub_delete_file(pubnub_context_t*                ctx,
                                                 NULL,
                                                 NULL,
                                                 PUBNUB_HTTP_DELETE,
-                                                cfg,
+                                                ctx,
                                                 opts->timeout_ms);
         if (PUBNUB_OK != rc) {
             pn_prep_release(ctx, entry);
@@ -649,7 +649,9 @@ pubnub_res_t pubnub_get_file_url(pubnub_context_t*                 ctx,
     if (PUBNUB_OK != pn_validate_ctx(ctx, &cfg)) {
         return PUBNUB_ERR_INVALID_ARGUMENT;
     }
-    if (NULL == cfg->origin) {
+    char origin[PUBNUB_CFG_MAX_HOSTNAME_LEN];
+
+    if (PUBNUB_OK != pn_context_origin_snapshot(ctx, origin, sizeof(origin), NULL)) {
         return PUBNUB_ERR_INVALID_ARGUMENT;
     }
 
@@ -683,7 +685,7 @@ pubnub_res_t pubnub_get_file_url(pubnub_context_t*                 ctx,
                              buf_size,
                              "%s://%s/v1/files/%s/channels/%s/files/%s/%s",
                              scheme,
-                             cfg->origin,
+                             origin,
                              cfg->subscribe_key,
                              enc_channel,
                              enc_file_id,

@@ -167,19 +167,25 @@ static pubnub_res_t pn_file_classify_s3_error(const uint8_t* body, size_t body_l
  * @brief Reset the slot's HTTP descriptors for re-use in the next
  *        state machine step.
  *
- * Zeroes both request and response, preserving the slot's structural
- * fields (slot_id, feature_state, on_complete chain).
+ * Cancels the finished step's transport handle, zeroes both request and
+ * response and destroys the slot's cached parse tree of the finished step,
+ * preserving the slot's structural fields (slot_id, feature_state,
+ * on_complete chain).
  */
-static void pn_file_reset_slot_http(pn_request_t* slot)
+static void pn_file_reset_slot_http(pn_request_t* slot, pn_file_send_state_t* state)
 {
+    /* The pipeline's lazy parse owns a tree for the finished step; drop
+     * it here or it leaks (the pool only sees what is still cached). */
+    pn_request_release_parsed_body(slot);
+
+    /* Cancel before the zeroing below: the cancel frees the rx buffer that
+     * the response body aliased and reads the request the retry middleware
+     * tracks. */
+    pn_context_cancel_slot_transport(state->ctx, slot->slot_id);
     memset(&slot->http_request, 0, sizeof(slot->http_request));
     memset(&slot->http_response, 0, sizeof(slot->http_response));
-    slot->transport_handle      = NULL;
-    slot->parsed_body_tree      = NULL;
-    slot->parsed_body_owner     = NULL;
-    slot->parsed_body_attempted = 0;
-    slot->svc_error_kind        = 0;
-    slot->svc_error_classified  = 0;
+    slot->svc_error_kind       = 0;
+    slot->svc_error_classified = 0;
 
     /* Clear the readiness gate: the slot is being re-armed for the next
      * state-machine step (re-dispatch), so it must NOT report ready until
@@ -235,6 +241,8 @@ static pubnub_res_t pn_file_dispatch_publish(pn_request_t*         slot,
     pn_file_publish_inputs_t  inputs;
     pubnub_crypto_module_t*   crypto_mod = NULL;
     pn_file_publish_encoded_t encoded;
+    char                      host[PUBNUB_CFG_MAX_HOSTNAME_LEN];
+    uint16_t                  origin_generation = 0;
     pubnub_res_t              rc;
 
     if (NULL == config) {
@@ -251,7 +259,7 @@ static pubnub_res_t pn_file_dispatch_publish(pn_request_t*         slot,
         state->publish_encoded.message = NULL;
     }
 
-    pn_file_reset_slot_http(slot);
+    pn_file_reset_slot_http(slot, state);
 
     memset(&inputs, 0, sizeof(inputs));
     inputs.publish_key         = config->publish_key;
@@ -282,11 +290,18 @@ static pubnub_res_t pn_file_dispatch_publish(pn_request_t*         slot,
         return rc;
     }
 
-    /* Set host/secure/timeout for the PubNub publish endpoint. */
-    rc = pn_request_set_host(&slot->http_request, config->origin);
+    /* Host and generation come from one locked snapshot so they match. */
+    rc = pn_context_origin_snapshot(
+        state->ctx, host, sizeof(host), &origin_generation);
     if (PUBNUB_OK != rc) {
         return rc;
     }
+    rc = pn_request_set_host(&slot->http_request, host);
+    if (PUBNUB_OK != rc) {
+        return rc;
+    }
+
+    slot->origin_generation   = origin_generation;
     slot->http_request.secure = PUBNUB_ENABLE_SECURE_TRANSPORT;
     if (0 != state->timeout_ms) {
         slot->http_request.timeout_ms = state->timeout_ms;
@@ -322,7 +337,10 @@ void pn_file_send_on_generate_complete(pn_request_t* request,
                                        pubnub_res_t  status,
                                        void*         user_data)
 {
-    pn_file_send_state_t* state = (pn_file_send_state_t*)user_data;
+    pn_file_send_state_t* state       = (pn_file_send_state_t*)user_data;
+    pubnub_json_value_t*  shared_tree = NULL;
+    pubnub_res_t          rc;
+
     if (NULL == state || NULL == request) {
         return;
     }
@@ -333,12 +351,18 @@ void pn_file_send_on_generate_complete(pn_request_t* request,
         return;
     }
 
-    /* Parse the generate-upload-url response. */
-    pubnub_res_t rc =
-        pn_file_parse_generate_url_response(state->serialization,
-                                            request->http_response.body,
-                                            request->http_response.body_len,
-                                            state);
+    /* Reuse the tree the pipeline already parsed. Fall back to a private parse
+     * when the cache is empty or was produced by a different provider. */
+    shared_tree = pn_request_get_parsed_body(request, state->serialization);
+
+    if (NULL != shared_tree && request->parsed_body_owner == state->serialization) {
+        rc = pn_file_parse_generate_url_tree(state->serialization, shared_tree, state);
+    } else {
+        rc = pn_file_parse_generate_url_response(state->serialization,
+                                                 request->http_response.body,
+                                                 request->http_response.body_len,
+                                                 state);
+    }
     if (PUBNUB_OK != rc) {
         pn_file_fail_slot(request, state, rc);
         return;
@@ -450,7 +474,7 @@ void pn_file_send_on_generate_complete(pn_request_t* request,
     }
 
     /* Reconfigure the slot for S3 upload. */
-    pn_file_reset_slot_http(request);
+    pn_file_reset_slot_http(request, state);
 
     rc = pn_file_build_upload_request(&request->http_request,
                                       state->upload_host,

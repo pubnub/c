@@ -729,6 +729,66 @@ static void rapid_sequential_operations_same_context(void** state)
     }
 }
 
+/*
+ * Test: release_from_user_thread_while_bg_reuses_keepalive
+ *
+ * Starts the background thread (pubnub_async starts it lazily) and then
+ * runs a long publish -> await -> release loop from the test thread while
+ * the background thread keeps reusing one keep-alive connection. The release
+ * must go to the background thread rather than tear the connection down here.
+ */
+
+/** Iterations of the publish/await/release loop. */
+#define TS_KEEPALIVE_N 200U
+
+static void on_warmup_cb(pubnub_future_t future, pubnub_res_t status, void* user_data)
+{
+    ts_cb_ctx_t* cb = (ts_cb_ctx_t*)user_data;
+    cb->status      = status;
+    pubnub_future_release(future);
+    cb->done = 1;
+}
+
+static void release_from_user_thread_while_bg_reuses_keepalive(void** state)
+{
+    it_test_state_t* s  = *state;
+    ts_cb_ctx_t      cb = {0};
+    pubnub_future_t  warm;
+    unsigned int     i;
+    int              waited;
+
+    print_message("channel: %s", s->channel);
+
+    it_cleanup_add(&s->cleanup, IT_CLEANUP_DELETE_MESSAGES, s->channel, NULL);
+
+    warm = pubnub_publish(s->ctx,
+                          &(pubnub_publish_opts_t){
+                              .channel = s->channel,
+                              .message = "\"ts-ka-warmup\"",
+                          });
+    assert_int_equal(PUBNUB_OK, pubnub_async(warm, on_warmup_cb, &cb));
+    waited = pn_test_wait_until(ts_is_done, &cb, TS_WAIT_MS, TS_POLL_MS);
+    assert_true(waited);
+    assert_int_equal(PUBNUB_OK, cb.status);
+
+    for (i = 0U; i < TS_KEEPALIVE_N; ++i) {
+        pubnub_future_t fut;
+        pubnub_res_t    st;
+
+        fut = pubnub_publish(s->ctx,
+                             &(pubnub_publish_opts_t){
+                                 .channel = s->channel,
+                                 .message = "\"ts-ka\"",
+                             });
+        st  = pubnub_await(fut);
+        if (PUBNUB_OK != st) {
+            print_error("keep-alive iteration %u failed: %s", i, pubnub_res_str(st));
+        }
+        assert_int_equal(PUBNUB_OK, st);
+        pubnub_future_release(fut);
+    }
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -750,6 +810,8 @@ int main(void)
         cmocka_unit_test_setup_teardown(cancel_from_callback, setup, teardown),
         cmocka_unit_test_setup_teardown(
             rapid_sequential_operations_same_context, setup, teardown),
+        cmocka_unit_test_setup_teardown(
+            release_from_user_thread_while_bg_reuses_keepalive, setup, teardown),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 }

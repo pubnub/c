@@ -149,7 +149,6 @@ set(PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS
     "Max concurrent in-flight requests per context"
 )
 set(PUBNUB_CFG_MAX_PENDING_REQUESTS "8" CACHE STRING "Max queued pending requests per context")
-set(PUBNUB_CFG_REQUEST_BUFFER_SIZE "4096" CACHE STRING "Request buffer size in bytes")
 set(PUBNUB_CFG_RESPONSE_BUFFER_SIZE "32768" CACHE STRING "Response buffer size in bytes")
 set(PUBNUB_CFG_OBJECT_BUFFER_SIZE
     "30000"
@@ -171,7 +170,6 @@ set(PUBNUB_CFG_SCRATCH_BUFFER_SIZE
     CACHE STRING
     "Shared scratch buffer size for URL/JSON assembly in bytes"
 )
-set(PUBNUB_CFG_URL_BUFFER_SIZE "2048" CACHE STRING "URL encode scratch buffer size in bytes")
 set(PUBNUB_CFG_MAX_POLL_MS
     "100"
     CACHE STRING
@@ -294,7 +292,10 @@ pubnub_apply_feature_requirements()
 
 # Subscribe-specific
 if(PUBNUB_ENABLE_SUBSCRIBE)
-    set(PUBNUB_CFG_MAX_SUBSCRIBE_CHANNELS "64" CACHE STRING "Max subscribe channel list length")
+    set(PUBNUB_CFG_MAX_SUBSCRIBE_CHANNELS "64" CACHE STRING "Max distinct subscribe entities")
+    set(PUBNUB_CFG_MAX_SUBSCRIPTIONS "128" CACHE STRING "Max subscription handles")
+    set(PUBNUB_CFG_MAX_SUBSCRIPTION_SETS "16" CACHE STRING "Max subscription sets")
+    set(PUBNUB_CFG_MAX_SUBSCRIPTIONS_PER_SET "32" CACHE STRING "Max subscriptions per set")
     set(PUBNUB_CFG_MAX_SUBSCRIBE_LISTENERS "8" CACHE STRING "Max subscribe listener registrations")
     set(PUBNUB_CFG_SUBSCRIBE_MAX_BATCH_SIZE
         "100"
@@ -503,6 +504,15 @@ if(PUBNUB_ENABLE_PAM AND NOT PUBNUB_ENABLE_CRYPTO)
     )
 endif()
 
+if(PUBNUB_CFG_NO_HEAP AND PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS GREATER 16)
+    message(
+        FATAL_ERROR
+        "[PubNub] PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS=${PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS} "
+        "exceeds 16 for no-heap builds: pn_process_tick keeps scratch arrays on the stack. "
+        "Lower the value or build with heap."
+    )
+endif()
+
 # ---------------------------------------------------------------------------
 # Auto-compute minimum pipeline middleware slots from enabled features.
 # User -D override is respected if >= the computed floor.
@@ -552,6 +562,18 @@ pubnub_validate_providers()
 # ---------------------------------------------------------------------------
 pubnub_print_feature_summary()
 pubnub_print_provider_summary()
+
+if(PUBNUB_ENABLE_SUBSCRIBE)
+    message(STATUS "")
+    message(STATUS "[PubNub] ===== Subscribe Limits =====")
+    message(STATUS "[PubNub]   channels (entities)   : ${PUBNUB_CFG_MAX_SUBSCRIBE_CHANNELS}")
+    message(STATUS "[PubNub]   subscription handles  : ${PUBNUB_CFG_MAX_SUBSCRIPTIONS}")
+    message(STATUS "[PubNub]   subscription sets     : ${PUBNUB_CFG_MAX_SUBSCRIPTION_SETS}")
+    message(STATUS "[PubNub]   subscriptions per set : ${PUBNUB_CFG_MAX_SUBSCRIPTIONS_PER_SET}")
+    message(STATUS "[PubNub]   listeners             : ${PUBNUB_CFG_MAX_SUBSCRIBE_LISTENERS}")
+    message(STATUS "[PubNub] ================================")
+    message(STATUS "")
+endif()
 
 # ---------------------------------------------------------------------------
 # Determine which provider families have compiled-in defaults.

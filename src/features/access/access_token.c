@@ -10,6 +10,7 @@
 #endif
 
 #include "core/core_internal.h"
+#include "core/pn_lock.h"
 #include "core/protocol_common/pn_base64.h"
 #include "pubnub/capabilities.h"
 
@@ -32,7 +33,7 @@
  */
 static pubnub_res_t base64url_to_base64(char* buf, size_t len, size_t cap, size_t* out_len)
 {
-    size_t pad_needed = (4 - (len & 3)) & 3;
+    size_t pad_needed = (4 - (len & 3U)) & 3U;
     size_t i;
 
     if (len + pad_needed >= cap) {
@@ -270,6 +271,20 @@ pubnub_res_t pn_access_parse_token_impl(const char*                  token,
         out->result.uuid_pattern_count    = (uint32_t)count_map_entries(uuid);
     }
 
+    pn_cbor_value_t* cat_node = pn_cbor_map_get(root, "cat", 3);
+    if (NULL != cat_node && PN_CBOR_MAP == cat_node->type) {
+        pn_cbor_value_t* chan = pn_cbor_map_get(cat_node, "chan", 4);
+        pn_cbor_value_t* uuid = pn_cbor_map_get(cat_node, "uuid", 4);
+
+        if (NULL != chan && PN_CBOR_UINT == chan->type) {
+            out->result.channels_category_permissions =
+                (uint32_t)chan->data.uint_val;
+        }
+        if (NULL != uuid && PN_CBOR_UINT == uuid->type) {
+            out->result.uuids_category_permissions = (uint32_t)uuid->data.uint_val;
+        }
+    }
+
     /*
      * Transfer ownership: the decoded buffer must remain alive because
      * CBOR string/bytes nodes alias it. Store both in the output state.
@@ -306,13 +321,6 @@ pubnub_res_t pubnub_parse_token(pubnub_context_t*                ctx,
         return rc;
     }
 
-    /* Clean up any previously cached parse state. */
-    pn_access_token_state_t* prev =
-        (pn_access_token_state_t*)pn_context_feature_state(ctx, PUBNUB_FEATURE_PAM);
-    if (NULL != prev) {
-        pn_access_token_state_cleanup(prev, alloc);
-    }
-
     /* Allocate new persistent state for caching. */
     pn_access_token_state_t* cached = (pn_access_token_state_t*)PN_ALLOC(
         alloc, sizeof(pn_access_token_state_t), 0);
@@ -323,9 +331,21 @@ pubnub_res_t pubnub_parse_token(pubnub_context_t*                ctx,
     }
     memcpy(cached, &new_state, sizeof(*cached));
 
-    /* Store in feature registry (replaces previous). */
+    /* Swap under the context lock (the background thread scans the feature
+     * registry); release the previous state outside it. */
+    pubnub_platform_provider_t* platform = pn_context_platform(ctx);
+    pubnub_lock_t*              lock     = pn_context_mutex_mem(ctx);
+
+    pn_ctx_lock(platform, lock);
+    pn_access_token_state_t* prev =
+        (pn_access_token_state_t*)pn_context_feature_state(ctx, PUBNUB_FEATURE_PAM);
     pn_context_set_feature_state(
         ctx, PUBNUB_FEATURE_PAM, cached, pn_access_token_state_cleanup);
+    pn_ctx_unlock(platform, lock);
+
+    if (NULL != prev) {
+        pn_access_token_state_cleanup(prev, alloc);
+    }
 
     *out_result = cached->result;
 

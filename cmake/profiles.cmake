@@ -51,15 +51,16 @@ set(_PN_PROFILE_TRACKED_VARS
     PUBNUB_CFG_NO_HEAP
     PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS
     PUBNUB_CFG_MAX_PENDING_REQUESTS
-    PUBNUB_CFG_REQUEST_BUFFER_SIZE
     PUBNUB_CFG_RESPONSE_BUFFER_SIZE
     PUBNUB_CFG_OBJECT_BUFFER_SIZE
     PUBNUB_CFG_MAX_OBJ_BUFFER_SIZE
     PUBNUB_CFG_MAX_RESPONSE_BUFFER_SIZE
     PUBNUB_CFG_SCRATCH_BUFFER_SIZE
-    PUBNUB_CFG_URL_BUFFER_SIZE
     PUBNUB_CFG_ORIGIN
     PUBNUB_CFG_MAX_SUBSCRIBE_CHANNELS
+    PUBNUB_CFG_MAX_SUBSCRIPTIONS
+    PUBNUB_CFG_MAX_SUBSCRIPTION_SETS
+    PUBNUB_CFG_MAX_SUBSCRIPTIONS_PER_SET
     PUBNUB_CFG_MAX_SUBSCRIBE_LISTENERS
     PUBNUB_CFG_SUBSCRIBE_MAX_BATCH_SIZE
     PUBNUB_CFG_MAX_POLL_MS
@@ -203,15 +204,16 @@ function(pubnub_apply_profile)
         _pn_profile_set(PUBNUB_CFG_NO_HEAP "0")
         _pn_profile_set(PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS "16")
         _pn_profile_set(PUBNUB_CFG_MAX_PENDING_REQUESTS "32")
-        _pn_profile_set(PUBNUB_CFG_REQUEST_BUFFER_SIZE "4096")
         _pn_profile_set(PUBNUB_CFG_RESPONSE_BUFFER_SIZE "32768")
         _pn_profile_set(PUBNUB_CFG_OBJECT_BUFFER_SIZE "33792")
         _pn_profile_set(PUBNUB_CFG_MAX_OBJ_BUFFER_SIZE "8388608")
         _pn_profile_set(PUBNUB_CFG_MAX_RESPONSE_BUFFER_SIZE "16777216")
         _pn_profile_set(PUBNUB_CFG_SCRATCH_BUFFER_SIZE "4096")
-        _pn_profile_set(PUBNUB_CFG_URL_BUFFER_SIZE "2048")
         _pn_profile_set(PUBNUB_CFG_ORIGIN "ps.pndsn.com")
         _pn_profile_set(PUBNUB_CFG_MAX_SUBSCRIBE_CHANNELS "64")
+        _pn_profile_set(PUBNUB_CFG_MAX_SUBSCRIPTIONS "128")
+        _pn_profile_set(PUBNUB_CFG_MAX_SUBSCRIPTION_SETS "16")
+        _pn_profile_set(PUBNUB_CFG_MAX_SUBSCRIPTIONS_PER_SET "32")
         _pn_profile_set(PUBNUB_CFG_MAX_SUBSCRIBE_LISTENERS "8")
         _pn_profile_set(PUBNUB_CFG_SUBSCRIBE_MAX_BATCH_SIZE "100")
         _pn_profile_set(PUBNUB_CFG_MAX_POLL_MS "100")
@@ -308,15 +310,16 @@ function(pubnub_apply_profile)
         _pn_profile_set(PUBNUB_CFG_NO_HEAP "0")
         _pn_profile_set(PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS "8")
         _pn_profile_set(PUBNUB_CFG_MAX_PENDING_REQUESTS "8")
-        _pn_profile_set(PUBNUB_CFG_REQUEST_BUFFER_SIZE "4096")
         _pn_profile_set(PUBNUB_CFG_RESPONSE_BUFFER_SIZE "32768")
         _pn_profile_set(PUBNUB_CFG_OBJECT_BUFFER_SIZE "33792")
         _pn_profile_set(PUBNUB_CFG_MAX_OBJ_BUFFER_SIZE "8388608")
         _pn_profile_set(PUBNUB_CFG_MAX_RESPONSE_BUFFER_SIZE "16777216")
         _pn_profile_set(PUBNUB_CFG_SCRATCH_BUFFER_SIZE "4096")
-        _pn_profile_set(PUBNUB_CFG_URL_BUFFER_SIZE "2048")
         _pn_profile_set(PUBNUB_CFG_ORIGIN "ps.pndsn.com")
         _pn_profile_set(PUBNUB_CFG_MAX_SUBSCRIBE_CHANNELS "64")
+        _pn_profile_set(PUBNUB_CFG_MAX_SUBSCRIPTIONS "64")
+        _pn_profile_set(PUBNUB_CFG_MAX_SUBSCRIPTION_SETS "8")
+        _pn_profile_set(PUBNUB_CFG_MAX_SUBSCRIPTIONS_PER_SET "16")
         _pn_profile_set(PUBNUB_CFG_MAX_SUBSCRIBE_LISTENERS "8")
         _pn_profile_set(PUBNUB_CFG_SUBSCRIBE_MAX_BATCH_SIZE "32")
         _pn_profile_set(PUBNUB_CFG_MAX_POLL_MS "100")
@@ -409,15 +412,16 @@ function(pubnub_apply_profile)
         _pn_profile_set(PUBNUB_CFG_NO_HEAP "1")
         _pn_profile_set(PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS "2")
         _pn_profile_set(PUBNUB_CFG_MAX_PENDING_REQUESTS "2")
-        _pn_profile_set(PUBNUB_CFG_REQUEST_BUFFER_SIZE "1024")
         _pn_profile_set(PUBNUB_CFG_RESPONSE_BUFFER_SIZE "4096")
         _pn_profile_set(PUBNUB_CFG_OBJECT_BUFFER_SIZE "2048")
         _pn_profile_set(PUBNUB_CFG_MAX_OBJ_BUFFER_SIZE "0")
         _pn_profile_set(PUBNUB_CFG_MAX_RESPONSE_BUFFER_SIZE "0")
         _pn_profile_set(PUBNUB_CFG_SCRATCH_BUFFER_SIZE "1024")
-        _pn_profile_set(PUBNUB_CFG_URL_BUFFER_SIZE "512")
         _pn_profile_set(PUBNUB_CFG_ORIGIN "ps.pndsn.com")
         _pn_profile_set(PUBNUB_CFG_MAX_SUBSCRIBE_CHANNELS "8")
+        _pn_profile_set(PUBNUB_CFG_MAX_SUBSCRIPTIONS "8")
+        _pn_profile_set(PUBNUB_CFG_MAX_SUBSCRIPTION_SETS "2")
+        _pn_profile_set(PUBNUB_CFG_MAX_SUBSCRIPTIONS_PER_SET "8")
         _pn_profile_set(PUBNUB_CFG_MAX_SUBSCRIBE_LISTENERS "4")
         _pn_profile_set(PUBNUB_CFG_SUBSCRIBE_MAX_BATCH_SIZE "8")
         _pn_profile_set(PUBNUB_CFG_MAX_POLL_MS "100")
@@ -492,7 +496,11 @@ function(pubnub_apply_profile)
     # Warn when crypto is enabled on a user-owned-pool profile: NULL allocator
     # is not available (pn_allocator_default returns NULL). Pass an explicit
     # allocator to pubnub_crypto_module_aes_cbc() and related functions.
-    if(PUBNUB_ENABLE_CRYPTO AND NOT PUBNUB_CFG_ARENA_POOL_OWNER_SDK)
+    if(
+        PUBNUB_ENABLE_CRYPTO
+        AND PUBNUB_PROVIDER_ALLOCATOR STREQUAL "arena"
+        AND NOT PUBNUB_CFG_ARENA_POOL_OWNER_SDK
+    )
         message(
             STATUS
             "[PubNub] PUBNUB_ENABLE_CRYPTO=ON with user-owned arena (PUBNUB_CFG_ARENA_POOL_OWNER_SDK=0). "

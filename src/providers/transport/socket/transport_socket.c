@@ -47,12 +47,12 @@ pubnub_transport_provider_t* pn_transport_default(pubnub_allocator_provider_t* a
  * index + generation by the DECODE macros. Generation starts at 1
  * (pn_connection_init) so ENCODE(0, gen) is never NULL.
  */
-#define PN_SOCKET_HANDLE_ENCODE(idx, gen)                           \
-    ((pubnub_transport_handle_t*)(uintptr_t)(((uint32_t)(gen) << 8) \
+#define PN_SOCKET_HANDLE_ENCODE(idx, gen)                            \
+    ((pubnub_transport_handle_t*)(uintptr_t)(((uint32_t)(gen) << 8U) \
                                              | ((uint32_t)(idx) & 0xFFu)))
 
 #define PN_SOCKET_HANDLE_INDEX(h) ((int)((uintptr_t)(h) & 0xFFu))
-#define PN_SOCKET_HANDLE_GEN(h)   ((uint16_t)(((uintptr_t)(h) >> 8) & 0xFFFFu))
+#define PN_SOCKET_HANDLE_GEN(h)   ((uint16_t)(((uintptr_t)(h) >> 8U) & 0xFFFFu))
 
 /**
  * @brief Outcome of one decompression attempt.
@@ -138,6 +138,18 @@ static void socket_decomp_fail(pn_socket_connection_t* conn, pubnub_res_t err)
 }
 
 /**
+ * @brief Whether a connection still backs an unreleased completed response.
+ *
+ * The response views alias the connection's rx buffer until the request is
+ * released, so such a connection must not be reused, evicted or reaped.
+ */
+static int conn_holds_response(const pn_socket_connection_t* conn)
+{
+    return NULL != conn->response
+        && PUBNUB_HTTP_COMPLETE == conn->response->completion;
+}
+
+/**
  * @brief Find a KEEP_ALIVE_IDLE slot matching the request target.
  *
  * Returns the slot index, or -1 if no reusable connection exists.
@@ -155,7 +167,7 @@ static int find_reusable_slot(pn_socket_transport_t*       t,
 
     for (i = 0; i < PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS; ++i) {
         pn_socket_connection_t* conn = &t->connections[i];
-        if (PN_CONN_KEEP_ALIVE_IDLE != conn->state) {
+        if (PN_CONN_KEEP_ALIVE_IDLE != conn->state || conn_holds_response(conn)) {
             continue;
         }
         pn_keepalive_conn_state_t conn_state = {
@@ -185,14 +197,16 @@ static int find_reusable_slot(pn_socket_transport_t*       t,
 /**
  * @brief Find the first IDLE slot in the connection pool.
  *
- * Returns the slot index, or -1 if all slots are occupied.
+ * Skips slots whose response is still held by an unreleased request.
+ * Returns the slot index, or -1 if none is available.
  */
 static int find_idle_slot(const pn_socket_transport_t* t)
 {
     int i;
 
     for (i = 0; i < PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS; ++i) {
-        if (PN_CONN_IDLE == t->connections[i].state) {
+        if (PN_CONN_IDLE == t->connections[i].state
+            && !conn_holds_response(&t->connections[i])) {
             return i;
         }
     }
@@ -224,10 +238,7 @@ static int find_evictable_slot(pn_socket_transport_t* t)
         if (PN_CONN_KEEP_ALIVE_IDLE != conn->state && PN_CONN_IDLE != conn->state) {
             continue;
         }
-        /* Skip connections whose response body is still consumable —
-         * a caller holding a future may still read the body. */
-        if (NULL != conn->response
-            && PUBNUB_HTTP_COMPLETE == conn->response->completion) {
+        if (conn_holds_response(conn)) {
             continue;
         }
         age = conn->idle_since_ms;
@@ -270,14 +281,44 @@ static uint8_t events_for_state(pn_conn_state_t state)
 {
     switch (state) {
     case PN_CONN_CONNECTING:
+    case PN_CONN_TLS_DEFERRED:
     case PN_CONN_SENDING_HEADERS:
     case PN_CONN_SENDING_BODY:
     case PN_CONN_TLS_HANDSHAKING: return PN_POLL_WRITE | PN_POLL_READ;
     case PN_CONN_RECEIVING_RESPONSE: return PN_POLL_READ;
     case PN_CONN_DNS_RESOLVING:
     case PN_CONN_PROXY_NEGOTIATING: return PN_POLL_READ | PN_POLL_WRITE;
-    default: return 0;
+    case PN_CONN_IDLE:
+    case PN_CONN_COMPLETE:
+    case PN_CONN_FAILED:
+    case PN_CONN_CLOSING:
+    case PN_CONN_KEEP_ALIVE_IDLE:
+    case PN_CONN_CANCELLED: return 0;
     }
+    return 0;
+}
+
+/**
+ * @brief Poll interest for a connection's socket right now.
+ *
+ * A TLS handshake waiting on the peer registers only readability, so an
+ * always-writable socket cannot busy-loop poll_wait. Without a working wake
+ * pipe the handshake keeps WRITE|READ.
+ *
+ * @param t    Transport (wake pipe presence).
+ * @param conn Connection to inspect.
+ * @return Non-empty PN_POLL_* mask for states that wait on the socket,
+ *         0 for states with no interest.
+ */
+static uint8_t events_for_conn(const pn_socket_transport_t*  t,
+                               const pn_socket_connection_t* conn)
+{
+    if (PN_CONN_TLS_HANDSHAKING == conn->state
+        && PN_INVALID_SOCKET != t->wake_pipe_wr && 0 == t->wake_degraded) {
+        return (uint8_t)(PN_POLL_READ
+                         | ((PN_POLL_WRITE == conn->tls_want) ? PN_POLL_WRITE : 0U));
+    }
+    return events_for_state(conn->state);
 }
 
 /**
@@ -348,6 +389,14 @@ static pubnub_transport_handle_t* socket_send(pubnub_transport_provider_t* self,
 
     int rc = pn_connection_start(conn, request, response, t);
     if (0 != rc) {
+        PUBNUB_LOG(
+            t->logger,
+            PUBNUB_LOG_LEVEL_ERROR,
+            "socket_send: conn[%d] pn_connection_start failed for host: %s "
+            "(rc=%d)",
+            slot,
+            (NULL != request->host) ? request->host : "(null)",
+            rc);
         response->completion      = PUBNUB_HTTP_ERROR;
         response->transport_error = PUBNUB_ERR_TRANSPORT;
         return NULL;
@@ -369,7 +418,7 @@ static pubnub_transport_handle_t* socket_send(pubnub_transport_provider_t* self,
     /* Register in poll set if the connection already has a socket
      * (keep-alive reuse skips DNS/connect). */
     if (PN_INVALID_SOCKET != conn->socket) {
-        uint8_t events = events_for_state(conn->state);
+        uint8_t events = events_for_conn(t, conn);
         if (0 != events) {
             poll_register_connection(t, conn, events);
         }
@@ -452,6 +501,14 @@ static pn_decomp_result_t socket_decomp_try(pn_socket_transport_t*  t,
     cap = conn->response->body_len * PN_DECOMP_CAP_RETRY_MULT;
     if (PUBNUB_CFG_SOCKET_DECOMP_MAX_BUFFER_SIZE > 0
         && cap > PUBNUB_CFG_SOCKET_DECOMP_MAX_BUFFER_SIZE) {
+        PUBNUB_LOG(t->logger,
+                   PUBNUB_LOG_LEVEL_ERROR,
+                   "inflate retry needs %u bytes, exceeding "
+                   "PUBNUB_CFG_SOCKET_DECOMP_MAX_BUFFER_SIZE=%u "
+                   "(body_len=%u)",
+                   (unsigned)cap,
+                   (unsigned)PUBNUB_CFG_SOCKET_DECOMP_MAX_BUFFER_SIZE,
+                   (unsigned)conn->response->body_len);
         socket_free_decomp_scratch(alloc, res.buf);
         socket_decomp_fail(conn, PUBNUB_ERR_TRANSPORT);
         res.buf = NULL;
@@ -588,6 +645,102 @@ static void socket_wake(pubnub_transport_provider_t* self)
     }
 }
 
+/**
+ * @brief Drop a failed wake pipe read end from the poll set.
+ *
+ * An errored read end stays ready on every wait and would spin the loop.
+ * The pipe pair stays open because wake() may use the write end.
+ *
+ * @param t    Transport; poll thread only.
+ * @param sock Wake read end that failed.
+ * @param ev   PN_POLL_* events it reported.
+ */
+static void socket_degrade_wake_pipe(pn_socket_transport_t* t,
+                                     pn_socket_t            sock,
+                                     uint8_t                ev)
+{
+    int i;
+
+    (void)ev; /* Only used by the log below, which can compile out. */
+    (void)t->ops->poll_remove(t->ops, &t->poll_set, sock);
+    t->wake_degraded = 1;
+
+    PUBNUB_LOG(t->logger,
+               PUBNUB_LOG_LEVEL_WARNING,
+               "wake pipe read end fd=%d failed (events=0x%x); cross-thread "
+               "wake disabled",
+               (int)sock,
+               (unsigned)ev);
+
+    for (i = 0; i < PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS; ++i) {
+        pn_socket_connection_t* conn = &t->connections[i];
+
+        if (PN_CONN_TLS_HANDSHAKING == conn->state
+            && PN_INVALID_SOCKET != conn->socket) {
+            t->ops->poll_modify(
+                t->ops, &t->poll_set, conn->socket, events_for_conn(t, conn));
+        }
+    }
+}
+
+/**
+ * @brief Inspect the ready set for a failed wake pipe read end.
+ *
+ * Healthy wake traffic reports exactly PN_POLL_READ; anything else means
+ * the descriptor can never become quiet again.
+ *
+ * @param t Transport; called from the poll thread only, after a successful
+ *          poll_wait.
+ */
+static void socket_check_wake_pipe(pn_socket_transport_t* t)
+{
+    size_t count;
+    size_t i;
+
+    if (PN_INVALID_SOCKET == t->wake_pipe_rd || 0 != t->wake_degraded
+        || NULL == t->ops->poll_ready_count || NULL == t->ops->poll_get_ready) {
+        return;
+    }
+
+    count = t->ops->poll_ready_count(t->ops, &t->poll_set);
+    for (i = 0; i < count; ++i) {
+        pn_socket_t sock = PN_INVALID_SOCKET;
+        uint8_t     ev   = 0;
+
+        if (0 != t->ops->poll_get_ready(t->ops, &t->poll_set, i, &sock, &ev)
+            || sock != t->wake_pipe_rd) {
+            continue;
+        }
+        if (0 != (ev & (PN_POLL_ERROR | PN_POLL_HUP)) || 0 == (ev & PN_POLL_READ)) {
+            socket_degrade_wake_pipe(t, sock, ev);
+        }
+        return;
+    }
+}
+
+/**
+ * @brief Whether a connection is waiting to dial without owning a socket.
+ *
+ * Such a connection dials on the next tick and needs no I/O readiness, so a
+ * zero-timeout wait avoids added latency.
+ *
+ * @param t Transport (poll thread).
+ * @return 1 when a zero-timeout wait lets the dial proceed, else 0.
+ */
+static int socket_has_pending_dial(const pn_socket_transport_t* t)
+{
+    int i;
+
+    for (i = 0; i < PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS; ++i) {
+        const pn_socket_connection_t* conn = &t->connections[i];
+
+        if (PN_CONN_CONNECTING == conn->state && PN_INVALID_SOCKET == conn->socket) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static int socket_poll(pubnub_transport_provider_t* self, unsigned int timeout_ms)
 {
     if (NULL == self) {
@@ -604,13 +757,26 @@ static int socket_poll(pubnub_transport_provider_t* self, unsigned int timeout_m
         now_ms = t->platform->monotonic_ms(t->platform);
     }
 
+    /* Without a working wake pipe nothing can interrupt a long wait, so cap
+     * it at the normal bounded poll interval. */
+    if (0 != t->wake_degraded && timeout_ms > PUBNUB_CFG_MAX_POLL_MS) {
+        timeout_ms = PUBNUB_CFG_MAX_POLL_MS;
+    }
+    if (0 != timeout_ms && socket_has_pending_dial(t)) {
+        timeout_ms = 0;
+    }
+
     /* Wait for I/O events. */
     int ready = t->ops->poll_wait(t->ops, &t->poll_set, (int)timeout_ms);
-    (void)ready;
+    if (0 <= ready) {
+        socket_check_wake_pipe(t);
+    }
 
     /* Drain the wake pipe so the next blocking poll is not immediately
-     * woken by stale wake bytes. Non-blocking; harmless when empty. */
-    if (PN_INVALID_SOCKET != t->wake_pipe_rd) {
+     * woken by stale wake bytes. Non-blocking; harmless when empty. Skipped
+     * once degraded: the descriptor number may have been closed and reused by
+     * host code, and its bytes are not ours to consume. */
+    if (PN_INVALID_SOCKET != t->wake_pipe_rd && 0 == t->wake_degraded) {
         if (NULL != t->ops->pipe_drain) {
             t->ops->pipe_drain(t->ops, t->wake_pipe_rd);
         } else {
@@ -633,9 +799,10 @@ static int socket_poll(pubnub_transport_provider_t* self, unsigned int timeout_m
             continue;
         }
 
-        /* Evict keep-alive connections that exceeded idle timeout. */
+        /* Evict keep-alive connections past the idle timeout; a held response
+         * is exempt and the idle clock restarts at release. */
         if (PN_CONN_KEEP_ALIVE_IDLE == prev_state) {
-            if (0 != now_ms && 0 != conn->idle_since_ms
+            if (!conn_holds_response(conn) && 0 != now_ms && 0 != conn->idle_since_ms
                 && now_ms - conn->idle_since_ms
                        > PUBNUB_CFG_SOCKET_KEEPALIVE_MAX_IDLE_MS) {
                 poll_unregister_connection(t, conn);
@@ -657,9 +824,13 @@ static int socket_poll(pubnub_transport_provider_t* self, unsigned int timeout_m
             continue;
         }
 
-        pn_conn_state_t old_socket_state = conn->state;
-        pn_socket_t     old_socket       = conn->socket;
-        int             just_completed   = 0;
+        pn_socket_t old_socket     = conn->socket;
+        uint8_t     ev_before      = 0;
+        int         just_completed = 0;
+
+        if (PN_INVALID_SOCKET != old_socket) {
+            ev_before = events_for_conn(t, conn);
+        }
 
         pn_conn_state_t new_state = pn_connection_tick(conn, t);
 
@@ -696,18 +867,18 @@ static int socket_poll(pubnub_transport_provider_t* self, unsigned int timeout_m
                 t->ops->poll_remove(t->ops, &t->poll_set, old_socket);
             }
             if (PN_INVALID_SOCKET != conn->socket) {
-                uint8_t ev = events_for_state(new_state);
+                uint8_t ev = events_for_conn(t, conn);
                 if (0 != ev) {
                     t->ops->poll_add(t->ops, &t->poll_set, conn->socket, ev);
                 }
             }
-        } else if (old_socket_state != new_state && PN_INVALID_SOCKET != conn->socket
-                   && !conn_is_terminal(new_state)
+        } else if (PN_INVALID_SOCKET != conn->socket && !conn_is_terminal(new_state)
                    && PN_CONN_KEEP_ALIVE_IDLE != new_state) {
-            /* State changed but same socket: update poll events. */
-            uint8_t ev = events_for_state(new_state);
-            if (0 != ev) {
-                t->ops->poll_modify(t->ops, &t->poll_set, conn->socket, ev);
+            /* Same socket: re-register only when the wanted interest changed,
+             * e.g. a TLS handshake flipping between WANT_READ and WANT_WRITE. */
+            uint8_t ev_after = events_for_conn(t, conn);
+            if (0 != ev_after && ev_before != ev_after) {
+                t->ops->poll_modify(t->ops, &t->poll_set, conn->socket, ev_after);
             }
         }
 
@@ -736,8 +907,11 @@ static int socket_poll(pubnub_transport_provider_t* self, unsigned int timeout_m
  * index is out of range or the generation does not match the current
  * connection slot, the handle is stale and the call is a safe no-op.
  *
- * For valid handles, cancels the connection and resets the slot to
- * IDLE so it can be reused by the next send().
+ * For valid handles on a connection that finished its request and sits in
+ * KEEP_ALIVE_IDLE, only the per-request resources are released: the socket
+ * and TLS session are kept for the next send() to the same target. Any other
+ * valid handle cancels the connection and resets the slot to IDLE so it can
+ * be reused by the next send().
  */
 static void socket_cancel(pubnub_transport_provider_t* self,
                           pubnub_transport_handle_t*   transport_handle)
@@ -767,12 +941,24 @@ static void socket_cancel(pubnub_transport_provider_t* self,
     conn = &t->connections[idx];
     if (conn->generation != gen) {
         PUBNUB_LOG(t->logger,
-                   PUBNUB_LOG_LEVEL_WARNING,
+                   PUBNUB_LOG_LEVEL_DEBUG,
                    "socket_cancel: stale handle for conn[%d] "
                    "(handle gen=%u, current gen=%u)",
                    idx,
                    (unsigned)gen,
                    (unsigned)conn->generation);
+        return;
+    }
+
+    /* A finished request on a live keep-alive connection: free only the
+     * per-request state. The idle socket is not in the poll set. */
+    if (pn_connection_release_request(conn, t)) {
+        PUBNUB_LOG(t->logger,
+                   PUBNUB_LOG_LEVEL_DEBUG,
+                   "socket_cancel: released finished request, conn[%d] "
+                   "kept alive (fd=%d)",
+                   idx,
+                   (int)conn->socket);
         return;
     }
 
@@ -1038,8 +1224,9 @@ static int pn_dns_parse_address(const char* str, pn_sockaddr_t* out)
 /** @brief Set up self-pipe for cross-thread wake. */
 static void socket_init_wake_pipe(pn_socket_transport_t* t)
 {
-    t->wake_pipe_rd = PN_INVALID_SOCKET;
-    t->wake_pipe_wr = PN_INVALID_SOCKET;
+    t->wake_pipe_rd  = PN_INVALID_SOCKET;
+    t->wake_pipe_wr  = PN_INVALID_SOCKET;
+    t->wake_degraded = 0;
     if (NULL == t->ops->pipe_create) {
         return;
     }
@@ -1067,13 +1254,16 @@ static void socket_cleanup_wake_pipe(pn_socket_transport_t* t)
     if (PN_INVALID_SOCKET == t->wake_pipe_rd) {
         return;
     }
-    t->ops->poll_remove(t->ops, &t->poll_set, t->wake_pipe_rd);
+    if (0 == t->wake_degraded) {
+        t->ops->poll_remove(t->ops, &t->poll_set, t->wake_pipe_rd);
+    }
     t->ops->socket_destroy(t->ops, t->wake_pipe_rd);
     if (t->wake_pipe_wr != t->wake_pipe_rd) {
         t->ops->socket_destroy(t->ops, t->wake_pipe_wr);
     }
-    t->wake_pipe_rd = PN_INVALID_SOCKET;
-    t->wake_pipe_wr = PN_INVALID_SOCKET;
+    t->wake_pipe_rd  = PN_INVALID_SOCKET;
+    t->wake_pipe_wr  = PN_INVALID_SOCKET;
+    t->wake_degraded = 0;
 }
 
 /** @brief Register DNS UDP sockets in the poll set. */
@@ -1446,9 +1636,10 @@ static pubnub_res_t socket_set_dns_servers(pubnub_transport_provider_t* self,
  * IDLE slot and drives it through the connection FSM. When a slot
  * reaches a terminal state (COMPLETE, FAILED, or CANCELLED), the
  * caller MUST invoke cancel() on the returned handle to return the
- * slot to IDLE. cancel() calls pn_connection_reset() unconditionally,
- * so every cancel() call — whether on an in-progress or terminal slot —
- * leaves the slot in PN_CONN_IDLE and ready for the next send().
+ * slot. cancel() resets in-progress and failed slots to PN_CONN_IDLE; a slot
+ * that completed on a keep-alive connection instead keeps its socket and TLS
+ * session in KEEP_ALIVE_IDLE (only the per-request state is released), and
+ * the next send() to the same target reuses it or evicts it for another.
  *
  * @param ops         Platform socket operations (poll, connect, etc.).
  * @param tls_backend TLS backend vtable (NULL disables TLS).

@@ -148,6 +148,13 @@ pn_transition_handshaking(const pn_subscribe_ee_event_t* event)
             &r, PN_SUB_EE_EFFECT_CANCEL_HANDSHAKE, (pn_subscribe_ee_status_t)0);
         return r;
 
+    case PN_SUB_EVENT_ORIGIN_CHANGED:
+        r.new_state = PN_SUBSCRIBE_STATE_HANDSHAKING;
+        pn_add_effect(
+            &r, PN_SUB_EE_EFFECT_CANCEL_HANDSHAKE, (pn_subscribe_ee_status_t)0);
+        pn_add_effect(&r, PN_SUB_EE_EFFECT_HANDSHAKE, (pn_subscribe_ee_status_t)0);
+        return r;
+
     default: return pn_no_transition(PN_SUBSCRIBE_STATE_HANDSHAKING);
     }
 }
@@ -274,6 +281,16 @@ pn_transition_receiving(const pn_subscribe_ee_event_t* event)
         pn_add_effect(
             &r, PN_SUB_EE_EFFECT_CANCEL_RECEIVE, (pn_subscribe_ee_status_t)0);
         pn_add_effect(&r, PN_SUB_EE_EFFECT_EMIT_STATUS, PN_SUB_EE_STATUS_DISCONNECTED);
+        return r;
+
+    case PN_SUB_EVENT_ORIGIN_CHANGED:
+        /* Same cursor and channels, new origin: no status, the loop simply
+         * continues. */
+        r.new_state = PN_SUBSCRIBE_STATE_RECEIVING;
+        pn_add_effect(
+            &r, PN_SUB_EE_EFFECT_CANCEL_RECEIVE, (pn_subscribe_ee_status_t)0);
+        pn_add_effect(
+            &r, PN_SUB_EE_EFFECT_RECEIVE_MESSAGES, (pn_subscribe_ee_status_t)0);
         return r;
 
     default: return pn_no_transition(PN_SUBSCRIBE_STATE_RECEIVING);

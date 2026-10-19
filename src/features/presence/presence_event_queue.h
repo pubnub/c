@@ -29,6 +29,7 @@ extern "C" {
  * Defaults to 8: 5 main-thread API entry points (joined, left, left_all,
  * disconnect, reconnect) + 1 heartbeat completion + 1 timer event + 1
  * headroom. Override via -DPUBNUB_CFG_PRESENCE_EVENT_QUEUE_SIZE=N.
+ * Must not exceed 255 (queue indices are uint8_t).
  */
 #ifndef PUBNUB_CFG_PRESENCE_EVENT_QUEUE_SIZE
 #define PUBNUB_CFG_PRESENCE_EVENT_QUEUE_SIZE 8

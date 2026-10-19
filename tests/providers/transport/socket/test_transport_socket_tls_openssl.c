@@ -10,23 +10,27 @@
 #include "providers/transport/socket/platform/pn_socket_types.h"
 #include "providers/transport/socket/tls/pn_tls_backend.h"
 #include "pubnub/providers/allocator.h"
+#include "pubnub/providers/logger.h"
 #include "pubnub/providers/provider_deps.h"
 
 #include <setjmp.h>
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include <cmocka.h>
 
-/* Network-free regression tests drive the backend over a socketpair against
- * an in-process TLS peer, and inspect the OpenSSL thread error queue directly
- * (POSIX + OpenSSL only). */
+/* Network-free tests drive the backend over a socketpair against an
+ * in-process TLS peer (POSIX + OpenSSL only). */
 #if !defined(_WIN32)
+#include <errno.h>
+#include <pthread.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <sched.h>
 #include <signal.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -73,6 +77,81 @@ static pubnub_provider_deps_t test_deps = {
     .proxy         = NULL,
     .tcp_keepalive = NULL,
 };
+
+#if !defined(_WIN32)
+#define BIO_RACE_THREADS 8
+
+static int s_bio_race_ready;
+static int s_bio_race_go;
+static int s_bio_race_failures;
+
+/** @brief Worker: wait at the start line, then create a context and session. */
+static void* bio_race_worker(void* arg)
+{
+    int             fds[2] = {-1, -1};
+    pn_tls_config_t cfg    = PN_TLS_CONFIG_INIT;
+    void*           ctx;
+    void*           session = NULL;
+
+    (void)arg;
+    if (0 != socketpair(AF_UNIX, SOCK_STREAM, 0, fds)) {
+        __atomic_add_fetch(&s_bio_race_failures, 1, __ATOMIC_RELAXED);
+        return NULL;
+    }
+    cfg.skip_verify = 1;
+
+    __atomic_add_fetch(&s_bio_race_ready, 1, __ATOMIC_ACQ_REL);
+    while (0 == __atomic_load_n(&s_bio_race_go, __ATOMIC_ACQUIRE)) {
+        sched_yield();
+    }
+    ctx = pn_tls_openssl_backend.ctx_create(&cfg, &test_deps);
+
+    if (NULL == ctx
+        || 0
+               != pn_tls_openssl_backend.session_create(
+                   &session, ctx, (pn_socket_t)fds[0], NULL, "localhost")
+        || NULL == session) {
+        __atomic_add_fetch(&s_bio_race_failures, 1, __ATOMIC_RELAXED);
+    }
+    if (NULL != session) {
+        pn_tls_openssl_backend.session_destroy(session);
+    }
+    if (NULL != ctx) {
+        pn_tls_openssl_backend.ctx_destroy(ctx);
+    }
+    close(fds[0]);
+    close(fds[1]);
+    return NULL;
+}
+
+/**
+ * @brief Concurrent first use of the shared BIO method.
+ *
+ * Races the lazy BIO method creation across worker threads.
+ */
+static void test_concurrent_session_create_publishes_bio_method(void** state)
+{
+    pthread_t threads[BIO_RACE_THREADS];
+    int       i;
+
+    (void)state;
+    s_bio_race_ready    = 0;
+    s_bio_race_go       = 0;
+    s_bio_race_failures = 0;
+
+    for (i = 0; i < BIO_RACE_THREADS; i++) {
+        assert_int_equal(0, pthread_create(&threads[i], NULL, bio_race_worker, NULL));
+    }
+    while (BIO_RACE_THREADS > __atomic_load_n(&s_bio_race_ready, __ATOMIC_ACQUIRE)) {
+        sched_yield();
+    }
+    __atomic_store_n(&s_bio_race_go, 1, __ATOMIC_RELEASE);
+    for (i = 0; i < BIO_RACE_THREADS; i++) {
+        assert_int_equal(0, pthread_join(threads[i], NULL));
+    }
+    assert_int_equal(0, s_bio_race_failures);
+}
+#endif /* !defined(_WIN32) */
 
 /**
  * @brief Unit test: create and destroy TLS context with defaults.
@@ -521,6 +600,336 @@ static void tls_openssl_should_not_raise_sigpipe_on_rst(void** state)
     (void)sigaction(SIGPIPE, &sa_old, NULL);
 }
 
+/** Capacity of the captured log text. */
+#define CAP_LOG_SIZE 4096
+
+/**
+ * @brief Logger that records every text entry as "<level-letter> <message>\n".
+ */
+typedef struct cap_logger {
+    /** Base provider (must be first member). */
+    pubnub_logger_provider_t base;
+    /** Concatenated captured entries (NUL-terminated). */
+    char text[CAP_LOG_SIZE];
+    /** Bytes used in text. */
+    size_t len;
+} cap_logger_t;
+
+static cap_logger_t g_cap;
+
+/**
+ * @brief Logger callback: append a text entry to the capture buffer.
+ *
+ * @param self  Provider (a cap_logger_t).
+ * @param entry Log entry; only text entries are recorded.
+ */
+static void cap_log(struct pubnub_logger_provider* self,
+                    const pubnub_log_entry_t*      entry)
+{
+    cap_logger_t* cap = (cap_logger_t*)self;
+    char          letter;
+    int           n;
+
+    if (PUBNUB_LOG_ENTRY_TEXT != entry->type) {
+        return;
+    }
+    switch (entry->level) {
+    case PUBNUB_LOG_LEVEL_TRACE: letter = 'T'; break;
+    case PUBNUB_LOG_LEVEL_DEBUG: letter = 'D'; break;
+    case PUBNUB_LOG_LEVEL_INFO: letter = 'I'; break;
+    case PUBNUB_LOG_LEVEL_WARNING: letter = 'W'; break;
+    default: letter = 'E'; break;
+    }
+    n = snprintf(cap->text + cap->len,
+                 sizeof(cap->text) - cap->len,
+                 "%c %s\n",
+                 letter,
+                 ((const pubnub_log_entry_text_t*)entry)->message);
+    if (0 < n && (size_t)n < sizeof(cap->text) - cap->len) {
+        cap->len += (size_t)n;
+    }
+}
+
+/**
+ * @brief Reset the capture buffer and install the callback.
+ */
+static void cap_reset(void)
+{
+    memset(&g_cap, 0, sizeof(g_cap));
+    g_cap.base.log = cap_log;
+}
+
+/**
+ * @brief Check whether the captured text contains a substring.
+ *
+ * @param needle Substring to look for.
+ * @return Non-zero when present.
+ */
+static int cap_has(const char* needle)
+{
+    return NULL != strstr(g_cap.text, needle);
+}
+
+/**
+ * @brief Skip the current test when log formatting is compiled out.
+ */
+static void skip_if_logging_compiled_out(void)
+{
+    if (0 == PUBNUB_CFG_MAX_LOG_MESSAGE_SIZE) {
+        skip();
+    }
+}
+
+/**
+ * @brief Ignore SIGPIPE for the duration of a test.
+ *
+ * @param old_action Receives the previous disposition.
+ */
+static void ignore_sigpipe(struct sigaction* old_action)
+{
+    struct sigaction ign = {0};
+
+    ign.sa_handler = SIG_IGN;
+    sigemptyset(&ign.sa_mask);
+    assert_int_equal(0, sigaction(SIGPIPE, &ign, old_action));
+}
+
+/**
+ * @brief A syscall-level handshake failure logs the OS error.
+ *
+ * The peer is closed before the handshake, so the ClientHello write fails.
+ */
+static void test_handshake_syscall_logs_sys_err(void** state)
+{
+    (void)state;
+    skip_if_logging_compiled_out();
+
+    struct sigaction old_sa = {0};
+    int              fds[2] = {-1, -1};
+    pn_tls_config_t  cfg    = PN_TLS_CONFIG_INIT;
+    void*            ctx    = NULL;
+    void*            sess   = NULL;
+    int              rc     = 0;
+    int              i      = 0;
+    char             expect[96];
+
+    cap_reset();
+    pubnub_provider_deps_t deps = test_deps;
+    deps.logger                 = &g_cap.base;
+
+    ignore_sigpipe(&old_sa);
+    assert_int_equal(0, make_nonblocking_pair(fds));
+    close(fds[1]);
+
+    cfg.skip_verify = 1;
+    ctx             = pn_tls_openssl_backend.ctx_create(&cfg, &deps);
+    assert_non_null(ctx);
+    assert_int_equal(0,
+                     pn_tls_openssl_backend.session_create(
+                         &sess, ctx, (pn_socket_t)fds[0], NULL, "localhost"));
+
+    for (i = 0; i < 5 && 0 <= rc; ++i) {
+        rc = pn_tls_openssl_backend.handshake(sess);
+    }
+    assert_true(0 > rc);
+
+    snprintf(expect,
+             sizeof(expect),
+             "E TLS handshake failed: ssl_error=%d rc=-1 sys_err=%d state=",
+             SSL_ERROR_SYSCALL,
+             EPIPE);
+    assert_true(cap_has(expect));
+    assert_true(cap_has(" resume="));
+    assert_true(cap_has(" openssl="));
+
+    pn_tls_openssl_backend.session_destroy(sess);
+    pn_tls_openssl_backend.ctx_destroy(ctx);
+    ERR_clear_error();
+    close(fds[0]);
+    (void)sigaction(SIGPIPE, &old_sa, NULL);
+}
+
+/**
+ * @brief A protocol-level failure logs no OS error field.
+ */
+static void test_handshake_ssl_error_omits_sys_err(void** state)
+{
+    (void)state;
+    skip_if_logging_compiled_out();
+
+    static const char garbage[] = "HTTP/1.1 400 Bad Request\r\n\r\n";
+    int               fds[2]    = {-1, -1};
+    pn_tls_config_t   cfg       = PN_TLS_CONFIG_INIT;
+    void*             ctx       = NULL;
+    void*             sess      = NULL;
+    int               rc        = 0;
+    int               i         = 0;
+    char              expect[64];
+
+    cap_reset();
+    pubnub_provider_deps_t deps = test_deps;
+    deps.logger                 = &g_cap.base;
+
+    assert_int_equal(0, make_nonblocking_pair(fds));
+    assert_int_equal((int)sizeof(garbage) - 1,
+                     (int)write(fds[1], garbage, sizeof(garbage) - 1));
+
+    cfg.skip_verify = 1;
+    ctx             = pn_tls_openssl_backend.ctx_create(&cfg, &deps);
+    assert_non_null(ctx);
+    assert_int_equal(0,
+                     pn_tls_openssl_backend.session_create(
+                         &sess, ctx, (pn_socket_t)fds[0], NULL, "localhost"));
+
+    for (i = 0; i < 5 && 0 <= rc; ++i) {
+        rc = pn_tls_openssl_backend.handshake(sess);
+    }
+    assert_true(0 > rc);
+
+    snprintf(expect, sizeof(expect), "E TLS handshake failed: ssl_error=%d rc=", SSL_ERROR_SSL);
+    assert_true(cap_has(expect));
+    assert_true(cap_has(" state="));
+    assert_true(cap_has(" openssl=error:"));
+    assert_false(cap_has("sys_err="));
+
+    pn_tls_openssl_backend.session_destroy(sess);
+    pn_tls_openssl_backend.ctx_destroy(ctx);
+    ERR_clear_error();
+    close(fds[0]);
+    close(fds[1]);
+}
+
+/**
+ * @brief Establish an offline TLS session whose peer then resets.
+ *
+ * @param fds        Receives the two socket descriptors (peer end closed).
+ * @param out_ctx    Receives the backend context.
+ * @param out_sess   Receives the backend session.
+ * @param out_key    Receives the server key (caller frees).
+ * @param out_crt    Receives the server certificate (caller frees).
+ * @param out_sctx   Receives the server SSL_CTX (caller frees).
+ */
+static void open_reset_session(int        fds[2],
+                               void**     out_ctx,
+                               void**     out_sess,
+                               EVP_PKEY** out_key,
+                               X509**     out_crt,
+                               SSL_CTX**  out_sctx)
+{
+    struct linger          lg         = {1, 0};
+    SSL*                   server_ssl = NULL;
+    pn_tls_config_t        cfg        = PN_TLS_CONFIG_INIT;
+    pubnub_provider_deps_t deps       = test_deps;
+
+    cap_reset();
+    deps.logger = &g_cap.base;
+
+    assert_int_equal(0, make_nonblocking_pair(fds));
+    assert_int_equal(0, make_self_signed(out_key, out_crt));
+    *out_sctx = SSL_CTX_new(TLS_server_method());
+    assert_non_null(*out_sctx);
+    assert_int_equal(1, SSL_CTX_use_certificate(*out_sctx, *out_crt));
+    assert_int_equal(1, SSL_CTX_use_PrivateKey(*out_sctx, *out_key));
+    server_ssl = SSL_new(*out_sctx);
+    assert_non_null(server_ssl);
+    assert_int_equal(1, SSL_set_fd(server_ssl, fds[1]));
+    SSL_set_accept_state(server_ssl);
+
+    cfg.skip_verify = 1;
+    *out_ctx        = pn_tls_openssl_backend.ctx_create(&cfg, &deps);
+    assert_non_null(*out_ctx);
+    assert_int_equal(0,
+                     pn_tls_openssl_backend.session_create(
+                         out_sess, *out_ctx, (pn_socket_t)fds[0], NULL, "localhost"));
+    assert_int_equal(
+        0, drive_offline_handshake(*out_sess, server_ssl, fds[0], fds[1]));
+
+    (void)setsockopt(fds[1], SOL_SOCKET, SO_LINGER, &lg, sizeof(lg));
+    SSL_free(server_ssl);
+    close(fds[1]);
+    fds[1] = -1;
+}
+
+/**
+ * @brief A fatal write failure is logged at WARNING level.
+ */
+static void test_send_failure_logs_details(void** state)
+{
+    (void)state;
+    skip_if_logging_compiled_out();
+
+    struct sigaction old_sa = {0};
+    int              fds[2] = {-1, -1};
+    void*            ctx    = NULL;
+    void*            sess   = NULL;
+    EVP_PKEY*        key    = NULL;
+    X509*            crt    = NULL;
+    SSL_CTX*         sctx   = NULL;
+    char             payload[4096];
+    int              failed = 0;
+    int              i      = 0;
+
+    ignore_sigpipe(&old_sa);
+    open_reset_session(fds, &ctx, &sess, &key, &crt, &sctx);
+
+    memset(payload, 'x', sizeof(payload));
+    for (i = 0; i < 100 && 0 == failed; ++i) {
+        failed = (0 > pn_tls_openssl_backend.send(sess, payload, sizeof(payload)));
+    }
+    assert_int_equal(1, failed);
+    assert_true(cap_has("W TLS send failed: ssl_error="));
+    assert_true(cap_has(" rc="));
+    assert_true(cap_has(" openssl="));
+
+    pn_tls_openssl_backend.session_destroy(sess);
+    pn_tls_openssl_backend.ctx_destroy(ctx);
+    SSL_CTX_free(sctx);
+    X509_free(crt);
+    EVP_PKEY_free(key);
+    ERR_clear_error();
+    close(fds[0]);
+    (void)sigaction(SIGPIPE, &old_sa, NULL);
+}
+
+/**
+ * @brief A fatal read failure is logged at WARNING level.
+ */
+static void test_recv_failure_logs_details(void** state)
+{
+    (void)state;
+    skip_if_logging_compiled_out();
+
+    struct sigaction old_sa = {0};
+    int              fds[2] = {-1, -1};
+    void*            ctx    = NULL;
+    void*            sess   = NULL;
+    EVP_PKEY*        key    = NULL;
+    X509*            crt    = NULL;
+    SSL_CTX*         sctx   = NULL;
+    char             buf[64];
+    int              n = 0;
+
+    ignore_sigpipe(&old_sa);
+    open_reset_session(fds, &ctx, &sess, &key, &crt, &sctx);
+
+    n = pn_tls_openssl_backend.recv(sess, buf, sizeof(buf));
+    assert_true(0 > n);
+    if (-1 != n) {
+        assert_true(cap_has("W TLS recv failed: ssl_error="));
+        assert_true(cap_has(" rc="));
+        assert_true(cap_has(" openssl="));
+    }
+
+    pn_tls_openssl_backend.session_destroy(sess);
+    pn_tls_openssl_backend.ctx_destroy(ctx);
+    SSL_CTX_free(sctx);
+    X509_free(crt);
+    EVP_PKEY_free(key);
+    ERR_clear_error();
+    close(fds[0]);
+    (void)sigaction(SIGPIPE, &old_sa, NULL);
+}
+
 #endif /* !defined(_WIN32) */
 
 #if defined(PUBNUB_TEST_NETWORK) && !defined(_WIN32)
@@ -776,6 +1185,10 @@ static void test_tls_accepts_valid_cert(void** state)
 int main(void)
 {
     const struct CMUnitTest tests[] = {
+#if !defined(_WIN32)
+        /* Must stay first: it races the process-wide lazy BIO method init. */
+        cmocka_unit_test(test_concurrent_session_create_publishes_bio_method),
+#endif
         cmocka_unit_test(test_ctx_create_destroy),
         cmocka_unit_test(test_session_create_invalid_fd),
         cmocka_unit_test(test_tls_config_secure_by_default),
@@ -783,6 +1196,10 @@ int main(void)
         cmocka_unit_test(test_recv_ignores_stale_thread_error),
         cmocka_unit_test(test_session_destroy_clears_thread_error),
         cmocka_unit_test(tls_openssl_should_not_raise_sigpipe_on_rst),
+        cmocka_unit_test(test_handshake_syscall_logs_sys_err),
+        cmocka_unit_test(test_handshake_ssl_error_omits_sys_err),
+        cmocka_unit_test(test_send_failure_logs_details),
+        cmocka_unit_test(test_recv_failure_logs_details),
 #endif
 #if defined(PUBNUB_TEST_NETWORK) && !defined(_WIN32)
         cmocka_unit_test(test_tls_integration),

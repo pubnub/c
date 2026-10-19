@@ -3,17 +3,10 @@
 
 /**
  * @file subscribe_slot_release_units.c
- * @brief White-box unit tests for the subscribe slot-release ordering fix.
+ * @brief White-box tests for subscribe slot-release ordering.
  *
- * Includes subscribe_effects.c directly to reach cancel_active_request,
- * dispatch_subscribe_request (parked-drain path), and the manager
- * lifecycle. These tests pin the ordering invariant behind the arena
- * RX-buffer exhaustion regression: the transport cancel for a stale
- * long-poll handle must run BEFORE the owning pool slot is released,
- * because pn_request_pool_release bumps the slot generation and the
- * retry middleware matches its tracked inner handle by pointer AND
- * generation. Releasing first strands the inner handle (and its rx_buf)
- * because the post-release generation no longer matches.
+ * The transport cancel must run before the pool slot is released: release
+ * bumps the slot generation the retry middleware matches its handle by.
  */
 
 #include <setjmp.h>
@@ -28,22 +21,24 @@
 
 #include "pubnub/types_fwd.h"
 
-/* White-box interposition: dispatch_subscribe_request's reap epilogue
- * branches on pn_context_has_bg_thread, but a live bg-thread handle cannot be
- * set on an opaque context. Redirect that one call site to a test flag so both
- * the bg-mode park and the cooperative inline-reap paths are reachable. */
-static int s_force_bg_thread;
-
-static int test_ctx_has_bg_thread(const pubnub_context_t* ctx)
-{
-    (void)ctx;
-    return s_force_bg_thread;
-}
-
-#define pn_context_has_bg_thread test_ctx_has_bg_thread
+/* White-box interposition: give the dispatch path a channel to subscribe to
+ * without building a subscription registry. */
+#define pn_subscribe_build_channel_string_alloc test_build_channel_string
 
 /* White-box: pull the static effect implementations into this TU. */
 #include "features/subscribe/subscribe_effects.c"
+
+char* test_build_channel_string(const pn_subscribe_manager_t* mgr,
+                                pubnub_allocator_provider_t*  alloc)
+{
+    char* out = (char*)alloc->alloc(alloc, 5U, 1U);
+
+    (void)mgr;
+    if (NULL != out) {
+        memcpy(out, "test", 5U);
+    }
+    return out;
+}
 
 #include "pubnub/client.h"
 
@@ -95,9 +90,20 @@ static int                        s_saw_sentinel_cancel;
 static pubnub_context_t*          s_probe_ctx;
 static uint16_t                   s_probe_slot_id;
 static int                        s_slot_ready_at_cancel;
+static int                        s_send_returns_handle;
+static int                        s_send_calls;
+static uint16_t                   s_send_probe_slot;
+static int                        s_cancel_seen_at_send;
+static int                        s_in_use_at_send;
+static char                       s_send_handle_backing;
 
 static void reset_mock_state(void)
 {
+    s_send_returns_handle  = 0;
+    s_send_calls           = 0;
+    s_send_probe_slot      = PUBNUB_SLOT_ID_INVALID;
+    s_cancel_seen_at_send  = -1;
+    s_in_use_at_send       = -1;
     s_cancel_count         = 0;
     s_last_cancel_handle   = NULL;
     s_sentinel_handle      = NULL;
@@ -105,7 +111,6 @@ static void reset_mock_state(void)
     s_probe_ctx            = NULL;
     s_probe_slot_id        = PUBNUB_SLOT_ID_INVALID;
     s_slot_ready_at_cancel = -1;
-    s_force_bg_thread      = 0;
 }
 
 static pubnub_transport_handle_t* mock_send(pubnub_transport_provider_t* self,
@@ -115,7 +120,13 @@ static pubnub_transport_handle_t* mock_send(pubnub_transport_provider_t* self,
     (void)self;
     (void)req;
     (void)resp;
-    return NULL;
+    s_send_calls++;
+    if (PUBNUB_SLOT_ID_INVALID != s_send_probe_slot && NULL != s_probe_ctx) {
+        s_cancel_seen_at_send = s_saw_sentinel_cancel;
+        s_in_use_at_send = (int)pn_context_request_pool(s_probe_ctx)->in_use_count;
+    }
+    return s_send_returns_handle ? (pubnub_transport_handle_t*)&s_send_handle_backing
+                                 : NULL;
 }
 
 static int mock_poll(pubnub_transport_provider_t* self, unsigned int timeout_ms)
@@ -225,203 +236,18 @@ static void cancel_active_request_cancels_before_release(void** state)
     pubnub_destroy(ctx);
 }
 
-/*
- * Manager construction must seed prev_reap_slot_id to the INVALID
- * sentinel — memset zeroes the field but 0 is a valid slot id.
+/**
+ * A re-dispatch cancels and releases the completed old long-poll before
+ * sending the successor, so the transport can reuse its keep-alive connection.
  */
-static void create_initializes_prev_reap_slot_invalid(void** state)
-{
-    (void)state;
-    pubnub_context_t* ctx = create_ctx();
-    assert_non_null(ctx);
-
-    pn_subscribe_manager_t* mgr =
-        pn_subscribe_manager_create(ctx, pn_test_allocator());
-    assert_non_null(mgr);
-
-    assert_int_equal(PUBNUB_SLOT_ID_INVALID, mgr->prev_reap_slot_id);
-
-    pn_subscribe_manager_cleanup(mgr, pn_test_allocator());
-    pubnub_destroy(ctx);
-}
-
-/*
- * Part 4: context teardown while a bg-thread deferral is parked must
- * cancel the parked handle AND release the parked slot (no slot leak).
- */
-static void cleanup_drains_parked_handle_and_slot(void** state)
+static void redispatch_reaps_before_send(void** state)
 {
     (void)state;
     int               sentinel = 0;
     pubnub_context_t* ctx      = create_ctx();
     assert_non_null(ctx);
     reset_mock_state();
-
-    pn_subscribe_manager_t* mgr =
-        pn_subscribe_manager_create(ctx, pn_test_allocator());
-    assert_non_null(mgr);
-
-    pn_request_pool_t* pool   = pn_context_request_pool(ctx);
-    pubnub_future_t    future = {0};
-    assert_int_equal(PUBNUB_OK, pn_request_pool_acquire(pool, ctx, &future));
-    uint16_t sid           = future.slot_id;
-    uint16_t before_in_use = pool->in_use_count;
-
-    s_sentinel_handle      = (pubnub_transport_handle_t*)&sentinel;
-    mgr->prev_reap_handle  = s_sentinel_handle;
-    mgr->prev_reap_slot_id = sid;
-
-    pn_subscribe_manager_cleanup(mgr, pn_test_allocator());
-
-    assert_int_equal(1, s_saw_sentinel_cancel);
-    pn_request_t* slot = pn_request_pool_get(pool, sid);
-    assert_true(pn_request_is_idle(slot));
-    assert_int_equal(before_in_use - 1, pool->in_use_count);
-
-    pubnub_destroy(ctx);
-}
-
-/*
- * Edge case exercised by the fix: a parked slot with NO handle (handle
- * was already NULL when detached) must still be released on teardown —
- * the slot release is gated on the slot id, not on the handle.
- */
-static void cleanup_releases_parked_slot_without_handle(void** state)
-{
-    (void)state;
-    pubnub_context_t* ctx = create_ctx();
-    assert_non_null(ctx);
-    reset_mock_state();
-
-    pn_subscribe_manager_t* mgr =
-        pn_subscribe_manager_create(ctx, pn_test_allocator());
-    assert_non_null(mgr);
-
-    pn_request_pool_t* pool   = pn_context_request_pool(ctx);
-    pubnub_future_t    future = {0};
-    assert_int_equal(PUBNUB_OK, pn_request_pool_acquire(pool, ctx, &future));
-    uint16_t sid = future.slot_id;
-
-    mgr->prev_reap_handle  = NULL;
-    mgr->prev_reap_slot_id = sid;
-
-    pn_subscribe_manager_cleanup(mgr, pn_test_allocator());
-
-    assert_int_equal(0, s_cancel_count);
-    pn_request_t* slot = pn_request_pool_get(pool, sid);
-    assert_true(pn_request_is_idle(slot));
-
-    pubnub_destroy(ctx);
-}
-
-/*
- * Part 2 (bg-thread deferral drain): the next re-dispatch must drain a
- * parked handle+slot at entry — cancel the handle and release the slot,
- * then clear both fields. dispatch bails out afterwards (no channels),
- * but the entry drain runs unconditionally.
- */
-static void redispatch_drains_parked_handle_and_slot(void** state)
-{
-    (void)state;
-    int               sentinel = 0;
-    pubnub_context_t* ctx      = create_ctx();
-    assert_non_null(ctx);
-    reset_mock_state();
-
-    pn_subscribe_manager_t* mgr =
-        pn_subscribe_manager_create(ctx, pn_test_allocator());
-    assert_non_null(mgr);
-
-    pn_request_pool_t* pool   = pn_context_request_pool(ctx);
-    pubnub_future_t    future = {0};
-    assert_int_equal(PUBNUB_OK, pn_request_pool_acquire(pool, ctx, &future));
-    uint16_t sid = future.slot_id;
-
-    s_sentinel_handle      = (pubnub_transport_handle_t*)&sentinel;
-    mgr->prev_reap_handle  = s_sentinel_handle;
-    mgr->prev_reap_slot_id = sid;
-
-    dispatch_subscribe_request(mgr, 1 /* handshake */);
-
-    assert_int_equal(1, s_saw_sentinel_cancel);
-    assert_null(mgr->prev_reap_handle);
-    assert_int_equal(PUBNUB_SLOT_ID_INVALID, mgr->prev_reap_slot_id);
-
-    pn_subscribe_manager_cleanup(mgr, pn_test_allocator());
-    pubnub_destroy(ctx);
-}
-
-/*
- * End-to-end park→drain (bg-thread mode). Cycle 1 runs the reap epilogue
- * with a completed prior long-poll in active_slot_id: the handle is
- * detached and, because bg-thread mode is forced, BOTH handle and slot are
- * parked (no cancel yet, slot generation intact). Cycle 2 drains at entry:
- * cancel runs on the real inner handle BEFORE the slot is released, then
- * both prev_reap fields clear and the slot returns to the pool.
- *
- * With no channels registered, each dispatch bails at build_wire_inputs
- * (INVALID_ARGUMENT) before acquiring a new slot — so the detach/park and
- * entry-drain run deterministically without a live transport send.
- */
-static void redispatch_bg_mode_parks_then_drains(void** state)
-{
-    (void)state;
-    int               sentinel = 0;
-    pubnub_context_t* ctx      = create_ctx();
-    assert_non_null(ctx);
-    reset_mock_state();
-    s_force_bg_thread = 1;
-
-    pn_subscribe_manager_t* mgr =
-        pn_subscribe_manager_create(ctx, pn_test_allocator());
-    assert_non_null(mgr);
-
-    pn_request_pool_t* pool            = pn_context_request_pool(ctx);
-    uint16_t           baseline_in_use = pool->in_use_count;
-    uint16_t sid = attach_ready_slot(ctx, (pubnub_transport_handle_t*)&sentinel);
-    mgr->active_slot_id = sid;
-    s_sentinel_handle   = (pubnub_transport_handle_t*)&sentinel;
-
-    /* Cycle 1: detach + park (bg-thread mode defers the cancel). */
-    dispatch_subscribe_request(mgr, 1 /* handshake */);
-
-    assert_int_equal(0, s_cancel_count);
-    assert_ptr_equal((void*)&sentinel, (void*)mgr->prev_reap_handle);
-    assert_int_equal(sid, mgr->prev_reap_slot_id);
-    pn_request_t* parked = pn_request_pool_get(pool, sid);
-    assert_true(pn_request_is_ready(parked));
-    assert_int_equal(baseline_in_use + 1, pool->in_use_count);
-
-    /* Cycle 2: entry drain cancels the parked handle before releasing. */
-    s_probe_ctx     = ctx;
-    s_probe_slot_id = sid;
-
-    dispatch_subscribe_request(mgr, 0 /* receive */);
-
-    assert_int_equal(1, s_saw_sentinel_cancel);
-    assert_ptr_equal((void*)&sentinel, (void*)s_last_cancel_handle);
-    assert_int_equal(1, s_slot_ready_at_cancel);
-    assert_null(mgr->prev_reap_handle);
-    assert_int_equal(PUBNUB_SLOT_ID_INVALID, mgr->prev_reap_slot_id);
-    assert_int_equal(baseline_in_use, pool->in_use_count);
-
-    pn_subscribe_manager_cleanup(mgr, pn_test_allocator());
-    pubnub_destroy(ctx);
-}
-
-/*
- * Cooperative-mode variant: no parking. The reap epilogue cancels the
- * detached handle and releases the slot inline within the same dispatch
- * call. Cancel still precedes the slot release (generation intact).
- */
-static void redispatch_cooperative_reaps_inline(void** state)
-{
-    (void)state;
-    int               sentinel = 0;
-    pubnub_context_t* ctx      = create_ctx();
-    assert_non_null(ctx);
-    reset_mock_state();
-    s_force_bg_thread = 0;
+    s_send_returns_handle = 1;
 
     pn_subscribe_manager_t* mgr =
         pn_subscribe_manager_create(ctx, pn_test_allocator());
@@ -434,17 +260,264 @@ static void redispatch_cooperative_reaps_inline(void** state)
     s_sentinel_handle   = (pubnub_transport_handle_t*)&sentinel;
     s_probe_ctx         = ctx;
     s_probe_slot_id     = sid;
+    s_send_probe_slot   = sid;
 
     dispatch_subscribe_request(mgr, 1 /* handshake */);
 
+    assert_int_equal(1, s_send_calls);
     assert_int_equal(1, s_saw_sentinel_cancel);
     assert_ptr_equal((void*)&sentinel, (void*)s_last_cancel_handle);
     assert_int_equal(1, s_slot_ready_at_cancel);
-    assert_null(mgr->prev_reap_handle);
-    assert_int_equal(PUBNUB_SLOT_ID_INVALID, mgr->prev_reap_slot_id);
-    assert_int_equal(baseline_in_use, pool->in_use_count);
+    assert_int_equal(1, s_cancel_seen_at_send);
+    assert_int_equal((int)baseline_in_use + 1, s_in_use_at_send);
+    assert_int_equal(baseline_in_use + 1, pool->in_use_count);
+    assert_int_not_equal(PUBNUB_SLOT_ID_INVALID, mgr->active_slot_id);
 
     pn_subscribe_manager_cleanup(mgr, pn_test_allocator());
+    pubnub_destroy(ctx);
+}
+
+/**
+ * Teardown cancels a completed long-poll's transport handle while its slot is
+ * still ready, then releases the slot.
+ */
+static void manager_cleanup_cancels_terminal_handle_before_release(void** state)
+{
+    (void)state;
+    int               sentinel = 0;
+    pubnub_context_t* ctx      = create_ctx();
+    assert_non_null(ctx);
+    reset_mock_state();
+
+    pn_subscribe_manager_t* mgr =
+        pn_subscribe_manager_create(ctx, pn_test_allocator());
+    assert_non_null(mgr);
+
+    uint16_t sid = attach_ready_slot(ctx, (pubnub_transport_handle_t*)&sentinel);
+    mgr->active_slot_id = sid;
+    s_probe_ctx         = ctx;
+    s_probe_slot_id     = sid;
+
+    pn_subscribe_manager_cleanup(mgr, pn_test_allocator());
+
+    assert_int_equal(1, s_cancel_count);
+    assert_ptr_equal((void*)&sentinel, (void*)s_last_cancel_handle);
+    assert_int_equal(1, s_slot_ready_at_cancel);
+    assert_true(pn_request_is_idle(
+        pn_request_pool_get(pn_context_request_pool(ctx), sid)));
+
+    s_probe_ctx = NULL;
+    pubnub_destroy(ctx);
+    assert_int_equal(1, s_cancel_count);
+}
+
+/* Context helper: a live handle is cancelled once, while the slot is still
+ * ready, and only then is the slot released. */
+static void context_release_cancels_handle_then_releases(void** state)
+{
+    (void)state;
+    int               sentinel = 0;
+    pubnub_context_t* ctx      = create_ctx();
+    assert_non_null(ctx);
+    reset_mock_state();
+
+    uint16_t sid = attach_ready_slot(ctx, (pubnub_transport_handle_t*)&sentinel);
+    pn_request_t* slot = pn_request_pool_get(pn_context_request_pool(ctx), sid);
+    uint16_t      gen  = slot->generation;
+
+    s_probe_ctx     = ctx;
+    s_probe_slot_id = sid;
+
+    pn_context_release_terminal_slot(ctx, sid, gen);
+
+    assert_int_equal(1, s_cancel_count);
+    assert_ptr_equal((void*)&sentinel, (void*)s_last_cancel_handle);
+    assert_int_equal(1, s_slot_ready_at_cancel);
+    assert_true(pn_request_is_idle(slot));
+    assert_null(slot->transport_handle);
+
+    s_probe_ctx = NULL;
+    pubnub_destroy(ctx);
+    assert_int_equal(1, s_cancel_count);
+}
+
+static void context_release_without_handle_just_releases(void** state)
+{
+    (void)state;
+    pubnub_context_t* ctx = create_ctx();
+    assert_non_null(ctx);
+    reset_mock_state();
+
+    uint16_t      sid  = attach_ready_slot(ctx, NULL);
+    pn_request_t* slot = pn_request_pool_get(pn_context_request_pool(ctx), sid);
+
+    pn_context_release_terminal_slot(ctx, sid, PN_GENERATION_ANY);
+
+    assert_int_equal(0, s_cancel_count);
+    assert_true(pn_request_is_idle(slot));
+
+    pubnub_destroy(ctx);
+}
+
+static void context_release_with_stale_generation_is_a_noop(void** state)
+{
+    (void)state;
+    int               sentinel = 0;
+    pubnub_context_t* ctx      = create_ctx();
+    assert_non_null(ctx);
+    reset_mock_state();
+
+    uint16_t sid = attach_ready_slot(ctx, (pubnub_transport_handle_t*)&sentinel);
+    pn_request_t* slot = pn_request_pool_get(pn_context_request_pool(ctx), sid);
+
+    pn_context_release_terminal_slot(ctx, sid, (uint16_t)(slot->generation + 1U));
+
+    assert_int_equal(0, s_cancel_count);
+    assert_false(pn_request_is_idle(slot));
+    assert_ptr_equal((void*)&sentinel, (void*)slot->transport_handle);
+
+    /* Out-of-range and NULL inputs are ignored. */
+    pn_context_release_terminal_slot(ctx, UINT16_MAX - 1U, PN_GENERATION_ANY);
+    pn_context_release_terminal_slot(NULL, sid, PN_GENERATION_ANY);
+    pn_context_cancel_slot_transport(NULL, sid);
+    assert_int_equal(0, s_cancel_count);
+
+    pn_context_release_terminal_slot(ctx, sid, PN_GENERATION_ANY);
+    assert_int_equal(1, s_cancel_count);
+    pubnub_destroy(ctx);
+}
+
+/* The cancel-only variant clears the handle and leaves the slot allocated. */
+static void context_cancel_slot_transport_keeps_slot(void** state)
+{
+    (void)state;
+    int               sentinel = 0;
+    pubnub_context_t* ctx      = create_ctx();
+    assert_non_null(ctx);
+    reset_mock_state();
+
+    uint16_t sid = attach_ready_slot(ctx, (pubnub_transport_handle_t*)&sentinel);
+    pn_request_t* slot = pn_request_pool_get(pn_context_request_pool(ctx), sid);
+
+    pn_context_cancel_slot_transport(ctx, sid);
+    pn_context_cancel_slot_transport(ctx, sid);
+
+    assert_int_equal(1, s_cancel_count);
+    assert_null(slot->transport_handle);
+    assert_false(pn_request_is_idle(slot));
+
+    pubnub_destroy(ctx);
+}
+
+/* Dispatches a queued request for the given feature; the pool must be full. */
+static pubnub_future_t enqueue_pending(pubnub_context_t* ctx, uint8_t feature_id)
+{
+    pn_pending_entry_t* entry = pn_prep_acquire(ctx);
+
+    assert_non_null(entry);
+    assert_int_equal(
+        PUBNUB_OK,
+        pn_pending_entry_init(
+            entry, feature_id, NULL, NULL, NULL, PUBNUB_HTTP_GET, ctx, 0));
+    return pn_dispatch_or_enqueue(ctx, entry);
+}
+
+/**
+ * Teardown aborts the promoted pool slot of a subscribe request whose pending
+ * id is stale, and leaves the unrelated queued request alone.
+ */
+static void cancel_active_request_aborts_promoted_pending_request(void** state)
+{
+    (void)state;
+    pubnub_context_t* ctx = create_ctx();
+    assert_non_null(ctx);
+    reset_mock_state();
+    s_send_returns_handle = 1;
+
+    pn_subscribe_manager_t* mgr =
+        pn_subscribe_manager_create(ctx, pn_test_allocator());
+    assert_non_null(mgr);
+    pn_request_pool_t*  pool  = pn_context_request_pool(ctx);
+    pn_pending_queue_t* queue = pn_context_pending_queue(ctx);
+    uint16_t            holders[PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS];
+    uint16_t            i;
+
+    for (i = 0; i < PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS; i++) {
+        holders[i] = attach_ready_slot(ctx, NULL);
+    }
+
+    pubnub_future_t sub = enqueue_pending(ctx, (uint8_t)PUBNUB_FEATURE_SUBSCRIBE);
+    pubnub_future_t other = enqueue_pending(ctx, (uint8_t)PUBNUB_FEATURE_PUBLISH);
+    assert_int_equal(PUBNUB_IN_PROGRESS, sub.status);
+    assert_int_equal(PUBNUB_IN_PROGRESS, other.status);
+    assert_true(sub.slot_id >= pn_context_pool_capacity(ctx));
+    assert_int_equal(2, pn_pending_queue_count(queue));
+
+    mgr->active_slot_id         = sub.slot_id;
+    mgr->active_slot_generation = sub.generation;
+
+    /* Freeing one slot promotes the subscribe request; the other stays queued. */
+    pn_request_pool_lock(pool);
+    pn_request_pool_release(pool, holders[0]);
+    pn_request_pool_unlock(pool);
+    (void)pn_process_tick(ctx, 0);
+    assert_int_equal(1, pn_pending_queue_count(queue));
+
+    pn_pending_ref_t ref;
+    pn_request_pool_lock(pool);
+    ref = pn_context_pending_resolve_locked(ctx, sub.slot_id, sub.generation);
+    pn_request_pool_unlock(pool);
+    assert_int_equal(PN_PENDING_REF_REAL, ref.kind);
+    assert_int_equal(PN_REQUEST_IN_FLIGHT,
+                     pn_request_pool_get(pool, ref.real_slot)->state);
+
+    cancel_active_request(mgr);
+
+    assert_int_equal(1, s_cancel_count);
+    assert_true(pn_request_is_idle(pn_request_pool_get(pool, ref.real_slot)));
+    assert_int_equal(1, pn_pending_queue_count(queue));
+    assert_int_equal(PUBNUB_IN_PROGRESS, pubnub_future_status(other));
+
+    pn_subscribe_manager_cleanup(mgr, pn_test_allocator());
+    pubnub_destroy(ctx);
+}
+
+/*
+ * Cleanup of a manager whose active request still waits in the queue must
+ * drop exactly that request.
+ */
+static void cleanup_cancels_queued_active_request_only(void** state)
+{
+    (void)state;
+    if (PUBNUB_CFG_MAX_PENDING_REQUESTS < 3) {
+        skip();
+    }
+    pubnub_context_t* ctx = create_ctx();
+    assert_non_null(ctx);
+    reset_mock_state();
+
+    pn_subscribe_manager_t* mgr =
+        pn_subscribe_manager_create(ctx, pn_test_allocator());
+    assert_non_null(mgr);
+    uint16_t i;
+
+    for (i = 0; i < PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS; i++) {
+        (void)attach_ready_slot(ctx, NULL);
+    }
+    pubnub_future_t first = enqueue_pending(ctx, (uint8_t)PUBNUB_FEATURE_PUBLISH);
+    pubnub_future_t sub = enqueue_pending(ctx, (uint8_t)PUBNUB_FEATURE_SUBSCRIBE);
+    pubnub_future_t last = enqueue_pending(ctx, (uint8_t)PUBNUB_FEATURE_PUBLISH);
+
+    mgr->active_slot_id         = sub.slot_id;
+    mgr->active_slot_generation = sub.generation;
+    pn_subscribe_manager_cleanup(mgr, pn_test_allocator());
+
+    /* The middle request is gone; its neighbours are still queued and
+     * addressable. */
+    assert_int_equal(PUBNUB_IN_PROGRESS, pubnub_future_status(first));
+    assert_int_equal(PUBNUB_IN_PROGRESS, pubnub_future_status(last));
+    assert_int_not_equal(PUBNUB_IN_PROGRESS, pubnub_future_status(sub));
+
     pubnub_destroy(ctx);
 }
 
@@ -455,12 +528,14 @@ int main(void)
 #if !PUBNUB_CFG_NO_HEAP
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(cancel_active_request_cancels_before_release),
-        cmocka_unit_test(create_initializes_prev_reap_slot_invalid),
-        cmocka_unit_test(cleanup_drains_parked_handle_and_slot),
-        cmocka_unit_test(cleanup_releases_parked_slot_without_handle),
-        cmocka_unit_test(redispatch_drains_parked_handle_and_slot),
-        cmocka_unit_test(redispatch_bg_mode_parks_then_drains),
-        cmocka_unit_test(redispatch_cooperative_reaps_inline),
+        cmocka_unit_test(redispatch_reaps_before_send),
+        cmocka_unit_test(cancel_active_request_aborts_promoted_pending_request),
+        cmocka_unit_test(cleanup_cancels_queued_active_request_only),
+        cmocka_unit_test(manager_cleanup_cancels_terminal_handle_before_release),
+        cmocka_unit_test(context_release_cancels_handle_then_releases),
+        cmocka_unit_test(context_release_without_handle_just_releases),
+        cmocka_unit_test(context_release_with_stale_generation_is_a_noop),
+        cmocka_unit_test(context_cancel_slot_transport_keeps_slot),
     };
     return cmocka_run_group_tests(tests, NULL, NULL);
 #else

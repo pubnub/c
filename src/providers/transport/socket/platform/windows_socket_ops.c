@@ -11,6 +11,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <mstcpip.h>
+#include <mswsock.h>
 #if PUBNUB_ENABLE_CUSTOM_DNS
 #include <iphlpapi.h>
 #endif
@@ -59,6 +60,33 @@ struct pn_windows_poll_internal {
 PUBNUB_STATIC_ASSERT(
     sizeof(struct pn_windows_poll_internal) <= PN_POLL_SET_PLATFORM_SIZE,
     "pn_windows_poll_internal exceeds PN_POLL_SET_PLATFORM_SIZE");
+
+/**
+ * @brief Native loopback address holder for the wake pair (either family).
+ *
+ * The IPv6 member is first so that a `= {0}` initializer zeroes the larger
+ * member.
+ */
+typedef union pn_windows_wake_addr {
+    struct sockaddr_in6 v6;
+    struct sockaddr_in  v4;
+} pn_windows_wake_addr_t;
+
+/** @brief Wake-pair families in the order pipe_create tries them. */
+static const int pn_windows_wake_families[] = {AF_INET, AF_INET6};
+
+#define PN_WINDOWS_WAKE_FAMILY_COUNT \
+    (sizeof(pn_windows_wake_families) / sizeof(pn_windows_wake_families[0]))
+
+/** @brief Upper bound on datagrams read per pipe_drain call. */
+#define PN_WINDOWS_WAKE_DRAIN_MAX_READS 256
+
+/** @brief Self-test wait for the probe datagram to arrive, in milliseconds. */
+#define PN_WINDOWS_WAKE_SELFTEST_MS 50
+
+#ifndef SIO_UDP_CONNRESET
+#define SIO_UDP_CONNRESET _WSAIOW(IOC_VENDOR, 12)
+#endif
 
 /** @brief Cast opaque poll_set to internal struct. */
 static inline struct pn_windows_poll_internal* pn_poll_set_internal(pn_poll_set_t* poll_set)
@@ -157,7 +185,7 @@ static pn_socket_t windows_socket_create(const pn_socket_platform_ops_t* self,
 
     const int    type     = dgram ? SOCK_DGRAM : SOCK_STREAM;
     const int    protocol = dgram ? IPPROTO_UDP : IPPROTO_TCP;
-    const SOCKET sock     = WSASocket(domain, type, protocol, NULL, 0, 0);
+    const SOCKET sock     = WSASocketW(domain, type, protocol, NULL, 0, 0);
     if (INVALID_SOCKET == sock) {
         return PN_INVALID_SOCKET;
     }
@@ -235,24 +263,28 @@ static int windows_socket_check_connect(const pn_socket_platform_ops_t* self,
 {
     (void)self;
 
-    const SOCKET s   = (SOCKET)sock;
-    int          err = 0;
-    int          len = sizeof(err);
-    const int gso_rc = getsockopt(s, SOL_SOCKET, SO_ERROR, (char*)&err, &len);
+    const SOCKET s            = (SOCKET)sock;
+    int          err          = 0;
+    int          len          = (int)sizeof(err);
+    DWORD        connect_time = 0;
+    int          ct_len       = (int)sizeof(connect_time);
 
-    if (0 != gso_rc) {
+    if (0 != getsockopt(s, SOL_SOCKET, SO_ERROR, (char*)&err, &len)) {
         return -WSAGetLastError();
     }
 
-    if (0 == err) {
-        return 1;
+    if (0 != err) {
+        return -err;
     }
 
-    if (WSAEINPROGRESS == err) {
-        return 0;
+    /* SO_ERROR is 0 while the handshake is still in flight, and getpeername()
+     * already succeeds then on current Windows; SO_CONNECT_TIME is
+     * 0xFFFFFFFF until the connection is actually established. */
+    if (0 != getsockopt(s, SOL_SOCKET, SO_CONNECT_TIME, (char*)&connect_time, &ct_len)) {
+        return -WSAGetLastError();
     }
 
-    return -err;
+    return (0xFFFFFFFFUL == connect_time) ? 0 : 1;
 }
 
 /**
@@ -518,9 +550,9 @@ static int windows_poll_add(const pn_socket_platform_ops_t* self,
     if (0 != (events & PN_POLL_WRITE)) {
         poll_events |= POLLWRNORM;
     }
-    if (0 != (events & PN_POLL_ERROR)) {
-        poll_events |= POLLERR;
-    }
+    /* PN_POLL_ERROR / PN_POLL_HUP request bits map to nothing: WSAPoll rejects
+     * POLLERR/POLLHUP/POLLNVAL in events (WSAEINVAL) and always reports them
+     * in revents. */
 
     internal->fds[internal->count].fd      = (SOCKET)sock;
     internal->fds[internal->count].events  = poll_events;
@@ -560,9 +592,9 @@ static int windows_poll_modify(const pn_socket_platform_ops_t* self,
     if (0 != (events & PN_POLL_WRITE)) {
         poll_events |= POLLWRNORM;
     }
-    if (0 != (events & PN_POLL_ERROR)) {
-        poll_events |= POLLERR;
-    }
+    /* PN_POLL_ERROR / PN_POLL_HUP request bits map to nothing: WSAPoll rejects
+     * POLLERR/POLLHUP/POLLNVAL in events (WSAEINVAL) and always reports them
+     * in revents. */
 
     internal->fds[i].events  = poll_events;
     internal->fds[i].revents = 0;
@@ -627,7 +659,14 @@ static int windows_poll_wait(const pn_socket_platform_ops_t* self,
     size_t i = 0;
 
     if (0 > poll_ret) {
-        return -WSAGetLastError();
+        const int poll_err = WSAGetLastError();
+
+        /* When every entry is an invalid handle WSAPoll fails the whole call
+         * with WSAENOTSOCK but still sets POLLNVAL in revents; fall through so
+         * the broken entries are reported like they are in a mixed set. */
+        if (WSAENOTSOCK != poll_err) {
+            return -poll_err;
+        }
     }
 
     internal->ready_count = 0;
@@ -991,6 +1030,214 @@ static int windows_dns_resolve_get_results(const pn_socket_platform_ops_t* self,
 
 #endif /* !PUBNUB_ENABLE_CUSTOM_DNS */
 
+/**
+ * @brief Create a UDP socket bound to the loopback address of @p af.
+ *
+ * @param af       AF_INET or AF_INET6.
+ * @param out_addr Receives the bound address (including the ephemeral port).
+ * @param out_len  Receives the valid length of @p out_addr.
+ * @return Bound socket, or INVALID_SOCKET on failure.
+ */
+static SOCKET wake_open_loopback(int af, pn_windows_wake_addr_t* out_addr, int* out_len)
+{
+    pn_windows_wake_addr_t addr = {0};
+    int                    len  = 0;
+    SOCKET                 s    = INVALID_SOCKET;
+
+    if (AF_INET == af) {
+        addr.v4.sin_family      = AF_INET;
+        addr.v4.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        len                     = (int)sizeof(addr.v4);
+    } else {
+        addr.v6.sin6_family           = AF_INET6;
+        addr.v6.sin6_addr.s6_addr[15] = 1;
+        len                           = (int)sizeof(addr.v6);
+    }
+
+    s = WSASocketW(af, SOCK_DGRAM, IPPROTO_UDP, NULL, 0, 0);
+    if (INVALID_SOCKET == s) {
+        return INVALID_SOCKET;
+    }
+
+    if (0 != bind(s, (const struct sockaddr*)&addr, len)
+        || 0 != getsockname(s, (struct sockaddr*)&addr, &len)) {
+        closesocket(s);
+        return INVALID_SOCKET;
+    }
+
+    *out_addr = addr;
+    *out_len  = len;
+    return s;
+}
+
+/**
+ * @brief Connect both ends to each other and configure them.
+ *
+ * Connecting makes the stack drop datagrams from any other sender. The
+ * SIO_UDP_CONNRESET opt-out is best effort.
+ *
+ * @return 0 on success, -1 on failure.
+ */
+static int wake_link_pair(SOCKET                        r,
+                          SOCKET                        w,
+                          const pn_windows_wake_addr_t* addr_r,
+                          int                           len_r,
+                          const pn_windows_wake_addr_t* addr_w,
+                          int                           len_w)
+{
+    BOOL   off   = FALSE;
+    DWORD  bytes = 0;
+    u_long mode  = 1;
+    SOCKET ends[2];
+    size_t i;
+
+    if (0 != connect(w, (const struct sockaddr*)addr_r, len_r)
+        || 0 != connect(r, (const struct sockaddr*)addr_w, len_w)) {
+        return -1;
+    }
+
+    ends[0] = r;
+    ends[1] = w;
+    for (i = 0; i < 2; ++i) {
+        (void)WSAIoctl(
+            ends[i], SIO_UDP_CONNRESET, &off, (DWORD)sizeof(off), NULL, 0, &bytes, NULL, NULL);
+        if (0 != ioctlsocket(ends[i], (long)FIONBIO, &mode)) {
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+/**
+ * @brief Verify the pair carries one byte and is empty afterwards.
+ *
+ * @return 0 when the round trip works, -1 otherwise.
+ */
+static int wake_selftest(SOCKET r, SOCKET w)
+{
+    const char probe = 1;
+    char       buf[8];
+    WSAPOLLFD  pfd = {0};
+
+    if (1 != send(w, &probe, 1, 0)) {
+        return -1;
+    }
+
+    pfd.fd     = r;
+    pfd.events = POLLRDNORM;
+    if (1 != WSAPoll(&pfd, 1, PN_WINDOWS_WAKE_SELFTEST_MS)
+        || 0 == (pfd.revents & POLLRDNORM)) {
+        return -1;
+    }
+
+    if (1 != recv(r, buf, (int)sizeof(buf), 0)) {
+        return -1;
+    }
+
+    if (SOCKET_ERROR != recv(r, buf, (int)sizeof(buf), 0)
+        || WSAEWOULDBLOCK != WSAGetLastError()) {
+        return -1;
+    }
+
+    return 0;
+}
+
+/**
+ * @brief Create the wake pair, trying each supported family in order.
+ */
+int pn_windows_wake_pair_create(int af, pn_socket_t out[2]);
+
+static int windows_pipe_create(const pn_socket_platform_ops_t* self,
+                               pn_socket_t                     out[2])
+{
+    (void)self;
+
+    size_t i;
+
+    for (i = 0; i < PN_WINDOWS_WAKE_FAMILY_COUNT; ++i) {
+        if (0 == pn_windows_wake_pair_create(pn_windows_wake_families[i], out)) {
+            return 0;
+        }
+    }
+
+    out[0] = PN_INVALID_SOCKET;
+    out[1] = PN_INVALID_SOCKET;
+    return -1;
+}
+
+/**
+ * @brief Send one wake byte; safe to call from any thread.
+ *
+ * Errors are ignored: WSAEWOULDBLOCK means the read end is already readable.
+ */
+static void windows_pipe_write(const pn_socket_platform_ops_t* self, pn_socket_t wr)
+{
+    (void)self;
+
+    const char byte = 1;
+
+    (void)send((SOCKET)wr, &byte, 1, 0);
+}
+
+/**
+ * @brief Discard pending wake datagrams, bounded per call.
+ *
+ * At the bound the read end stays readable, so the next poll drains again.
+ */
+static void windows_pipe_drain(const pn_socket_platform_ops_t* self, pn_socket_t rd)
+{
+    (void)self;
+
+    char buf[64];
+    int  i;
+
+    for (i = 0; i < PN_WINDOWS_WAKE_DRAIN_MAX_READS; ++i) {
+        if (0 >= recv((SOCKET)rd, buf, (int)sizeof(buf), 0)) {
+            break;
+        }
+    }
+}
+
+int pn_windows_wake_pair_create(int af, pn_socket_t out[2])
+{
+    pn_windows_wake_addr_t addr_r = {0};
+    pn_windows_wake_addr_t addr_w = {0};
+    int                    len_r  = 0;
+    int                    len_w  = 0;
+    SOCKET                 r      = INVALID_SOCKET;
+    SOCKET                 w      = INVALID_SOCKET;
+
+    if (NULL == out) {
+        return -1;
+    }
+
+    out[0] = PN_INVALID_SOCKET;
+    out[1] = PN_INVALID_SOCKET;
+
+    if (AF_INET != af && AF_INET6 != af) {
+        return -1;
+    }
+
+    r = wake_open_loopback(af, &addr_r, &len_r);
+    w = wake_open_loopback(af, &addr_w, &len_w);
+    if (INVALID_SOCKET != r && INVALID_SOCKET != w
+        && 0 == wake_link_pair(r, w, &addr_r, len_r, &addr_w, len_w)
+        && 0 == wake_selftest(r, w)) {
+        out[0] = (pn_socket_t)r;
+        out[1] = (pn_socket_t)w;
+        return 0;
+    }
+
+    if (INVALID_SOCKET != r) {
+        closesocket(r);
+    }
+    if (INVALID_SOCKET != w) {
+        closesocket(w);
+    }
+    return -1;
+}
+
 // NOLINTNEXTLINE(misc-use-internal-linkage)
 const pn_socket_platform_ops_t pn_windows_socket_ops = {
     .socket_create          = windows_socket_create,
@@ -1028,12 +1275,12 @@ const pn_socket_platform_ops_t pn_windows_socket_ops = {
     .dns_resolve_get_results = windows_dns_resolve_get_results,
     .dns_resolve_cancel      = NULL,
 #endif
-    /* `WSAPoll()` only monitors socket handles; non-socket pipe fds are
-     * not supported. A TCP socketpair substitute adds complexity for a
-     * rarely-used path, so the 100ms poll timeout is used as fallback. */
-    .pipe_create = NULL,
-    .pipe_write  = NULL,
-    .pipe_drain  = NULL,
+    /* WSAPoll() only monitors sockets, so the wake channel is a connected
+     * loopback UDP pair. If it cannot be created, pipe_create fails and the
+     * transport falls back to the poll timeout. */
+    .pipe_create = windows_pipe_create,
+    .pipe_write  = windows_pipe_write,
+    .pipe_drain  = windows_pipe_drain,
 };
 
 #endif /* _WIN32 */

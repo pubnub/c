@@ -193,8 +193,18 @@ static int zephyr_socket_check_connect(const pn_socket_platform_ops_t* self,
     struct zsock_pollfd pfd = {.fd = fd, .events = ZSOCK_POLLOUT, .revents = 0};
     int                 prc = zsock_poll(&pfd, 1, 0);
 
-    if (prc <= 0) {
+    if (0 == prc) {
         return 0; /* Not yet writable — still connecting. */
+    }
+
+    if (prc < 0) {
+        const int poll_err = errno;
+
+        /* A transient interruption is not a connect failure. */
+        if (EINTR == poll_err || EAGAIN == poll_err) {
+            return 0;
+        }
+        return -poll_err;
     }
 
     if (pfd.revents & (ZSOCK_POLLERR | ZSOCK_POLLHUP)) {

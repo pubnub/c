@@ -516,7 +516,7 @@ static void on_failure_should_transition_and_set_error(void** state)
     assert_int_equal(rc, PUBNUB_OK);
     assert_int_equal(sut.state, PN_REQUEST_FAILED);
     assert_int_equal(sut.result, PUBNUB_ERR_TIMEOUT);
-    assert_null(sut.transport_handle);
+    assert_ptr_equal(sut.transport_handle, s_fake_handle);
 }
 
 static void on_failure_should_enter_completing_with_callback(void** state)

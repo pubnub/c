@@ -22,10 +22,6 @@
 #include "features/subscribe/subscribe_event_queue.h"
 #include "features/subscribe/subscribe_internal.h"
 
-/* ================================================================== */
-/* UNSUBSCRIBED state                                                   */
-/* ================================================================== */
-
 static void test_unsubscribed_subscription_changed_nonempty(void** state)
 {
     (void)state;
@@ -84,10 +80,6 @@ static void test_unsubscribed_ignores_disconnect(void** state)
     assert_int_equal(PN_SUBSCRIBE_STATE_UNSUBSCRIBED, result.new_state);
     assert_int_equal(0, result.effect_count);
 }
-
-/* ================================================================== */
-/* HANDSHAKING state                                                    */
-/* ================================================================== */
 
 static void test_handshaking_handshake_success(void** state)
 {
@@ -212,10 +204,6 @@ static void test_handshaking_unsubscribe_all(void** state)
     assert_int_equal(PN_SUB_EE_EFFECT_CANCEL_HANDSHAKE, result.effects[0].type);
 }
 
-/* ================================================================== */
-/* HANDSHAKE_FAILED state                                              */
-/* ================================================================== */
-
 static void test_handshake_failed_reconnect(void** state)
 {
     (void)state;
@@ -272,10 +260,6 @@ static void test_handshake_failed_unsubscribe_all(void** state)
     assert_int_equal(PN_SUBSCRIBE_STATE_UNSUBSCRIBED, result.new_state);
     assert_int_equal(0, result.effect_count);
 }
-
-/* ================================================================== */
-/* HANDSHAKE_STOPPED state                                             */
-/* ================================================================== */
 
 static void test_handshake_stopped_reconnect(void** state)
 {
@@ -336,10 +320,6 @@ static void test_handshake_stopped_subscription_restored_nonempty(void** state)
     assert_int_equal(PN_SUBSCRIBE_STATE_HANDSHAKE_STOPPED, result.new_state);
     assert_int_equal(0, result.effect_count);
 }
-
-/* ================================================================== */
-/* RECEIVING state                                                      */
-/* ================================================================== */
 
 static void test_receiving_receive_success(void** state)
 {
@@ -477,10 +457,6 @@ static void test_receiving_subscription_restored_empty(void** state)
     assert_int_equal(PN_SUB_EE_STATUS_DISCONNECTED, result.effects[1].status);
 }
 
-/* ================================================================== */
-/* RECEIVE_FAILED state                                                */
-/* ================================================================== */
-
 static void test_receive_failed_reconnect(void** state)
 {
     (void)state;
@@ -537,10 +513,6 @@ static void test_receive_failed_unsubscribe_all(void** state)
     assert_int_equal(PN_SUBSCRIBE_STATE_UNSUBSCRIBED, result.new_state);
     assert_int_equal(0, result.effect_count);
 }
-
-/* ================================================================== */
-/* RECEIVE_STOPPED state                                               */
-/* ================================================================== */
 
 static void test_receive_stopped_reconnect(void** state)
 {
@@ -614,10 +586,6 @@ static void test_receive_stopped_unsubscribe_all(void** state)
     assert_int_equal(0, result.effect_count);
 }
 
-/* ================================================================== */
-/* Cross-cutting: UNSUBSCRIBE_ALL from multiple states                 */
-/* ================================================================== */
-
 static void test_unsubscribe_all_from_handshake_failed(void** state)
 {
     (void)state;
@@ -639,10 +607,6 @@ static void test_unsubscribe_all_from_handshake_stopped(void** state)
 
     assert_int_equal(PN_SUBSCRIBE_STATE_UNSUBSCRIBED, result.new_state);
 }
-
-/* ================================================================== */
-/* NULL event safety                                                    */
-/* ================================================================== */
 
 static void test_null_event_returns_same_state(void** state)
 {
@@ -764,6 +728,62 @@ static void test_single_subscribe_generation_processed(void** state)
     assert_false(is_stale);
 }
 
+static void test_handshaking_origin_changed_reissues_handshake(void** state)
+{
+    (void)state;
+    pn_subscribe_ee_event_t event = {.type = PN_SUB_EVENT_ORIGIN_CHANGED};
+
+    pn_subscribe_ee_transition_result_t result =
+        pn_subscribe_ee_transition(PN_SUBSCRIBE_STATE_HANDSHAKING, &event);
+
+    assert_int_equal(PN_SUBSCRIBE_STATE_HANDSHAKING, result.new_state);
+    assert_int_equal(2, result.effect_count);
+    assert_int_equal(PN_SUB_EE_EFFECT_CANCEL_HANDSHAKE, result.effects[0].type);
+    assert_int_equal(PN_SUB_EE_EFFECT_HANDSHAKE, result.effects[1].type);
+}
+
+static void test_receiving_origin_changed_reissues_receive_silently(void** state)
+{
+    (void)state;
+    pn_subscribe_ee_event_t event = {.type = PN_SUB_EVENT_ORIGIN_CHANGED};
+    uint8_t                 i;
+
+    pn_subscribe_ee_transition_result_t result =
+        pn_subscribe_ee_transition(PN_SUBSCRIBE_STATE_RECEIVING, &event);
+
+    assert_int_equal(PN_SUBSCRIBE_STATE_RECEIVING, result.new_state);
+    assert_int_equal(2, result.effect_count);
+    assert_int_equal(PN_SUB_EE_EFFECT_CANCEL_RECEIVE, result.effects[0].type);
+    assert_int_equal(PN_SUB_EE_EFFECT_RECEIVE_MESSAGES, result.effects[1].type);
+    for (i = 0; i < result.effect_count; i++) {
+        assert_int_not_equal(PN_SUB_EE_EFFECT_EMIT_STATUS, result.effects[i].type);
+    }
+}
+
+/* A late origin-change notice must never resurrect a loop the application
+ * stopped, failed or unsubscribed in the meantime. */
+static void test_origin_changed_ignored_outside_active_states(void** state)
+{
+    static const pn_subscribe_ee_state_t k_states[] = {
+        PN_SUBSCRIBE_STATE_UNSUBSCRIBED,
+        PN_SUBSCRIBE_STATE_HANDSHAKE_FAILED,
+        PN_SUBSCRIBE_STATE_HANDSHAKE_STOPPED,
+        PN_SUBSCRIBE_STATE_RECEIVE_FAILED,
+        PN_SUBSCRIBE_STATE_RECEIVE_STOPPED,
+    };
+    pn_subscribe_ee_event_t event = {.type = PN_SUB_EVENT_ORIGIN_CHANGED};
+    size_t                  i;
+
+    (void)state;
+    for (i = 0; i < sizeof(k_states) / sizeof(k_states[0]); i++) {
+        pn_subscribe_ee_transition_result_t result =
+            pn_subscribe_ee_transition(k_states[i], &event);
+
+        assert_int_equal(k_states[i], result.new_state);
+        assert_int_equal(0, result.effect_count);
+    }
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -811,6 +831,10 @@ int main(void)
         cmocka_unit_test(test_receive_stopped_subscription_changed_empty),
         cmocka_unit_test(test_receive_stopped_subscription_restored_nonempty),
         cmocka_unit_test(test_receive_stopped_unsubscribe_all),
+        /* ORIGIN_CHANGED */
+        cmocka_unit_test(test_handshaking_origin_changed_reissues_handshake),
+        cmocka_unit_test(test_receiving_origin_changed_reissues_receive_silently),
+        cmocka_unit_test(test_origin_changed_ignored_outside_active_states),
         /* Cross-cutting UNSUBSCRIBE_ALL */
         cmocka_unit_test(test_unsubscribe_all_from_handshake_failed),
         cmocka_unit_test(test_unsubscribe_all_from_handshake_stopped),

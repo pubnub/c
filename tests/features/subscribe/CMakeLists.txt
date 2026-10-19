@@ -43,3 +43,25 @@ target_include_directories(
     test_feature_subscribe_slot_release_units
     PRIVATE "${CMAKE_SOURCE_DIR}/src"
 )
+
+pubnub_add_unit_test(
+    test_feature_subscribe_capacity_log_units
+    SOURCES subscribe_capacity_log_units.c
+    LIBS pubnub
+)
+target_include_directories(
+    test_feature_subscribe_capacity_log_units
+    PRIVATE "${CMAKE_SOURCE_DIR}/src"
+)
+
+if(PUBNUB_ENABLE_RETRY AND NOT PUBNUB_CFG_NO_HEAP)
+    pubnub_add_unit_test(
+        test_feature_subscribe_origin_change_units
+        SOURCES subscribe_origin_change_units.c
+        LIBS pubnub
+    )
+    target_include_directories(
+        test_feature_subscribe_origin_change_units
+        PRIVATE "${CMAKE_SOURCE_DIR}/src"
+    )
+endif()

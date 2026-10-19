@@ -56,10 +56,11 @@ pn_presence_manager_t* pn_presence_manager_create(pubnub_context_t* ctx,
     }
 
     memset(mgr, 0, sizeof(*mgr));
-    mgr->ctx            = ctx;
-    mgr->ee_state       = PN_PRESENCE_STATE_HEARTBEAT_INACTIVE;
-    mgr->active_slot_id = PUBNUB_SLOT_ID_INVALID;
-    mgr->wait_timer     = NULL;
+    mgr->ctx                    = ctx;
+    mgr->ee_state               = PN_PRESENCE_STATE_HEARTBEAT_INACTIVE;
+    mgr->active_slot_id         = PUBNUB_SLOT_ID_INVALID;
+    mgr->active_slot_generation = 0;
+    mgr->wait_timer             = NULL;
 
     /* Cache config fields. */
     const pubnub_config_t* config = pn_context_config(ctx);
@@ -81,46 +82,38 @@ pn_presence_manager_t* pn_presence_manager_create(pubnub_context_t* ctx,
 static void cancel_active_slot(pn_presence_manager_t* mgr)
 {
     pn_request_pool_t* pool = pn_context_request_pool(mgr->ctx);
+    uint16_t           slot_id;
+    uint16_t           generation = PN_GENERATION_ANY;
+    pn_request_t*      slot;
+
     if (NULL == pool) {
         return;
     }
-    const uint16_t cap = pn_context_pool_capacity(mgr->ctx);
-    if (mgr->active_slot_id < cap) {
-        pn_request_t* slot = pn_request_pool_get(pool, mgr->active_slot_id);
-        if (NULL != slot && !pn_request_is_terminal(slot)
-            && !pn_request_is_idle(slot)) {
-            pn_request_abort(mgr->ctx,
-                             mgr->active_slot_id,
-                             PN_GENERATION_ANY,
-                             PUBNUB_ERR_CANCELLED,
-                             0);
+    slot_id = mgr->active_slot_id;
+    if (slot_id >= pn_context_pool_capacity(mgr->ctx)) {
+        /* Pending-range id: cancel the queued request, or follow it to the
+         * pool slot it was promoted into. The async callback is suppressed
+         * to avoid re-entry into the manager that is being destroyed. */
+        pn_pending_ref_t ref = pn_context_pending_cancel_or_resolve(
+            mgr->ctx, slot_id, mgr->active_slot_generation, 0);
+
+        if (PN_PENDING_REF_REAL != ref.kind) {
+            return;
         }
-        if (NULL != slot && pn_request_is_terminal(slot)) {
-            pn_request_pool_lock(pool);
-            pn_request_pool_release(pool, mgr->active_slot_id);
-            pn_request_pool_unlock(pool);
-        }
-    } else {
-        /* Pending-range slot: cancel in the pending queue.
-         * Suppress async callback to avoid re-entry into the
-         * manager that is being destroyed. */
-        pn_pending_queue_t* queue = pn_context_pending_queue(mgr->ctx);
-        if (NULL != queue) {
-            uint16_t pending_idx = (uint16_t)(mgr->active_slot_id - cap);
-            uint16_t logical =
-                (uint16_t)((pending_idx - queue->head + queue->capacity)
-                           % queue->capacity);
-            pn_pending_cancel_data_t cancel_data = {0};
-            cancel_data.async_cb_future.ctx      = mgr->ctx;
-            cancel_data.async_cb_future.slot_id  = mgr->active_slot_id;
-            cancel_data.async_cb_future.status   = PUBNUB_IN_PROGRESS;
-            pn_request_pool_lock(pool);
-            (void)pn_pending_queue_cancel_at(queue, logical, &cancel_data);
-            pn_request_pool_unlock(pool);
-            cancel_data.async_cb           = NULL;
-            cancel_data.async_cb_user_data = NULL;
-            pn_pending_cancel_data_run(&cancel_data);
-        }
+        slot_id    = ref.real_slot;
+        generation = ref.real_generation;
+    }
+
+    slot = pn_request_pool_get(pool, slot_id);
+    if (NULL != slot && PN_GENERATION_ANY != generation
+        && generation != slot->generation) {
+        return;
+    }
+    if (NULL != slot && !pn_request_is_terminal(slot) && !pn_request_is_idle(slot)) {
+        pn_request_abort(mgr->ctx, slot_id, generation, PUBNUB_ERR_CANCELLED, 0);
+    }
+    if (NULL != slot && pn_request_is_terminal(slot)) {
+        pn_context_release_terminal_slot(mgr->ctx, slot_id, PN_GENERATION_ANY);
     }
 }
 
@@ -142,7 +135,8 @@ void pn_presence_manager_cleanup(void* state, pubnub_allocator_provider_t* alloc
 
     if (PUBNUB_SLOT_ID_INVALID != mgr->active_slot_id) {
         cancel_active_slot(mgr);
-        mgr->active_slot_id = PUBNUB_SLOT_ID_INVALID;
+        mgr->active_slot_id         = PUBNUB_SLOT_ID_INVALID;
+        mgr->active_slot_generation = 0;
     }
 
     pn_strfree(mgr->channels, alloc);
