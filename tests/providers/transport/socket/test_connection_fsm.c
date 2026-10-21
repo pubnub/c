@@ -13,6 +13,7 @@
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <cmocka.h>
@@ -20,6 +21,17 @@
 #include "providers/transport/socket/connection_fsm_internal.h"
 #include "providers/transport/socket/inflate/pn_inflate.h"
 #include "providers/transport/socket/connection_fsm.c"
+
+/*
+ * Layout guard: proxy_done and tls_want stay adjacent, and redirect_host sits
+ * no more than 4 bytes past proxy_done (detects a fifth narrow field only).
+ */
+PUBNUB_STATIC_ASSERT(offsetof(pn_socket_connection_t, tls_want)
+                         == offsetof(pn_socket_connection_t, proxy_done) + 1U,
+                     "proxy_done and tls_want must stay adjacent");
+PUBNUB_STATIC_ASSERT(offsetof(pn_socket_connection_t, redirect_host)
+                         <= offsetof(pn_socket_connection_t, proxy_done) + 4U,
+                     "narrow-field block before redirect_host outgrew padding");
 
 /** Mock control state for platform operations. */
 static struct {
@@ -32,6 +44,11 @@ static struct {
     int         set_nonblocking_result;
     int         set_keepalive_result;
     int         socket_destroy_calls;
+    int         socket_create_calls;
+    /* Value of socket_create_calls when socket_destroy last ran (proves the
+     * destroy happened before a replacement socket was created). */
+    int socket_create_calls_at_destroy;
+    int socket_send_calls;
 
     /* Scripted per-call send results for partial-send simulation. When
      * send_script_len > 0, mock_socket_send and mock_tls_send return
@@ -41,6 +58,21 @@ static struct {
     int send_script[8];
     int send_script_len;
     int send_call_idx;
+
+    /* Scripted check_connect results (a connect pending for N ticks); the last
+     * entry repeats once exhausted. */
+    int check_connect_script[8];
+    int check_connect_script_len;
+    int check_connect_calls;
+    /* 1 = any socket_check_connect call fails the test (the FSM must not
+     * probe a socket whose connect it already confirmed). */
+    int check_connect_forbidden;
+    /* Non-zero: socket_check_connect on this socket reports "still
+     * pending" forever (a blackholed address), regardless of the script. */
+    pn_socket_t pending_forever_sock;
+    /* Non-zero: every socket_create returns a fresh descriptor number. */
+    int unique_fds;
+    int set_keepalive_calls;
 
     /* Recv data. */
     const uint8_t* recv_data;
@@ -70,10 +102,13 @@ static struct {
     int   tls_handshake_result;
     int   tls_handshake_calls_until_ok;
     int   tls_session_create_result;
+    int   tls_session_create_calls;
     int   tls_send_result;
     int   tls_recv_result;
     int   tls_session_destroy_calls;
     void* tls_fake_session;
+    /* Value returned by the diagnostic backend's get_session_error hook. */
+    int tls_session_error;
 
     /* Response headers injected by pn_http_parser_get_headers mock. */
     pubnub_kv_t  resp_headers[4];
@@ -115,6 +150,10 @@ static pn_socket_t mock_socket_create(const pn_socket_platform_ops_t* self,
     (void)self;
     (void)family;
     (void)dgram;
+    mock_state.socket_create_calls++;
+    if (0 != mock_state.unique_fds) {
+        return mock_state.next_socket++;
+    }
     return mock_state.next_socket;
 }
 
@@ -122,6 +161,7 @@ static void mock_socket_destroy(const pn_socket_platform_ops_t* self, pn_socket_
 {
     (void)self;
     (void)sock;
+    mock_state.socket_create_calls_at_destroy = mock_state.socket_create_calls;
     mock_state.socket_destroy_calls++;
 }
 
@@ -139,7 +179,23 @@ static int mock_socket_check_connect(const pn_socket_platform_ops_t* self,
                                      pn_socket_t                     sock)
 {
     (void)self;
-    (void)sock;
+    if (0 != mock_state.check_connect_forbidden) {
+        fail_msg("socket_check_connect called on a connected connection");
+    }
+    if (0 != mock_state.pending_forever_sock
+        && sock == mock_state.pending_forever_sock) {
+        mock_state.check_connect_calls++;
+        return 0;
+    }
+    if (mock_state.check_connect_script_len > 0) {
+        int idx = mock_state.check_connect_calls;
+        if (idx >= mock_state.check_connect_script_len) {
+            idx = mock_state.check_connect_script_len - 1;
+        }
+        mock_state.check_connect_calls++;
+        return mock_state.check_connect_script[idx];
+    }
+    mock_state.check_connect_calls++;
     return mock_state.check_connect_result;
 }
 
@@ -172,6 +228,7 @@ static int mock_socket_send(const pn_socket_platform_ops_t* self,
     (void)self;
     (void)sock;
     (void)data;
+    mock_state.socket_send_calls++;
     if (mock_state.send_script_len > 0) {
         return mock_next_send_rc((int)len);
     }
@@ -233,6 +290,7 @@ static int mock_socket_set_keepalive(const pn_socket_platform_ops_t* self,
     (void)self;
     (void)sock;
     (void)config;
+    mock_state.set_keepalive_calls++;
     return mock_state.set_keepalive_result;
 }
 
@@ -441,6 +499,7 @@ static int mock_tls_session_create(void**      out_session,
     (void)sock;
     (void)ops;
     (void)hostname;
+    mock_state.tls_session_create_calls++;
     if (0 != mock_state.tls_session_create_result) {
         return mock_state.tls_session_create_result;
     }
@@ -492,6 +551,30 @@ static pn_tls_backend_t mock_tls_backend = {
     .send            = mock_tls_send,
     .recv            = mock_tls_recv,
     .session_destroy = mock_tls_session_destroy,
+};
+
+static int mock_tls_get_session_error(void* session)
+{
+    (void)session;
+    return mock_state.tls_session_error;
+}
+
+static const char* mock_tls_session_error_str(int code)
+{
+    return (12345 == code) ? "MOCK_TLS_ERR" : NULL;
+}
+
+/* Same behaviour as mock_tls_backend plus the optional diagnostic hooks. */
+static pn_tls_backend_t mock_tls_backend_diag = {
+    .ctx_create        = mock_tls_ctx_create,
+    .ctx_destroy       = mock_tls_ctx_destroy,
+    .session_create    = mock_tls_session_create,
+    .handshake         = mock_tls_handshake,
+    .send              = mock_tls_send,
+    .recv              = mock_tls_recv,
+    .session_destroy   = mock_tls_session_destroy,
+    .get_session_error = mock_tls_get_session_error,
+    .session_error_str = mock_tls_session_error_str,
 };
 
 /* --- Mock HTTP builder/parser (provided via .c include) --- */
@@ -811,6 +894,97 @@ static void test_fsm_dns_failed_terminates(void** state)
     assert_int_equal(transport.resolver.state, PN_DNS_STATE_IDLE);
 }
 
+/** A pending connect must not start the TLS session. */
+static void test_fsm_connect_pending_defers_tls_session(void** state)
+{
+    (void)state;
+    mock_reset();
+
+    mock_state.connect_result           = 0;
+    mock_state.check_connect_script[0]  = 0;
+    mock_state.check_connect_script[1]  = 0;
+    mock_state.check_connect_script[2]  = 1;
+    mock_state.check_connect_script_len = 3;
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response;
+    memset(&response, 0, sizeof(response));
+
+    pn_connection_init(&conn);
+    uint8_t rx_buf[256];
+    conn.rx_buf.data = rx_buf;
+    conn.rx_buf.cap  = sizeof(rx_buf);
+
+    assert_int_equal(0, pn_connection_start(&conn, &request, &response, &transport));
+
+    /* Tick 1 issues the connect; ticks 2 and 3 observe 0 (pending). */
+    pn_conn_state_t s = pn_connection_tick(&conn, &transport);
+    assert_int_equal(PN_CONN_CONNECTING, s);
+    s = pn_connection_tick(&conn, &transport);
+    assert_int_equal(PN_CONN_CONNECTING, s);
+    s = pn_connection_tick(&conn, &transport);
+    assert_int_equal(PN_CONN_CONNECTING, s);
+    assert_int_equal(2, mock_state.check_connect_calls);
+    assert_int_equal(0, mock_state.tls_session_create_calls);
+
+    /* Tick 4 observes 1: TLS session is created now. */
+    s = pn_connection_tick(&conn, &transport);
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, s);
+    assert_int_equal(3, mock_state.check_connect_calls);
+    assert_int_equal(1, mock_state.tls_session_create_calls);
+}
+
+/** A refused connect on address 0 falls back to address 1. */
+static void test_fsm_connect_error_falls_back_to_next_addr(void** state)
+{
+    (void)state;
+    mock_reset();
+
+    mock_state.dns_result_count            = 2;
+    mock_state.dns_results[1].family       = PN_AF_INET;
+    mock_state.dns_results[1].port         = 443;
+    mock_state.dns_results[1].addr.ipv4[0] = 10;
+    mock_state.dns_results[1].addr.ipv4[1] = 0;
+    mock_state.dns_results[1].addr.ipv4[2] = 0;
+    mock_state.dns_results[1].addr.ipv4[3] = 1;
+
+    mock_state.connect_result           = 0;
+    mock_state.check_connect_script[0]  = -111; /* ECONNREFUSED (Linux). */
+    mock_state.check_connect_script[1]  = 1;
+    mock_state.check_connect_script_len = 2;
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response;
+    memset(&response, 0, sizeof(response));
+
+    pn_connection_init(&conn);
+    uint8_t rx_buf[256];
+    conn.rx_buf.data = rx_buf;
+    conn.rx_buf.cap  = sizeof(rx_buf);
+
+    assert_int_equal(0, pn_connection_start(&conn, &request, &response, &transport));
+
+    /* Tick 1: connect to address 0 (pending). */
+    pn_conn_state_t s = pn_connection_tick(&conn, &transport);
+    assert_int_equal(PN_CONN_CONNECTING, s);
+    assert_int_equal(0, conn.addr_current);
+
+    /* Tick 2: refused on address 0, connect issued to address 1. */
+    s = pn_connection_tick(&conn, &transport);
+    assert_int_equal(PN_CONN_CONNECTING, s);
+    assert_int_equal(1, conn.addr_current);
+    assert_int_equal(0, mock_state.tls_session_create_calls);
+
+    /* Tick 3: address 1 reports connected; TLS starts exactly once. */
+    s = pn_connection_tick(&conn, &transport);
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, s);
+    assert_int_equal(1, mock_state.tls_session_create_calls);
+}
+
 /** IPv6 fallback: first addr unreachable, second (IPv4) succeeds. */
 static void test_fsm_ipv6_fallback(void** state)
 {
@@ -986,12 +1160,7 @@ static void test_fsm_cancel(void** state)
     assert_true(mock_state.socket_destroy_calls > 0);
 }
 
-/**
- * Verify tick_complete() transitions COMPLETE → KEEP_ALIVE_IDLE when the
- * server does not send Connection: close. This exercises the path that was
- * previously unreachable because socket_poll skipped COMPLETE connections on
- * re-entry.
- */
+/** COMPLETE advances to KEEP_ALIVE_IDLE when the server keeps the link. */
 static void test_fsm_complete_advances_to_keepalive_idle(void** state)
 {
     (void)state;
@@ -1471,9 +1640,9 @@ static void test_tls_handshake_serialized_same_host(void** state)
 
     /* Tick connection 1: TCP connects immediately, but TLS is deferred
      * because connection 0 is TLS_HANDSHAKING for the same hostname.
-     * State must remain CONNECTING. */
+     * State must move to TLS_DEFERRED. */
     s = pn_connection_tick(&transport.connections[1], &transport);
-    assert_int_equal(s, PN_CONN_CONNECTING);
+    assert_int_equal(s, PN_CONN_TLS_DEFERRED);
 
     /* Connection 1 must still have a valid socket (TCP established). */
     assert_int_not_equal(transport.connections[1].socket, PN_INVALID_SOCKET);
@@ -1584,7 +1753,7 @@ static void test_tls_handshake_deferred_timeout(void** state)
     /* Tick connection 1: TCP connects immediately, but TLS is deferred
      * because connection 0 is TLS_HANDSHAKING for the same hostname. */
     s = pn_connection_tick(&transport.connections[1], &transport);
-    assert_int_equal(s, PN_CONN_CONNECTING);
+    assert_int_equal(s, PN_CONN_TLS_DEFERRED);
     assert_int_not_equal(transport.connections[1].socket, PN_INVALID_SOCKET);
 
     /* Expire connection 1's connect deadline. */
@@ -1651,7 +1820,7 @@ static void test_peer_close_complete_body_populates_headers(void** state)
     assert_int_equal(response.status_code, 503);
     assert_int_equal(response.body_len, 5);
 
-    /* The regression guard: headers must be extracted on this path too. */
+    /* Headers must be extracted on this path too. */
     assert_int_equal(response.header_count, 1);
     assert_int_equal(response.headers[0].key.len, 11);
     assert_memory_equal(response.headers[0].key.ptr, "Retry-After", 11);
@@ -1694,7 +1863,7 @@ static void test_dns_claim_failure_releases_resolver(void** state)
                      -1);
     assert_int_equal(transport.resolver.state, PN_DNS_STATE_IDLE);
 
-    /* The regression guard: a different slot must still be able to resolve. */
+    /* A different slot must still be able to resolve. */
     mock_state.dns_result_count = 1;
     assert_int_equal(pn_connection_start(&conn_b, &request, &resp_b, &transport), 0);
     assert_int_equal(conn_b.state, PN_CONN_CONNECTING);
@@ -2078,6 +2247,2034 @@ static void test_fsm_proxy_reset(void** state)
 }
 #endif /* PUBNUB_ENABLE_PROXY */
 
+/** Capacity of the captured log text. */
+#define CAP_LOG_SIZE 8192
+
+/** Logger that records text entries as "<level-letter> <message>\n". */
+typedef struct cap_logger {
+    /** Base provider (must be first member). */
+    pubnub_logger_provider_t base;
+    /** Concatenated captured entries (NUL-terminated). */
+    char text[CAP_LOG_SIZE];
+    /** Bytes used in text. */
+    size_t len;
+} cap_logger_t;
+
+static cap_logger_t g_cap;
+
+static void cap_log(struct pubnub_logger_provider* self,
+                    const pubnub_log_entry_t*      entry)
+{
+    cap_logger_t* cap = (cap_logger_t*)self;
+    char          letter;
+    int           n;
+
+    if (PUBNUB_LOG_ENTRY_TEXT != entry->type) {
+        return;
+    }
+    switch (entry->level) {
+    case PUBNUB_LOG_LEVEL_TRACE: letter = 'T'; break;
+    case PUBNUB_LOG_LEVEL_DEBUG: letter = 'D'; break;
+    case PUBNUB_LOG_LEVEL_INFO: letter = 'I'; break;
+    case PUBNUB_LOG_LEVEL_WARNING: letter = 'W'; break;
+    default: letter = 'E'; break;
+    }
+    n = snprintf(cap->text + cap->len,
+                 sizeof(cap->text) - cap->len,
+                 "%c %s\n",
+                 letter,
+                 ((const pubnub_log_entry_text_t*)entry)->message);
+    if (0 < n && (size_t)n < sizeof(cap->text) - cap->len) {
+        cap->len += (size_t)n;
+    }
+}
+
+/** Reset the capture buffer and attach the logger to a transport. */
+static void cap_attach(pn_socket_transport_t* transport)
+{
+    memset(&g_cap, 0, sizeof(g_cap));
+    g_cap.base.log    = cap_log;
+    transport->logger = &g_cap.base;
+}
+
+static int cap_has(const char* needle)
+{
+    if (NULL == strstr(g_cap.text, needle)) {
+        print_message("missing \"%s\" in captured log:\n%s\n", needle, g_cap.text);
+        return 0;
+    }
+    return 1;
+}
+
+static int cap_count(const char* needle)
+{
+    const char* p     = g_cap.text;
+    int         count = 0;
+
+    while (NULL != (p = strstr(p, needle))) {
+        ++count;
+        p += strlen(needle);
+    }
+    return count;
+}
+
+/** Skip the test when log formatting is compiled out of the build. */
+static void skip_if_logging_compiled_out(void)
+{
+    if (0 == PUBNUB_CFG_MAX_LOG_MESSAGE_SIZE) {
+        skip();
+    }
+}
+
+/** Add a second IPv4 DNS result so an address fallback is possible. */
+static void add_second_addr(void)
+{
+    mock_state.dns_result_count            = 2;
+    mock_state.dns_results[1].family       = PN_AF_INET;
+    mock_state.dns_results[1].port         = 443;
+    mock_state.dns_results[1].addr.ipv4[0] = 10;
+    mock_state.dns_results[1].addr.ipv4[1] = 0;
+    mock_state.dns_results[1].addr.ipv4[2] = 0;
+    mock_state.dns_results[1].addr.ipv4[3] = 1;
+}
+
+/** A TLS handshake failure with a next address is logged at WARNING. */
+static void test_fsm_tls_error_logs_backend_error(void** state)
+{
+    (void)state;
+    skip_if_logging_compiled_out();
+    mock_reset();
+    add_second_addr();
+
+    mock_state.tls_handshake_result         = -1;
+    mock_state.tls_handshake_calls_until_ok = 1;
+    mock_state.tls_session_error            = 12345;
+
+    pn_socket_transport_t         transport = make_transport();
+    pn_socket_connection_t* const cp        = &transport.connections[0];
+    pubnub_http_request_t         request   = make_request();
+    pubnub_http_response_t        response;
+    memset(&response, 0, sizeof(response));
+    transport.tls_backend = &mock_tls_backend_diag;
+    cap_attach(&transport);
+
+    pn_connection_init(cp);
+    uint8_t rx_buf[256];
+    cp->rx_buf.data = rx_buf;
+    cp->rx_buf.cap  = sizeof(rx_buf);
+
+    assert_int_equal(0, pn_connection_start(cp, &request, &response, &transport));
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, pn_connection_tick(cp, &transport));
+    (void)pn_connection_tick(cp, &transport);
+
+    assert_true(cap_has("W conn[0] TLS error on address 1 of 2"));
+    assert_true(cap_has("tls_err=12345 (MOCK_TLS_ERR)"));
+}
+
+/**
+ * A backend without diagnostic hooks (get_session_error == NULL) must not
+ * crash the receive-error log path.
+ */
+static void test_fsm_recv_error_null_error_hook_safe(void** state)
+{
+    (void)state;
+    mock_reset();
+
+    pn_socket_transport_t         transport = make_transport();
+    pn_socket_connection_t* const cp        = &transport.connections[0];
+    pubnub_http_request_t         request   = make_request();
+    pubnub_http_response_t        response;
+    memset(&response, 0, sizeof(response));
+    cap_attach(&transport);
+
+    pn_connection_init(cp);
+    uint8_t rx_buf[256];
+    cp->rx_buf.data = rx_buf;
+    cp->rx_buf.cap  = sizeof(rx_buf);
+
+    assert_int_equal(0, pn_connection_start(cp, &request, &response, &transport));
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, pn_connection_tick(cp, &transport));
+    assert_int_equal(PN_CONN_SENDING_HEADERS, pn_connection_tick(cp, &transport));
+    assert_int_equal(PN_CONN_RECEIVING_RESPONSE, pn_connection_tick(cp, &transport));
+
+    mock_state.recv_result = -2;
+    assert_int_equal(PN_CONN_FAILED, pn_connection_tick(cp, &transport));
+    assert_int_equal(PUBNUB_ERR_TRANSPORT, response.transport_error);
+    if (0 != PUBNUB_CFG_MAX_LOG_MESSAGE_SIZE) {
+        assert_true(cap_has("recv error: rc=-2"));
+    }
+}
+
+/** With diagnostic hooks present, the receive error carries the TLS detail. */
+static void test_fsm_recv_error_logs_tls_backend_error(void** state)
+{
+    (void)state;
+    skip_if_logging_compiled_out();
+    mock_reset();
+    mock_state.tls_session_error = 12345;
+
+    pn_socket_transport_t         transport = make_transport();
+    pn_socket_connection_t* const cp        = &transport.connections[0];
+    pubnub_http_request_t         request   = make_request();
+    pubnub_http_response_t        response;
+    memset(&response, 0, sizeof(response));
+    transport.tls_backend = &mock_tls_backend_diag;
+    cap_attach(&transport);
+
+    pn_connection_init(cp);
+    uint8_t rx_buf[256];
+    cp->rx_buf.data = rx_buf;
+    cp->rx_buf.cap  = sizeof(rx_buf);
+
+    assert_int_equal(0, pn_connection_start(cp, &request, &response, &transport));
+    (void)pn_connection_tick(cp, &transport);
+    (void)pn_connection_tick(cp, &transport);
+    (void)pn_connection_tick(cp, &transport);
+    mock_state.recv_result = -2;
+    assert_int_equal(PN_CONN_FAILED, pn_connection_tick(cp, &transport));
+
+    assert_true(cap_has("E conn[0] recv error: rc=-2"));
+    assert_true(cap_has("tls_err=12345 (MOCK_TLS_ERR)"));
+}
+
+/** A TLS header-write failure is logged with the connection and TLS detail. */
+static void test_fsm_header_send_error_logs_tls_detail(void** state)
+{
+    (void)state;
+    skip_if_logging_compiled_out();
+    mock_reset();
+    mock_state.tls_session_error = 12345;
+
+    pn_socket_transport_t         transport = make_transport();
+    pn_socket_connection_t* const cp        = &transport.connections[0];
+    pubnub_http_request_t         request   = make_request();
+    pubnub_http_response_t        response;
+    memset(&response, 0, sizeof(response));
+    transport.tls_backend = &mock_tls_backend_diag;
+    cap_attach(&transport);
+
+    pn_connection_init(cp);
+    uint8_t rx_buf[256];
+    cp->rx_buf.data = rx_buf;
+    cp->rx_buf.cap  = sizeof(rx_buf);
+
+    assert_int_equal(0, pn_connection_start(cp, &request, &response, &transport));
+    (void)pn_connection_tick(cp, &transport);
+    assert_int_equal(PN_CONN_SENDING_HEADERS, pn_connection_tick(cp, &transport));
+    mock_state.tls_send_result = -2;
+    assert_int_equal(PN_CONN_FAILED, pn_connection_tick(cp, &transport));
+
+    assert_true(cap_has("E conn[0] header send error: rc=-2"));
+    assert_true(cap_has("tls_err=12345 (MOCK_TLS_ERR)"));
+}
+
+/** A pending-connect failure is INFO unless it is the last address. */
+static void test_fsm_connect_refused_logs_warning(void** state)
+{
+    (void)state;
+    skip_if_logging_compiled_out();
+    if (!PUBNUB_LOG_LEVEL_ENABLED(PUBNUB_LOG_LEVEL_INFO)) {
+        skip();
+    }
+    mock_reset();
+    add_second_addr();
+
+    mock_state.connect_result           = 0;
+    mock_state.check_connect_script[0]  = -111;
+    mock_state.check_connect_script[1]  = -111;
+    mock_state.check_connect_script_len = 2;
+
+    pn_socket_transport_t         transport = make_transport();
+    pn_socket_connection_t* const cp        = &transport.connections[0];
+    pubnub_http_request_t         request   = make_request();
+    pubnub_http_response_t        response;
+    memset(&response, 0, sizeof(response));
+    cap_attach(&transport);
+
+    pn_connection_init(cp);
+    uint8_t rx_buf[256];
+    cp->rx_buf.data = rx_buf;
+    cp->rx_buf.cap  = sizeof(rx_buf);
+
+    assert_int_equal(0, pn_connection_start(cp, &request, &response, &transport));
+    (void)pn_connection_tick(cp, &transport);
+    (void)pn_connection_tick(cp, &transport);
+    (void)pn_connection_tick(cp, &transport);
+
+    assert_true(cap_has("I conn[0] TCP connect failed on address 1 of 2"));
+    assert_true(cap_has("W conn[0] TCP connect failed on address 2 of 2"));
+    assert_true(cap_has("rc=-111"));
+    assert_int_equal(0, cap_count("W conn[0] TCP connect failed on address 1"));
+    assert_int_equal(0, cap_count("I conn[0] TCP connect failed on address 2"));
+}
+
+/** A connect failure on the last address is logged at WARNING. */
+static void test_fsm_connect_failure_logs_exhausted_context(void** state)
+{
+    (void)state;
+    skip_if_logging_compiled_out();
+    mock_reset();
+
+    mock_state.connect_result = -111;
+
+    pn_socket_transport_t         transport = make_transport();
+    pn_socket_connection_t* const cp        = &transport.connections[0];
+    pubnub_http_request_t         request   = make_request();
+    pubnub_http_response_t        response;
+    memset(&response, 0, sizeof(response));
+    cap_attach(&transport);
+
+    pn_connection_init(cp);
+    uint8_t rx_buf[256];
+    cp->rx_buf.data = rx_buf;
+    cp->rx_buf.cap  = sizeof(rx_buf);
+
+    assert_int_equal(0, pn_connection_start(cp, &request, &response, &transport));
+    assert_int_equal(PN_CONN_FAILED, pn_connection_tick(cp, &transport));
+
+    assert_true(cap_has("W conn[0] socket_connect failed on address 1 of 1"));
+    assert_true(cap_has("rc=-111"));
+    assert_true(cap_has("E conn[0] all addresses exhausted for host: "
+                        "ps.pndsn.com (addr_count=1, family_exhausted=0x"));
+}
+
+/** A connect failure with an address left is INFO; only the last escalates. */
+static void test_fsm_connect_failure_with_remaining_addr_logs_info(void** state)
+{
+    (void)state;
+    skip_if_logging_compiled_out();
+    if (!PUBNUB_LOG_LEVEL_ENABLED(PUBNUB_LOG_LEVEL_INFO)) {
+        skip();
+    }
+    mock_reset();
+    add_second_addr();
+
+    mock_state.connect_result = -111;
+
+    pn_socket_transport_t         transport = make_transport();
+    pn_socket_connection_t* const cp        = &transport.connections[0];
+    pubnub_http_request_t         request   = make_request();
+    pubnub_http_response_t        response;
+    memset(&response, 0, sizeof(response));
+    cap_attach(&transport);
+
+    pn_connection_init(cp);
+    uint8_t rx_buf[256];
+    cp->rx_buf.data = rx_buf;
+    cp->rx_buf.cap  = sizeof(rx_buf);
+
+    assert_int_equal(0, pn_connection_start(cp, &request, &response, &transport));
+    assert_int_equal(PN_CONN_FAILED, pn_connection_tick(cp, &transport));
+
+    assert_true(cap_has("I conn[0] socket_connect failed on address 1 of 2"));
+    assert_true(cap_has("W conn[0] socket_connect failed on address 2 of 2"));
+    assert_int_equal(0, cap_count("W conn[0] socket_connect failed on address 1"));
+    assert_int_equal(0, cap_count("I conn[0] socket_connect failed on address 2"));
+    assert_true(cap_has("E conn[0] all addresses exhausted"));
+}
+
+/** A TLS handshake timeout is reported once, at WARNING, with the wait side. */
+static void test_fsm_tls_timeout_logs_single_warning(void** state)
+{
+    (void)state;
+    skip_if_logging_compiled_out();
+    mock_reset();
+    add_second_addr();
+
+    mock_state.tls_handshake_result         = PN_TLS_WANT_READ;
+    mock_state.tls_handshake_calls_until_ok = 999;
+
+    pn_socket_transport_t         transport = make_transport();
+    pn_socket_connection_t* const cp        = &transport.connections[0];
+    pubnub_http_request_t         request   = make_request();
+    pubnub_http_response_t        response;
+    memset(&response, 0, sizeof(response));
+    cap_attach(&transport);
+
+    pn_connection_init(cp);
+    uint8_t rx_buf[256];
+    cp->rx_buf.data = rx_buf;
+    cp->rx_buf.cap  = sizeof(rx_buf);
+
+    assert_int_equal(0, pn_connection_start(cp, &request, &response, &transport));
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, pn_connection_tick(cp, &transport));
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, pn_connection_tick(cp, &transport));
+    assert_int_equal(0, cap_count("handshake timed out"));
+
+    mock_state.current_time_ms = cp->connect_deadline_ms + 1;
+    (void)pn_connection_tick(cp, &transport);
+
+    assert_int_equal(1, cap_count("handshake timed out"));
+    assert_int_equal(0, cap_count("TLS timeout on address"));
+    assert_true(cap_has("W conn[0] TLS handshake timed out on address 1 of 2"));
+    assert_true(cap_has("waiting for read"));
+}
+
+/** The connected trace reports the time spent since the attempt started. */
+static void test_fsm_connected_trace_reports_elapsed(void** state)
+{
+    (void)state;
+    skip_if_logging_compiled_out();
+    if (!PUBNUB_LOG_LEVEL_ENABLED(PUBNUB_LOG_LEVEL_TRACE)) {
+        skip();
+    }
+    mock_reset();
+
+    mock_state.connect_result           = 0;
+    mock_state.check_connect_script[0]  = 0;
+    mock_state.check_connect_script[1]  = 1;
+    mock_state.check_connect_script_len = 2;
+
+    pn_socket_transport_t         transport = make_transport();
+    pn_socket_connection_t* const cp        = &transport.connections[0];
+    pubnub_http_request_t         request   = make_request();
+    pubnub_http_response_t        response;
+    memset(&response, 0, sizeof(response));
+    cap_attach(&transport);
+
+    pn_connection_init(cp);
+    uint8_t rx_buf[256];
+    cp->rx_buf.data = rx_buf;
+    cp->rx_buf.cap  = sizeof(rx_buf);
+
+    assert_int_equal(0, pn_connection_start(cp, &request, &response, &transport));
+    (void)pn_connection_tick(cp, &transport);
+    (void)pn_connection_tick(cp, &transport);
+    mock_state.current_time_ms += 120;
+    (void)pn_connection_tick(cp, &transport);
+
+    assert_true(cap_has("T conn[0] TCP connected fd=42 to ps.pndsn.com "
+                        "(120 ms since attempt start)"));
+}
+
+/** Start a TLS request and tick once so the connection is TLS_HANDSHAKING. */
+static void tls_want_enter_handshake(pn_socket_connection_t* conn,
+                                     pn_socket_transport_t*  transport,
+                                     pubnub_http_request_t*  request,
+                                     pubnub_http_response_t* response,
+                                     uint8_t*                rx_buf,
+                                     size_t                  rx_cap)
+{
+    pn_connection_init(conn);
+    conn->rx_buf.data = rx_buf;
+    conn->rx_buf.cap  = rx_cap;
+    assert_int_equal(0, pn_connection_start(conn, request, response, transport));
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, pn_connection_tick(conn, transport));
+}
+
+/** Entering TLS_HANDSHAKING arms WRITE (ClientHello not sent yet). */
+static void test_fsm_tls_want_set_on_enter_handshake(void** state)
+{
+    (void)state;
+    mock_reset();
+    mock_state.tls_handshake_result         = PN_TLS_WANT_READ;
+    mock_state.tls_handshake_calls_until_ok = 999;
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+    uint8_t                rx_buf[256];
+
+    tls_want_enter_handshake(
+        &conn, &transport, &request, &response, rx_buf, sizeof(rx_buf));
+    assert_int_equal(PN_POLL_WRITE, conn.tls_want);
+}
+
+/** The backend's WANT_READ / WANT_WRITE result is mirrored into tls_want. */
+static void test_fsm_tls_want_follows_backend_want(void** state)
+{
+    (void)state;
+    mock_reset();
+    mock_state.tls_handshake_result         = PN_TLS_WANT_READ;
+    mock_state.tls_handshake_calls_until_ok = 999;
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+    uint8_t                rx_buf[256];
+
+    tls_want_enter_handshake(
+        &conn, &transport, &request, &response, rx_buf, sizeof(rx_buf));
+
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, pn_connection_tick(&conn, &transport));
+    assert_int_equal(PN_POLL_READ, conn.tls_want);
+
+    mock_state.tls_handshake_result = PN_TLS_WANT_WRITE;
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, pn_connection_tick(&conn, &transport));
+    assert_int_equal(PN_POLL_WRITE, conn.tls_want);
+
+    mock_state.tls_handshake_result = PN_TLS_WANT_READ;
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, pn_connection_tick(&conn, &transport));
+    assert_int_equal(PN_POLL_READ, conn.tls_want);
+}
+
+/** A completed handshake clears tls_want. */
+static void test_fsm_tls_want_cleared_on_complete(void** state)
+{
+    (void)state;
+    mock_reset();
+    mock_state.tls_handshake_result         = PN_TLS_WANT_READ;
+    mock_state.tls_handshake_calls_until_ok = 1;
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+    uint8_t                rx_buf[256];
+
+    tls_want_enter_handshake(
+        &conn, &transport, &request, &response, rx_buf, sizeof(rx_buf));
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, pn_connection_tick(&conn, &transport));
+    assert_int_equal(PN_POLL_READ, conn.tls_want);
+
+    assert_int_equal(PN_CONN_SENDING_HEADERS, pn_connection_tick(&conn, &transport));
+    assert_int_equal(0, conn.tls_want);
+}
+
+/** A handshake error that exhausts the addresses clears tls_want. */
+static void test_fsm_tls_want_cleared_on_error(void** state)
+{
+    (void)state;
+    mock_reset();
+    mock_state.tls_handshake_result         = -1;
+    mock_state.tls_handshake_calls_until_ok = 1;
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+    uint8_t                rx_buf[256];
+
+    tls_want_enter_handshake(
+        &conn, &transport, &request, &response, rx_buf, sizeof(rx_buf));
+    assert_int_equal(PN_POLL_WRITE, conn.tls_want);
+
+    assert_int_equal(PN_CONN_FAILED, pn_connection_tick(&conn, &transport));
+    assert_int_equal(0, conn.tls_want);
+}
+
+/** A handshake error that falls back to a pending connect clears tls_want. */
+static void test_fsm_tls_want_cleared_on_fallback(void** state)
+{
+    (void)state;
+    mock_reset();
+    mock_state.dns_result_count             = 2;
+    mock_state.dns_results[1]               = mock_state.dns_results[0];
+    mock_state.dns_results[1].addr.ipv4[3]  = 5;
+    mock_state.tls_handshake_result         = -1;
+    mock_state.tls_handshake_calls_until_ok = 1;
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+    uint8_t                rx_buf[256];
+
+    tls_want_enter_handshake(
+        &conn, &transport, &request, &response, rx_buf, sizeof(rx_buf));
+    assert_int_equal(PN_POLL_WRITE, conn.tls_want);
+    mock_state.connect_result = 0;
+    assert_int_equal(PN_CONN_CONNECTING, pn_connection_tick(&conn, &transport));
+    assert_int_equal(0, conn.tls_want);
+}
+
+/** A handshake timeout that falls back to the next address clears tls_want. */
+static void test_fsm_tls_want_cleared_on_timeout_fallback(void** state)
+{
+    (void)state;
+    mock_reset();
+    mock_state.dns_result_count             = 2;
+    mock_state.dns_results[1]               = mock_state.dns_results[0];
+    mock_state.dns_results[1].addr.ipv4[3]  = 5;
+    mock_state.tls_handshake_result         = PN_TLS_WANT_READ;
+    mock_state.tls_handshake_calls_until_ok = 999;
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+    uint8_t                rx_buf[256];
+
+    tls_want_enter_handshake(
+        &conn, &transport, &request, &response, rx_buf, sizeof(rx_buf));
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, pn_connection_tick(&conn, &transport));
+    assert_int_equal(PN_POLL_READ, conn.tls_want);
+
+    mock_state.connect_result  = 0;
+    mock_state.current_time_ms = conn.connect_deadline_ms + 1;
+    assert_int_equal(PN_CONN_CONNECTING, pn_connection_tick(&conn, &transport));
+    assert_int_equal(0, conn.tls_want);
+}
+
+/** Cancelling a handshaking connection clears tls_want. */
+static void test_fsm_tls_want_cleared_on_cancel(void** state)
+{
+    (void)state;
+    mock_reset();
+    mock_state.tls_handshake_result         = PN_TLS_WANT_READ;
+    mock_state.tls_handshake_calls_until_ok = 999;
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+    uint8_t                rx_buf[256];
+
+    tls_want_enter_handshake(
+        &conn, &transport, &request, &response, rx_buf, sizeof(rx_buf));
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, pn_connection_tick(&conn, &transport));
+    assert_int_equal(PN_POLL_READ, conn.tls_want);
+
+    pn_connection_cancel(&conn, &transport);
+    assert_int_equal(PN_CONN_CANCELLED, conn.state);
+    assert_int_equal(0, conn.tls_want);
+}
+
+/** Resetting a handshaking connection clears tls_want. */
+static void test_fsm_tls_want_cleared_on_reset(void** state)
+{
+    (void)state;
+    mock_reset();
+    mock_state.tls_handshake_result         = PN_TLS_WANT_READ;
+    mock_state.tls_handshake_calls_until_ok = 999;
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+    uint8_t                rx_buf[256];
+
+    tls_want_enter_handshake(
+        &conn, &transport, &request, &response, rx_buf, sizeof(rx_buf));
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, pn_connection_tick(&conn, &transport));
+    assert_int_equal(PN_POLL_READ, conn.tls_want);
+
+    pn_connection_reset(&conn, &transport);
+    assert_int_equal(0, conn.tls_want);
+}
+
+/** Closing only the socket or only the TLS session clears tls_want. */
+static void test_fsm_tls_want_cleared_on_close_helpers(void** state)
+{
+    (void)state;
+    mock_reset();
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+
+    pn_connection_init(&conn);
+
+    conn.tls_want = PN_POLL_READ;
+    conn_close_socket(&conn, &transport);
+    assert_int_equal(0, conn.tls_want);
+
+    conn.tls_want = PN_POLL_WRITE;
+    conn_destroy_tls(&conn, &transport);
+    assert_int_equal(0, conn.tls_want);
+}
+
+/** Starting a request on a recycled slot never inherits a stale tls_want. */
+static void test_fsm_tls_want_cleared_on_start(void** state)
+{
+    (void)state;
+    mock_reset();
+    mock_state.connect_result = 0;
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+    uint8_t                rx_buf[256];
+
+    pn_connection_init(&conn);
+    conn.rx_buf.data = rx_buf;
+    conn.rx_buf.cap  = sizeof(rx_buf);
+    conn.tls_want    = PN_POLL_READ;
+
+    assert_int_equal(0, pn_connection_start(&conn, &request, &response, &transport));
+    assert_int_equal(0, conn.tls_want);
+}
+
+/** Drive a secure connection through one full request to KEEP_ALIVE_IDLE. */
+static void release_fixture_complete(pn_socket_connection_t* conn,
+                                     pn_socket_transport_t*  transport,
+                                     pubnub_http_request_t*  request,
+                                     pubnub_http_response_t* response,
+                                     uint8_t*                rx,
+                                     size_t                  rx_cap)
+{
+    static const char* resp =
+        "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello";
+
+    mock_state.recv_data     = (const uint8_t*)resp;
+    mock_state.recv_data_len = strlen(resp);
+
+    pn_connection_init(conn);
+    conn->rx_buf.data = rx;
+    conn->rx_buf.cap  = rx_cap;
+    assert_int_equal(0, pn_connection_start(conn, request, response, transport));
+    (void)pn_connection_tick(conn, transport); /* connect */
+    (void)pn_connection_tick(conn, transport); /* handshake */
+    (void)pn_connection_tick(conn, transport); /* send */
+    (void)pn_connection_tick(conn, transport); /* receive */
+    (void)pn_connection_tick(conn, transport); /* complete */
+    assert_int_equal(PN_CONN_KEEP_ALIVE_IDLE, conn->state);
+}
+
+/** Releasing a finished keep-alive request keeps the socket and TLS session. */
+static void test_fsm_release_request_keeps_socket_and_tls(void** state)
+{
+    (void)state;
+    mock_reset();
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+    uint8_t                rx_buf[1024];
+
+    release_fixture_complete(
+        &conn, &transport, &request, &response, rx_buf, sizeof(rx_buf));
+
+    {
+        const pn_socket_t socket_before = conn.socket;
+        void*             tls_before    = conn.tls_session;
+        const uint16_t    gen_before    = conn.generation;
+        const int         creates       = mock_state.socket_create_calls;
+
+        assert_non_null(tls_before);
+        assert_int_equal(1, pn_connection_release_request(&conn, &transport));
+
+        assert_int_equal(PN_CONN_KEEP_ALIVE_IDLE, conn.state);
+        assert_true(socket_before == conn.socket);
+        assert_ptr_equal(tls_before, conn.tls_session);
+        assert_int_equal(0, mock_state.socket_destroy_calls);
+        assert_int_equal(0, mock_state.tls_session_destroy_calls);
+        assert_null(conn.request);
+        assert_null(conn.response);
+        assert_int_not_equal(gen_before, conn.generation);
+        assert_true(0 != conn.generation);
+        assert_true(0 != conn.requests_on_connection);
+
+        /* The detached connection is reusable. */
+        response = (pubnub_http_response_t){0};
+        assert_int_equal(
+            0, pn_connection_start(&conn, &request, &response, &transport));
+        assert_int_equal(PN_CONN_SENDING_HEADERS, conn.state);
+        assert_int_equal(creates, mock_state.socket_create_calls);
+        assert_int_equal(0, mock_state.socket_destroy_calls);
+    }
+}
+
+/** Generation wrap skips zero (a zero handle generation means NULL). */
+static void test_fsm_release_request_generation_skips_zero(void** state)
+{
+    (void)state;
+    mock_reset();
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+    uint8_t                rx_buf[1024];
+
+    release_fixture_complete(
+        &conn, &transport, &request, &response, rx_buf, sizeof(rx_buf));
+    conn.generation = 0xFFFFu;
+    assert_int_equal(1, pn_connection_release_request(&conn, &transport));
+    assert_int_equal(1, conn.generation);
+}
+
+/** Only a KEEP_ALIVE_IDLE connection with a socket is detached. */
+static void test_fsm_release_request_rejects_other_states(void** state)
+{
+    (void)state;
+    mock_reset();
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+    uint8_t                rx_buf[1024];
+    pn_conn_state_t        st;
+
+    assert_int_equal(0, pn_connection_release_request(NULL, &transport));
+    assert_int_equal(0, pn_connection_release_request(&conn, NULL));
+
+    release_fixture_complete(
+        &conn, &transport, &request, &response, rx_buf, sizeof(rx_buf));
+
+    for (st = PN_CONN_IDLE; st <= PN_CONN_CANCELLED;
+         st = (pn_conn_state_t)(st + 1)) {
+        const uint16_t gen = conn.generation;
+
+        if (PN_CONN_KEEP_ALIVE_IDLE == st) {
+            continue;
+        }
+        conn.state = st;
+        assert_int_equal(0, pn_connection_release_request(&conn, &transport));
+        assert_int_equal(st, conn.state);
+        assert_int_equal(gen, conn.generation);
+        assert_non_null(conn.request);
+    }
+
+    /* KEEP_ALIVE_IDLE without a live socket is not detachable either. */
+    conn.state = PN_CONN_KEEP_ALIVE_IDLE;
+    {
+        const pn_socket_t sock = conn.socket;
+
+        conn.socket = PN_INVALID_SOCKET;
+        assert_int_equal(0, pn_connection_release_request(&conn, &transport));
+        conn.socket = sock;
+    }
+}
+
+/** Add DNS results 1..n-1 (distinct IPv4 addresses after the default one). */
+static void add_addrs(size_t n)
+{
+    size_t i;
+
+    mock_state.dns_result_count = n;
+    for (i = 1; i < n; ++i) {
+        mock_state.dns_results[i].family       = PN_AF_INET;
+        mock_state.dns_results[i].port         = 443;
+        mock_state.dns_results[i].addr.ipv4[0] = 10;
+        mock_state.dns_results[i].addr.ipv4[1] = 0;
+        mock_state.dns_results[i].addr.ipv4[2] = 0;
+        mock_state.dns_results[i].addr.ipv4[3] = (uint8_t)i;
+    }
+}
+
+/** Start a request whose first socket (fd 42) never finishes connecting. */
+static void blackhole_start(pn_socket_connection_t* conn,
+                            pn_socket_transport_t*  transport,
+                            pubnub_http_request_t*  request,
+                            pubnub_http_response_t* response,
+                            uint8_t*                rx,
+                            size_t                  rx_cap)
+{
+    mock_state.connect_result       = 0;
+    mock_state.pending_forever_sock = 42;
+    mock_state.unique_fds           = 1;
+    pn_connection_init(conn);
+    conn->rx_buf.data = rx;
+    conn->rx_buf.cap  = rx_cap;
+    assert_int_equal(0, pn_connection_start(conn, request, response, transport));
+}
+
+/** A stalled TCP connect falls back to the next address within the budget. */
+static void test_fsm_connect_timeout_falls_back_to_next_addr(void** state)
+{
+    (void)state;
+    mock_reset();
+    add_addrs(2);
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+    uint8_t                rx_buf[256];
+    uint64_t               start;
+
+    request.timeout_ms = 10000;
+    start              = mock_state.current_time_ms;
+    blackhole_start(&conn, &transport, &request, &response, rx_buf, sizeof(rx_buf));
+
+    assert_int_equal(PN_CONN_CONNECTING, pn_connection_tick(&conn, &transport));
+    assert_int_equal(0, conn.addr_current);
+    /* The first address leaves room for a fallback inside the budget. */
+    assert_true(conn.connect_deadline_ms < conn.transaction_deadline_ms);
+    assert_true(conn.connect_deadline_ms - start
+                <= (uint64_t)request.timeout_ms / 2U);
+
+    mock_state.current_time_ms = conn.connect_deadline_ms - 1U;
+    assert_int_equal(PN_CONN_CONNECTING, pn_connection_tick(&conn, &transport));
+    assert_int_equal(0, conn.addr_current);
+
+    mock_state.current_time_ms = conn.connect_deadline_ms;
+    assert_int_equal(PN_CONN_CONNECTING, pn_connection_tick(&conn, &transport));
+    assert_int_equal(1, conn.addr_current);
+    assert_int_equal(2, mock_state.socket_create_calls);
+    assert_int_equal(1, mock_state.socket_destroy_calls);
+    assert_int_equal(PUBNUB_HTTP_PENDING, response.completion);
+    /* A timeout is not evidence that the whole family is unreachable. */
+    assert_int_equal(0, conn.family_exhausted);
+    assert_true(conn.connect_deadline_ms <= conn.transaction_deadline_ms);
+
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, pn_connection_tick(&conn, &transport));
+    assert_int_equal(1, mock_state.tls_session_create_calls);
+}
+
+/** A single-address host still fails with TIMEOUT at the connect deadline. */
+static void test_fsm_connect_timeout_single_addr_unchanged(void** state)
+{
+    (void)state;
+    mock_reset();
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+    uint8_t                rx_buf[256];
+    uint64_t               start = mock_state.current_time_ms;
+
+    request.timeout_ms = 60000;
+    blackhole_start(&conn, &transport, &request, &response, rx_buf, sizeof(rx_buf));
+    assert_int_equal(start + PUBNUB_CFG_SOCKET_CONNECT_TIMEOUT_MS,
+                     conn.connect_deadline_ms);
+
+    assert_int_equal(PN_CONN_CONNECTING, pn_connection_tick(&conn, &transport));
+    mock_state.current_time_ms = conn.connect_deadline_ms - 1U;
+    assert_int_equal(PN_CONN_CONNECTING, pn_connection_tick(&conn, &transport));
+    mock_state.current_time_ms = conn.connect_deadline_ms;
+    assert_int_equal(PN_CONN_FAILED, pn_connection_tick(&conn, &transport));
+    assert_int_equal(PUBNUB_HTTP_ERROR, response.completion);
+    assert_int_equal(PUBNUB_ERR_TIMEOUT, response.transport_error);
+    assert_int_equal(1, mock_state.socket_create_calls);
+}
+
+/** With many blackholed addresses the attempt stays inside the budget. */
+static void test_fsm_connect_timeout_many_addrs_bounded(void** state)
+{
+    (void)state;
+    mock_reset();
+    add_addrs(4);
+    /* Every address blackholed: fds 42..45. */
+    mock_state.check_connect_result = 0;
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+    uint8_t                rx_buf[256];
+    uint64_t               start;
+    int                    guard;
+
+    request.timeout_ms        = 10000;
+    start                     = mock_state.current_time_ms;
+    mock_state.connect_result = 0;
+    pn_connection_init(&conn);
+    conn.rx_buf.data = rx_buf;
+    conn.rx_buf.cap  = sizeof(rx_buf);
+    assert_int_equal(0, pn_connection_start(&conn, &request, &response, &transport));
+
+    for (guard = 0; guard < 400 && PN_CONN_FAILED != conn.state; ++guard) {
+        (void)pn_connection_tick(&conn, &transport);
+        mock_state.current_time_ms += 50;
+    }
+    assert_int_equal(PN_CONN_FAILED, conn.state);
+    assert_int_equal(PUBNUB_ERR_TIMEOUT, response.transport_error);
+    assert_int_equal(4, mock_state.socket_create_calls);
+    /* Total time is bounded by the request budget (plus one tick). */
+    assert_true(mock_state.current_time_ms - start
+                <= (uint64_t)request.timeout_ms + 100U);
+}
+
+/** A timeout followed by a refusal on the last address is a transport error. */
+static void test_fsm_connect_timeout_then_error_exhausts(void** state)
+{
+    (void)state;
+    mock_reset();
+    add_addrs(2);
+    mock_state.check_connect_result = -111;
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+    uint8_t                rx_buf[256];
+
+    request.timeout_ms = 10000;
+    blackhole_start(&conn, &transport, &request, &response, rx_buf, sizeof(rx_buf));
+    (void)pn_connection_tick(&conn, &transport);
+    mock_state.current_time_ms = conn.connect_deadline_ms;
+    (void)pn_connection_tick(&conn, &transport);
+    assert_int_equal(1, conn.addr_current);
+
+    assert_int_equal(PN_CONN_FAILED, pn_connection_tick(&conn, &transport));
+    assert_int_equal(PUBNUB_ERR_TRANSPORT, response.transport_error);
+}
+
+/** A refusal on the first address then a timeout on the last is a TIMEOUT. */
+static void test_fsm_connect_error_then_timeout_fails_timeout(void** state)
+{
+    (void)state;
+    mock_reset();
+    add_addrs(2);
+    mock_state.connect_result           = 0;
+    mock_state.check_connect_script[0]  = -111;
+    mock_state.check_connect_script[1]  = 0;
+    mock_state.check_connect_script_len = 2;
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+    uint8_t                rx_buf[256];
+
+    request.timeout_ms = 10000;
+    pn_connection_init(&conn);
+    conn.rx_buf.data = rx_buf;
+    conn.rx_buf.cap  = sizeof(rx_buf);
+    assert_int_equal(0, pn_connection_start(&conn, &request, &response, &transport));
+    (void)pn_connection_tick(&conn, &transport);
+    (void)pn_connection_tick(&conn, &transport);
+    assert_int_equal(1, conn.addr_current);
+
+    mock_state.current_time_ms = conn.connect_deadline_ms;
+    assert_int_equal(PN_CONN_FAILED, pn_connection_tick(&conn, &transport));
+    assert_int_equal(PUBNUB_ERR_TIMEOUT, response.transport_error);
+    assert_int_equal(2, mock_state.socket_create_calls);
+}
+
+/** No fallback is attempted when too little of the request budget is left. */
+static void test_fsm_connect_timeout_no_fallback_without_budget(void** state)
+{
+    (void)state;
+    mock_reset();
+    add_addrs(2);
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+    uint8_t                rx_buf[256];
+
+    request.timeout_ms = 1500;
+    blackhole_start(&conn, &transport, &request, &response, rx_buf, sizeof(rx_buf));
+    (void)pn_connection_tick(&conn, &transport);
+    mock_state.current_time_ms = conn.connect_deadline_ms;
+    assert_int_equal(PN_CONN_FAILED, pn_connection_tick(&conn, &transport));
+    assert_int_equal(PUBNUB_ERR_TIMEOUT, response.transport_error);
+    assert_int_equal(1, mock_state.socket_create_calls);
+}
+
+/** The fallback is logged once at INFO; the exhausted outcome is unchanged. */
+static void test_fsm_connect_timeout_fallback_logs_info(void** state)
+{
+    (void)state;
+    skip_if_logging_compiled_out();
+    if (!PUBNUB_LOG_LEVEL_ENABLED(PUBNUB_LOG_LEVEL_INFO)) {
+        skip();
+    }
+    mock_reset();
+    add_addrs(2);
+
+    pn_socket_transport_t         transport = make_transport();
+    pn_socket_connection_t* const cp        = &transport.connections[0];
+    pubnub_http_request_t         request   = make_request();
+    pubnub_http_response_t        response  = {0};
+    uint8_t                       rx_buf[256];
+
+    cap_attach(&transport);
+    request.timeout_ms = 10000;
+    blackhole_start(cp, &transport, &request, &response, rx_buf, sizeof(rx_buf));
+    (void)pn_connection_tick(cp, &transport);
+    mock_state.current_time_ms = cp->connect_deadline_ms;
+    (void)pn_connection_tick(cp, &transport);
+
+    assert_true(cap_has("I conn[0] TCP connect timed out on address 1 of 2 for "
+                        "ps.pndsn.com, trying next"));
+    assert_int_equal(1, cap_count("TCP connect timed out"));
+    assert_int_equal(0, cap_count("W conn[0]"));
+}
+
+/** Drive connection 1 to TLS_DEFERRED behind a handshaking connection 0. */
+static void deferred_fixture(pn_socket_transport_t*  transport,
+                             pubnub_http_request_t*  req0,
+                             pubnub_http_request_t*  req1,
+                             pubnub_http_response_t* resp1,
+                             uint8_t*                rx1,
+                             size_t                  rx1_cap)
+{
+    pn_connection_init(&transport->connections[0]);
+    pn_connection_init(&transport->connections[1]);
+    transport->connections[0].state       = PN_CONN_TLS_HANDSHAKING;
+    transport->connections[0].request     = req0;
+    transport->connections[1].rx_buf.data = rx1;
+    transport->connections[1].rx_buf.cap  = rx1_cap;
+    assert_int_equal(
+        0, pn_connection_start(&transport->connections[1], req1, resp1, transport));
+}
+
+/** Peer handshake finished: the deferral gate opens. */
+static void deferred_release_peer(pn_socket_transport_t* transport)
+{
+    transport->connections[0].state = PN_CONN_SENDING_HEADERS;
+}
+
+/** A TLS-deferred wait on a non-final address uses the full window. */
+static void test_fsm_tls_deferred_wait_uses_full_window(void** state)
+{
+    (void)state;
+    mock_reset();
+    add_addrs(2);
+    mock_state.connect_result = 0;
+
+    pn_socket_transport_t   transport = make_transport();
+    pubnub_http_request_t   req0      = make_request();
+    pubnub_http_request_t   req1      = make_request();
+    pubnub_http_response_t  resp1     = {0};
+    uint8_t                 rx1[256];
+    pn_socket_connection_t* conn = &transport.connections[1];
+    uint64_t                entered;
+
+    req1.timeout_ms = 10000;
+    deferred_fixture(&transport, &req0, &req1, &resp1, rx1, sizeof(rx1));
+    /* The first address only has a slice of the transaction budget. */
+    assert_true(conn->connect_deadline_ms - mock_state.current_time_ms
+                <= (uint64_t)req1.timeout_ms / 2U);
+
+    assert_int_equal(PN_CONN_CONNECTING, pn_connection_tick(conn, &transport));
+    assert_int_equal(PN_CONN_TLS_DEFERRED, pn_connection_tick(conn, &transport));
+    entered = mock_state.current_time_ms;
+    assert_int_equal(entered + PUBNUB_CFG_SOCKET_CONNECT_TIMEOUT_MS,
+                     conn->connect_deadline_ms);
+
+    /* Past the TCP slice the wait goes on; ticking does not extend it. */
+    mock_state.current_time_ms = entered + req1.timeout_ms / 2U + 1000U;
+    assert_int_equal(PN_CONN_TLS_DEFERRED, pn_connection_tick(conn, &transport));
+    assert_int_equal(entered + PUBNUB_CFG_SOCKET_CONNECT_TIMEOUT_MS,
+                     conn->connect_deadline_ms);
+
+    /* A gate that never opens still times out at the full window. */
+    mock_state.current_time_ms = conn->connect_deadline_ms;
+    assert_int_equal(PN_CONN_FAILED, pn_connection_tick(conn, &transport));
+    assert_int_equal(PUBNUB_ERR_TIMEOUT, resp1.transport_error);
+}
+
+/** The slice counts only addresses that can still be tried. */
+static void test_fsm_connect_budget_skips_exhausted_trailing_family(void** state)
+{
+    (void)state;
+    mock_reset();
+    add_addrs(3);
+    mock_state.dns_results[0].family = PN_AF_INET6;
+    memset(mock_state.dns_results[0].addr.ipv6, 1, 16);
+    mock_state.dns_results[2].family = PN_AF_INET6;
+    memset(mock_state.dns_results[2].addr.ipv6, 2, 16);
+    mock_state.connect_result           = 0;
+    mock_state.check_connect_script[0]  = -101; /* ENETUNREACH */
+    mock_state.check_connect_script[1]  = 0;
+    mock_state.check_connect_script_len = 2;
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+    uint8_t                rx_buf[256];
+
+    request.timeout_ms = 10000;
+    pn_connection_init(&conn);
+    conn.rx_buf.data = rx_buf;
+    conn.rx_buf.cap  = sizeof(rx_buf);
+    assert_int_equal(0, pn_connection_start(&conn, &request, &response, &transport));
+    (void)pn_connection_tick(&conn, &transport);
+    (void)pn_connection_tick(&conn, &transport);
+    assert_int_equal(1, conn.addr_current);
+
+    assert_int_equal(mock_state.current_time_ms
+                         + (uint64_t)PUBNUB_CFG_SOCKET_CONNECT_TIMEOUT_MS,
+                     conn.connect_deadline_ms);
+    mock_state.current_time_ms = conn.connect_deadline_ms;
+    assert_int_equal(PN_CONN_FAILED, pn_connection_tick(&conn, &transport));
+    assert_int_equal(PUBNUB_ERR_TIMEOUT, response.transport_error);
+}
+
+/** A fallback slice never exceeds the transaction time that is left. */
+static void test_fsm_connect_budget_capped_at_remaining(void** state)
+{
+    (void)state;
+    mock_reset();
+    add_addrs(2);
+    mock_state.connect_result           = 0;
+    mock_state.check_connect_script[0]  = -111;
+    mock_state.check_connect_script[1]  = 0;
+    mock_state.check_connect_script_len = 2;
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+    uint8_t                rx_buf[256];
+
+    request.timeout_ms = 5000;
+    pn_connection_init(&conn);
+    conn.rx_buf.data = rx_buf;
+    conn.rx_buf.cap  = sizeof(rx_buf);
+    assert_int_equal(0, pn_connection_start(&conn, &request, &response, &transport));
+    (void)pn_connection_tick(&conn, &transport);
+    /* Only 400 ms of the request remain when the refusal arrives. */
+    mock_state.current_time_ms += 4600;
+    (void)pn_connection_tick(&conn, &transport);
+    assert_int_equal(1, conn.addr_current);
+    assert_true(conn.connect_deadline_ms <= conn.transaction_deadline_ms);
+}
+
+/** A confirmed connect is probed exactly once across a TLS deferral. */
+static void test_fsm_tls_deferred_single_probe(void** state)
+{
+    (void)state;
+    mock_reset();
+    mock_state.connect_result           = 0;
+    mock_state.check_connect_script[0]  = 1;
+    mock_state.check_connect_script_len = 1;
+
+    pn_socket_transport_t   transport = make_transport();
+    pubnub_http_request_t   req0      = make_request();
+    pubnub_http_request_t   req1      = make_request();
+    pubnub_http_response_t  resp1     = {0};
+    uint8_t                 rx1[256];
+    pn_socket_connection_t* conn = &transport.connections[1];
+    pn_conn_state_t         s;
+    int                     i;
+
+    deferred_fixture(&transport, &req0, &req1, &resp1, rx1, sizeof(rx1));
+
+    s = pn_connection_tick(conn, &transport); /* issues connect */
+    assert_int_equal(PN_CONN_CONNECTING, s);
+    for (i = 0; i < 5; ++i) {
+        s = pn_connection_tick(conn, &transport);
+        assert_int_equal(PN_CONN_TLS_DEFERRED, s);
+        assert_int_not_equal(PN_INVALID_SOCKET, conn->socket);
+    }
+    assert_int_equal(1, mock_state.check_connect_calls);
+    assert_int_equal(0, mock_state.tls_session_create_calls);
+
+    deferred_release_peer(&transport);
+    s = pn_connection_tick(conn, &transport);
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, s);
+    assert_int_equal(PN_POLL_WRITE, conn->tls_want);
+    assert_int_equal(1, mock_state.check_connect_calls);
+    assert_int_equal(1, mock_state.tls_session_create_calls);
+}
+
+/** A 0 after a confirmed connect must not regress a deferred connection. */
+static void test_fsm_tls_deferred_survives_check_connect_regression(void** state)
+{
+    (void)state;
+    mock_reset();
+    mock_state.connect_result           = 0;
+    mock_state.check_connect_script[0]  = 1;
+    mock_state.check_connect_script[1]  = 0;
+    mock_state.check_connect_script[2]  = 0;
+    mock_state.check_connect_script_len = 3;
+
+    pn_socket_transport_t   transport = make_transport();
+    pubnub_http_request_t   req0      = make_request();
+    pubnub_http_request_t   req1      = make_request();
+    pubnub_http_response_t  resp1     = {0};
+    uint8_t                 rx1[256];
+    pn_socket_connection_t* conn = &transport.connections[1];
+    pn_conn_state_t         s;
+    int                     i;
+
+    deferred_fixture(&transport, &req0, &req1, &resp1, rx1, sizeof(rx1));
+
+    (void)pn_connection_tick(conn, &transport); /* issues connect */
+    for (i = 0; i < 4; ++i) {
+        s = pn_connection_tick(conn, &transport);
+        assert_int_equal(PN_CONN_TLS_DEFERRED, s);
+        assert_int_not_equal(PN_INVALID_SOCKET, conn->socket);
+    }
+
+    deferred_release_peer(&transport);
+    s = pn_connection_tick(conn, &transport);
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, s);
+    assert_int_equal(1, mock_state.tls_session_create_calls);
+}
+
+/** Keepalive is applied once per socket on the deferred path. */
+static void test_fsm_keepalive_once_deferred(void** state)
+{
+    (void)state;
+    mock_reset();
+    mock_state.connect_result           = 0;
+    mock_state.check_connect_script[0]  = 1;
+    mock_state.check_connect_script_len = 1;
+
+    pn_socket_transport_t   transport = make_transport();
+    pubnub_http_request_t   req0      = make_request();
+    pubnub_http_request_t   req1      = make_request();
+    pubnub_http_response_t  resp1     = {0};
+    uint8_t                 rx1[256];
+    pn_socket_connection_t* conn = &transport.connections[1];
+    int                     i;
+
+    deferred_fixture(&transport, &req0, &req1, &resp1, rx1, sizeof(rx1));
+
+    for (i = 0; i < 4; ++i) {
+        (void)pn_connection_tick(conn, &transport);
+    }
+    assert_int_equal(1, mock_state.set_keepalive_calls);
+
+    deferred_release_peer(&transport);
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, pn_connection_tick(conn, &transport));
+    assert_int_equal(1, mock_state.set_keepalive_calls);
+}
+
+/** Keepalive is applied once when connect succeeds immediately (TLS). */
+static void test_fsm_keepalive_once_immediate(void** state)
+{
+    (void)state;
+    mock_reset();
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+    uint8_t                rx_buf[256];
+
+    pn_connection_init(&conn);
+    conn.rx_buf.data = rx_buf;
+    conn.rx_buf.cap  = sizeof(rx_buf);
+
+    assert_int_equal(0, pn_connection_start(&conn, &request, &response, &transport));
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, pn_connection_tick(&conn, &transport));
+    assert_int_equal(1, mock_state.set_keepalive_calls);
+    assert_int_equal(0, mock_state.check_connect_calls);
+}
+
+/** Keepalive is applied once on the plaintext immediate-success path. */
+static void test_fsm_keepalive_once_plaintext(void** state)
+{
+    (void)state;
+    mock_reset();
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+    uint8_t                rx_buf[256];
+
+    request.secure = 0;
+    pn_connection_init(&conn);
+    conn.rx_buf.data = rx_buf;
+    conn.rx_buf.cap  = sizeof(rx_buf);
+
+    assert_int_equal(0, pn_connection_start(&conn, &request, &response, &transport));
+    assert_int_equal(PN_CONN_SENDING_HEADERS, pn_connection_tick(&conn, &transport));
+    assert_int_equal(1, mock_state.set_keepalive_calls);
+}
+
+/** Keepalive is applied once on the pending-then-confirmed path. */
+static void test_fsm_keepalive_once_pending_connect(void** state)
+{
+    (void)state;
+    mock_reset();
+    mock_state.connect_result           = 0;
+    mock_state.check_connect_script[0]  = 0;
+    mock_state.check_connect_script[1]  = 1;
+    mock_state.check_connect_script_len = 2;
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+    uint8_t                rx_buf[256];
+
+    pn_connection_init(&conn);
+    conn.rx_buf.data = rx_buf;
+    conn.rx_buf.cap  = sizeof(rx_buf);
+
+    assert_int_equal(0, pn_connection_start(&conn, &request, &response, &transport));
+    (void)pn_connection_tick(&conn, &transport);
+    (void)pn_connection_tick(&conn, &transport);
+    assert_int_equal(0, mock_state.set_keepalive_calls);
+    assert_int_equal(PN_CONN_CONNECTING, conn.state);
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, pn_connection_tick(&conn, &transport));
+    assert_int_equal(1, mock_state.set_keepalive_calls);
+    assert_int_equal(2, mock_state.check_connect_calls);
+}
+
+/** TLS error fallback closes the connected socket; the new one is probed. */
+static void test_fsm_fallback_pending_reprobes(void** state)
+{
+    (void)state;
+    mock_reset();
+    mock_state.dns_result_count             = 2;
+    mock_state.dns_results[1]               = mock_state.dns_results[0];
+    mock_state.dns_results[1].addr.ipv4[0]  = 10;
+    mock_state.connect_result               = 0;
+    mock_state.check_connect_script[0]      = 1;
+    mock_state.check_connect_script[1]      = 1;
+    mock_state.check_connect_script_len     = 2;
+    mock_state.tls_handshake_result         = -1;
+    mock_state.tls_handshake_calls_until_ok = 1;
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+    uint8_t                rx_buf[256];
+
+    pn_connection_init(&conn);
+    conn.rx_buf.data = rx_buf;
+    conn.rx_buf.cap  = sizeof(rx_buf);
+
+    assert_int_equal(0, pn_connection_start(&conn, &request, &response, &transport));
+    (void)pn_connection_tick(&conn, &transport); /* issue connect */
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, pn_connection_tick(&conn, &transport));
+    assert_int_equal(1, mock_state.check_connect_calls);
+
+    /* Handshake error: addr 1, pending connect, back to CONNECTING. */
+    assert_int_equal(PN_CONN_CONNECTING, pn_connection_tick(&conn, &transport));
+    assert_int_equal(1, conn.addr_current);
+
+    /* The replacement socket is probed again. */
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, pn_connection_tick(&conn, &transport));
+    assert_int_equal(2, mock_state.check_connect_calls);
+    assert_int_equal(2, mock_state.set_keepalive_calls);
+}
+
+/** Immediate-success fallback applies keepalive to the new socket. */
+static void test_fsm_fallback_immediate_applies_keepalive(void** state)
+{
+    (void)state;
+    mock_reset();
+    mock_state.dns_result_count             = 2;
+    mock_state.dns_results[1]               = mock_state.dns_results[0];
+    mock_state.dns_results[1].addr.ipv4[0]  = 10;
+    mock_state.tls_handshake_result         = -1;
+    mock_state.tls_handshake_calls_until_ok = 1;
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+    uint8_t                rx_buf[256];
+
+    pn_connection_init(&conn);
+    conn.rx_buf.data = rx_buf;
+    conn.rx_buf.cap  = sizeof(rx_buf);
+
+    assert_int_equal(0, pn_connection_start(&conn, &request, &response, &transport));
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, pn_connection_tick(&conn, &transport));
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, pn_connection_tick(&conn, &transport));
+    assert_int_equal(1, conn.addr_current);
+    assert_int_equal(2, mock_state.set_keepalive_calls);
+    assert_int_equal(0, mock_state.check_connect_calls);
+}
+
+/** Cancel from TLS_DEFERRED ends in CANCELLED; a later start probes anew. */
+static void test_fsm_tls_deferred_cancel_then_reset_reprobes(void** state)
+{
+    (void)state;
+    mock_reset();
+    mock_state.connect_result           = 0;
+    mock_state.check_connect_script[0]  = 1;
+    mock_state.check_connect_script_len = 1;
+
+    pn_socket_transport_t   transport = make_transport();
+    pubnub_http_request_t   req0      = make_request();
+    pubnub_http_request_t   req1      = make_request();
+    pubnub_http_response_t  resp1     = {0};
+    uint8_t                 rx1[256];
+    pn_socket_connection_t* conn = &transport.connections[1];
+    int                     destroyed;
+
+    deferred_fixture(&transport, &req0, &req1, &resp1, rx1, sizeof(rx1));
+    (void)pn_connection_tick(conn, &transport);
+    assert_int_equal(PN_CONN_TLS_DEFERRED, pn_connection_tick(conn, &transport));
+    assert_int_equal(1, mock_state.check_connect_calls);
+    destroyed = mock_state.socket_destroy_calls;
+
+    pn_connection_cancel(conn, &transport);
+    assert_int_equal(PN_CONN_CANCELLED, conn->state);
+    assert_int_equal(PN_INVALID_SOCKET, conn->socket);
+    assert_int_equal(destroyed + 1, mock_state.socket_destroy_calls);
+    assert_int_equal(PN_CONN_CANCELLED, pn_connection_tick(conn, &transport));
+
+    pn_connection_reset(conn, &transport);
+    assert_int_equal(PN_CONN_IDLE, conn->state);
+    assert_int_equal(PN_INVALID_SOCKET, conn->socket);
+    conn->rx_buf.data = rx1;
+    conn->rx_buf.cap  = sizeof(rx1);
+    deferred_release_peer(&transport);
+    resp1 = (pubnub_http_response_t){0};
+    assert_int_equal(0, pn_connection_start(conn, &req1, &resp1, &transport));
+    (void)pn_connection_tick(conn, &transport);
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, pn_connection_tick(conn, &transport));
+    assert_int_equal(2, mock_state.check_connect_calls);
+    assert_int_equal(2, mock_state.set_keepalive_calls);
+}
+
+/** A deferred wait is deadline-bounded and does not probe the socket. */
+static void test_fsm_tls_deferred_deadline_without_probe_then_reuse(void** state)
+{
+    (void)state;
+    mock_reset();
+    mock_state.connect_result           = 0;
+    mock_state.check_connect_script[0]  = 1;
+    mock_state.check_connect_script_len = 1;
+
+    pn_socket_transport_t   transport = make_transport();
+    pubnub_http_request_t   req0      = make_request();
+    pubnub_http_request_t   req1      = make_request();
+    pubnub_http_response_t  resp1     = {0};
+    uint8_t                 rx1[256];
+    pn_socket_connection_t* conn = &transport.connections[1];
+    int                     destroyed;
+
+    deferred_fixture(&transport, &req0, &req1, &resp1, rx1, sizeof(rx1));
+    (void)pn_connection_tick(conn, &transport);
+    assert_int_equal(PN_CONN_TLS_DEFERRED, pn_connection_tick(conn, &transport));
+    destroyed = mock_state.socket_destroy_calls;
+
+    mock_state.check_connect_forbidden = 1;
+    mock_state.current_time_ms         = conn->connect_deadline_ms + 1U;
+    assert_int_equal(PN_CONN_FAILED, pn_connection_tick(conn, &transport));
+    assert_int_equal(PUBNUB_HTTP_ERROR, resp1.completion);
+    assert_int_equal(PUBNUB_ERR_TIMEOUT, resp1.transport_error);
+    assert_int_equal(PN_INVALID_SOCKET, conn->socket);
+    assert_int_equal(destroyed + 1, mock_state.socket_destroy_calls);
+    mock_state.check_connect_forbidden = 0;
+
+    /* Reuse: fresh socket is probed (call count advances). */
+    deferred_release_peer(&transport);
+    pn_connection_reset(conn, &transport);
+    conn->rx_buf.data = rx1;
+    conn->rx_buf.cap  = sizeof(rx1);
+    resp1             = (pubnub_http_response_t){0};
+    assert_int_equal(0, pn_connection_start(conn, &req1, &resp1, &transport));
+    (void)pn_connection_tick(conn, &transport);
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, pn_connection_tick(conn, &transport));
+    assert_int_equal(2, mock_state.check_connect_calls);
+}
+
+/** An established keep-alive socket is reused without being probed. */
+static void test_fsm_keepalive_reuse_not_probed(void** state)
+{
+    (void)state;
+    mock_reset();
+
+    static const char* resp =
+        "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello";
+    mock_state.recv_data     = (const uint8_t*)resp;
+    mock_state.recv_data_len = strlen(resp);
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+    uint8_t                rx_buf[1024];
+
+    pn_connection_init(&conn);
+    conn.rx_buf.data = rx_buf;
+    conn.rx_buf.cap  = sizeof(rx_buf);
+    assert_int_equal(0, pn_connection_start(&conn, &request, &response, &transport));
+    (void)pn_connection_tick(&conn, &transport); /* connect */
+    (void)pn_connection_tick(&conn, &transport); /* handshake */
+    (void)pn_connection_tick(&conn, &transport); /* send */
+    (void)pn_connection_tick(&conn, &transport); /* receive */
+    (void)pn_connection_tick(&conn, &transport); /* complete */
+    assert_int_equal(PN_CONN_KEEP_ALIVE_IDLE, conn.state);
+
+    mock_state.check_connect_forbidden = 1;
+    assert_int_equal(0, pn_connection_start(&conn, &request, &response, &transport));
+    assert_int_equal(PN_CONN_SENDING_HEADERS, conn.state);
+    assert_int_equal(1, mock_state.set_keepalive_calls);
+
+    /* Driving the reused connection must not probe the socket either. */
+    (void)pn_connection_tick(&conn, &transport);
+    assert_int_not_equal(PN_CONN_CONNECTING, conn.state);
+    assert_int_not_equal(PN_CONN_FAILED, conn.state);
+    assert_int_equal(0, mock_state.check_connect_calls);
+    assert_int_equal(1, mock_state.set_keepalive_calls);
+    mock_state.check_connect_forbidden = 0;
+}
+
+/** A handshake timeout closes the socket; keepalive follows the next probe. */
+static void test_fsm_tls_timeout_fallback_reprobes(void** state)
+{
+    (void)state;
+    mock_reset();
+    mock_state.dns_result_count             = 2;
+    mock_state.dns_results[1]               = mock_state.dns_results[0];
+    mock_state.dns_results[1].addr.ipv4[3]  = 5;
+    mock_state.connect_result               = 0;
+    mock_state.check_connect_script[0]      = 1;
+    mock_state.check_connect_script[1]      = 0;
+    mock_state.check_connect_script[2]      = 1;
+    mock_state.check_connect_script_len     = 3;
+    mock_state.tls_handshake_result         = PN_TLS_WANT_READ;
+    mock_state.tls_handshake_calls_until_ok = 999;
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+    uint8_t                rx_buf[256];
+    int                    destroyed;
+
+    pn_connection_init(&conn);
+    conn.rx_buf.data = rx_buf;
+    conn.rx_buf.cap  = sizeof(rx_buf);
+
+    assert_int_equal(0, pn_connection_start(&conn, &request, &response, &transport));
+    (void)pn_connection_tick(&conn, &transport); /* issue connect */
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, pn_connection_tick(&conn, &transport));
+    assert_int_equal(1, mock_state.check_connect_calls);
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, pn_connection_tick(&conn, &transport));
+    assert_int_equal(PN_POLL_READ, conn.tls_want);
+    destroyed = mock_state.socket_destroy_calls;
+
+    /* Handshake deadline: socket closed, next address connecting. */
+    mock_state.current_time_ms = conn.connect_deadline_ms + 1U;
+    assert_int_equal(PN_CONN_CONNECTING, pn_connection_tick(&conn, &transport));
+    assert_int_equal(destroyed + 1, mock_state.socket_destroy_calls);
+    assert_int_equal(1, conn.addr_current);
+    assert_int_equal(1, mock_state.check_connect_calls);
+
+    /* The new socket is probed; a pending probe keeps CONNECTING. */
+    assert_int_equal(PN_CONN_CONNECTING, pn_connection_tick(&conn, &transport));
+    assert_int_equal(2, mock_state.check_connect_calls);
+    assert_int_equal(1, mock_state.set_keepalive_calls);
+
+    /* Keepalive follows only once the probe returns 1. */
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, pn_connection_tick(&conn, &transport));
+    assert_int_equal(3, mock_state.check_connect_calls);
+    assert_int_equal(2, mock_state.set_keepalive_calls);
+}
+
+/** A rejected keep-alive reuse closes the socket; the new connect is probed. */
+static void test_fsm_keepalive_reuse_failure_reprobes(void** state)
+{
+    (void)state;
+    mock_reset();
+
+    static const char* resp =
+        "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhello";
+    mock_state.recv_data     = (const uint8_t*)resp;
+    mock_state.recv_data_len = strlen(resp);
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+    uint8_t                rx_buf[1024];
+    int                    destroyed;
+
+    pn_connection_init(&conn);
+    conn.rx_buf.data = rx_buf;
+    conn.rx_buf.cap  = sizeof(rx_buf);
+    assert_int_equal(0, pn_connection_start(&conn, &request, &response, &transport));
+    (void)pn_connection_tick(&conn, &transport); /* connect */
+    (void)pn_connection_tick(&conn, &transport); /* handshake */
+    (void)pn_connection_tick(&conn, &transport); /* send */
+    (void)pn_connection_tick(&conn, &transport); /* receive */
+    (void)pn_connection_tick(&conn, &transport); /* complete */
+    assert_int_equal(PN_CONN_KEEP_ALIVE_IDLE, conn.state);
+    assert_int_equal(1, mock_state.set_keepalive_calls);
+
+    /* A different host makes the reuse check fail. */
+    request.host                        = "other.example.com";
+    response                            = (pubnub_http_response_t){0};
+    mock_state.connect_result           = 0;
+    mock_state.check_connect_script[0]  = 1;
+    mock_state.check_connect_script_len = 1;
+    destroyed                           = mock_state.socket_destroy_calls;
+
+    assert_int_equal(0, pn_connection_start(&conn, &request, &response, &transport));
+    assert_int_equal(destroyed + 1, mock_state.socket_destroy_calls);
+    assert_int_equal(PN_INVALID_SOCKET, conn.socket);
+    assert_int_equal(PN_CONN_CONNECTING, conn.state);
+
+    (void)pn_connection_tick(&conn, &transport); /* issue connect */
+    assert_int_equal(0, mock_state.check_connect_calls);
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, pn_connection_tick(&conn, &transport));
+    assert_int_equal(1, mock_state.check_connect_calls);
+    assert_int_equal(2, mock_state.set_keepalive_calls);
+}
+
+#if PUBNUB_ENABLE_PROXY
+/** Probe once and apply keepalive once across proxy CONNECT and TLS. */
+static void test_fsm_proxy_then_tls_single_probe(void** state)
+{
+    (void)state;
+    mock_reset();
+    mock_state.connect_result           = 0;
+    mock_state.check_connect_script[0]  = 1;
+    mock_state.check_connect_script_len = 1;
+
+    static const char* resp  = "HTTP/1.1 200 Connection established\r\n\r\n";
+    mock_state.recv_data     = (const uint8_t*)resp;
+    mock_state.recv_data_len = strlen(resp);
+
+    pn_proxy_module_t*     module;
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_proxy_transport(&module);
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+    uint8_t                rx_buf[1024];
+
+    assert_non_null(module);
+    pn_connection_init(&conn);
+    conn.rx_buf.data = rx_buf;
+    conn.rx_buf.cap  = sizeof(rx_buf);
+
+    assert_int_equal(0, pn_connection_start(&conn, &request, &response, &transport));
+    (void)pn_connection_tick(&conn, &transport); /* issue connect */
+    assert_int_equal(PN_CONN_PROXY_NEGOTIATING,
+                     pn_connection_tick(&conn, &transport));
+    assert_int_equal(1, mock_state.check_connect_calls);
+    assert_int_equal(1, mock_state.set_keepalive_calls);
+
+    mock_state.check_connect_forbidden = 1;
+    assert_int_equal(PN_CONN_PROXY_NEGOTIATING,
+                     pn_connection_tick(&conn, &transport));
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, pn_connection_tick(&conn, &transport));
+    assert_int_equal(1, conn.proxy_done);
+    assert_int_equal(1, mock_state.tls_session_create_calls);
+
+    assert_int_equal(PN_CONN_SENDING_HEADERS, pn_connection_tick(&conn, &transport));
+    assert_int_equal(1, mock_state.check_connect_calls);
+    assert_int_equal(1, mock_state.set_keepalive_calls);
+    mock_state.check_connect_forbidden = 0;
+
+    pn_connection_cancel(&conn, &transport);
+    module->destroy(module, &mock_allocator);
+}
+#endif
+
+/** Peer busy on the same host: a connected socket parks in TLS_DEFERRED. */
+static void test_fsm_tls_deferred_entered_on_peer_busy(void** state)
+{
+    (void)state;
+    mock_reset();
+    mock_state.connect_result           = 0;
+    mock_state.check_connect_script[0]  = 1;
+    mock_state.check_connect_script_len = 1;
+
+    pn_socket_transport_t   transport = make_transport();
+    pubnub_http_request_t   req0      = make_request();
+    pubnub_http_request_t   req1      = make_request();
+    pubnub_http_response_t  resp1     = {0};
+    uint8_t                 rx1[256];
+    pn_socket_connection_t* conn = &transport.connections[1];
+
+    deferred_fixture(&transport, &req0, &req1, &resp1, rx1, sizeof(rx1));
+
+    assert_int_equal(PN_CONN_CONNECTING, pn_connection_tick(conn, &transport));
+    assert_int_equal(PN_CONN_TLS_DEFERRED, pn_connection_tick(conn, &transport));
+    assert_int_not_equal(PN_INVALID_SOCKET, conn->socket);
+    assert_int_equal(1, mock_state.check_connect_calls);
+    assert_int_equal(1, mock_state.set_keepalive_calls);
+    assert_int_equal(0, mock_state.tls_session_create_calls);
+    assert_null(conn->tls_session);
+}
+
+/** A pending connect always lands in CONNECTING so the next tick probes. */
+static void test_fsm_try_connect_pending_forces_connecting(void** state)
+{
+    (void)state;
+    mock_reset();
+    mock_state.connect_result           = 0;
+    mock_state.check_connect_script[0]  = 0;
+    mock_state.check_connect_script_len = 1;
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+
+    pn_connection_init(&conn);
+    conn.request             = &request;
+    conn.response            = &response;
+    conn.addr_count          = 1;
+    conn.resolved_addrs[0]   = mock_state.dns_results[0];
+    conn.state               = PN_CONN_TLS_DEFERRED;
+    conn.connect_deadline_ms = mock_state.current_time_ms + 10000U;
+
+    assert_int_equal(0, conn_try_connect(&conn, &transport));
+    assert_int_equal(PN_CONN_CONNECTING, conn.state);
+    assert_int_not_equal(PN_INVALID_SOCKET, conn.socket);
+    assert_int_equal(0, mock_state.set_keepalive_calls);
+
+    assert_int_equal(PN_CONN_CONNECTING, pn_connection_tick(&conn, &transport));
+    assert_int_equal(1, mock_state.check_connect_calls);
+}
+
+/** CONNECTING with a live socket always probes it, never creates TLS. */
+static void test_fsm_connecting_valid_socket_always_probes(void** state)
+{
+    (void)state;
+    mock_reset();
+    mock_state.check_connect_result = 0;
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+    int                    i;
+
+    pn_connection_init(&conn);
+    conn.request             = &request;
+    conn.response            = &response;
+    conn.socket              = 42;
+    conn.state               = PN_CONN_CONNECTING;
+    conn.connect_deadline_ms = mock_state.current_time_ms + 10000U;
+
+    for (i = 1; i <= 3; ++i) {
+        assert_int_equal(PN_CONN_CONNECTING, pn_connection_tick(&conn, &transport));
+        assert_int_equal(i, mock_state.check_connect_calls);
+    }
+    assert_int_equal(0, mock_state.tls_session_create_calls);
+    assert_int_equal(0, mock_state.set_keepalive_calls);
+}
+
+/** TLS_DEFERRED without a socket is unreachable; it must fail closed. */
+static void test_fsm_tls_deferred_invalid_socket_fails_closed(void** state)
+{
+    (void)state;
+    mock_reset();
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+
+    pn_connection_init(&conn);
+    conn.request  = &request;
+    conn.response = &response;
+    conn.state    = PN_CONN_TLS_DEFERRED;
+
+    assert_int_equal(PN_CONN_FAILED, pn_connection_tick(&conn, &transport));
+    assert_int_equal(PUBNUB_HTTP_ERROR, response.completion);
+    assert_int_equal(PUBNUB_ERR_INTERNAL, response.transport_error);
+    assert_int_equal(0, mock_state.tls_session_create_calls);
+    assert_int_equal(0, mock_state.socket_create_calls);
+}
+
+/** conn_try_connect never overwrites a socket it has not closed first. */
+static void test_fsm_try_connect_closes_live_socket(void** state)
+{
+    (void)state;
+    mock_reset();
+    mock_state.connect_result = 0;
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+
+    pn_connection_init(&conn);
+    conn.request           = &request;
+    conn.response          = &response;
+    conn.addr_count        = 1;
+    conn.resolved_addrs[0] = mock_state.dns_results[0];
+    conn.socket            = 77;
+    conn.state             = PN_CONN_CONNECTING;
+
+    conn.tls_session = (void*)0xBEEF;
+
+    assert_int_equal(0, conn_try_connect(&conn, &transport));
+    assert_int_equal(1, mock_state.socket_destroy_calls);
+    assert_int_equal(1, mock_state.tls_session_destroy_calls);
+    assert_null(conn.tls_session);
+    assert_int_equal(0, mock_state.socket_create_calls_at_destroy);
+    assert_int_equal(1, mock_state.socket_create_calls);
+    assert_int_equal(mock_state.next_socket, conn.socket);
+}
+
+/** Starting a request on an IDLE slot that still holds a socket closes it. */
+static void test_fsm_start_idle_with_live_socket_closes_it(void** state)
+{
+    (void)state;
+    mock_reset();
+
+    pn_socket_connection_t conn;
+    pn_socket_transport_t  transport = make_transport();
+    pubnub_http_request_t  request   = make_request();
+    pubnub_http_response_t response  = {0};
+    uint8_t                rx_buf[256];
+
+    pn_connection_init(&conn);
+    conn.rx_buf.data = rx_buf;
+    conn.rx_buf.cap  = sizeof(rx_buf);
+    conn.socket      = 55;
+    conn.tls_session = (void*)0xBEEF;
+    conn.proxy_done  = 1;
+
+    assert_int_equal(0, pn_connection_start(&conn, &request, &response, &transport));
+    assert_int_equal(1, mock_state.socket_destroy_calls);
+    assert_int_equal(1, mock_state.tls_session_destroy_calls);
+    assert_int_equal(PN_INVALID_SOCKET, conn.socket);
+    assert_null(conn.tls_session);
+    assert_int_equal(0, conn.proxy_done);
+    assert_int_equal(PN_CONN_CONNECTING, conn.state);
+
+    /* The new request runs over a fresh socket. */
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, pn_connection_tick(&conn, &transport));
+    assert_int_equal(1, mock_state.socket_create_calls);
+}
+
+/** TLS error on address 0, immediate connect on address 1, peer busy. */
+static void test_fsm_tls_deferred_from_tls_fallback_immediate(void** state)
+{
+    (void)state;
+    mock_reset();
+    add_second_addr();
+    mock_state.tls_handshake_result         = -1;
+    mock_state.tls_handshake_calls_until_ok = 1;
+
+    pn_socket_transport_t   transport = make_transport();
+    pubnub_http_request_t   req0      = make_request();
+    pubnub_http_request_t   req1      = make_request();
+    pubnub_http_response_t  resp1     = {0};
+    uint8_t                 rx1[256];
+    pn_socket_connection_t* conn = &transport.connections[1];
+
+    pn_connection_init(&transport.connections[0]);
+    pn_connection_init(conn);
+    conn->rx_buf.data = rx1;
+    conn->rx_buf.cap  = sizeof(rx1);
+    assert_int_equal(0, pn_connection_start(conn, &req1, &resp1, &transport));
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, pn_connection_tick(conn, &transport));
+
+    transport.connections[0].state   = PN_CONN_TLS_HANDSHAKING;
+    transport.connections[0].request = &req0;
+
+    assert_int_equal(PN_CONN_TLS_DEFERRED, pn_connection_tick(conn, &transport));
+    assert_int_equal(1, conn->addr_current);
+    assert_int_not_equal(PN_INVALID_SOCKET, conn->socket);
+    assert_int_equal(2, mock_state.set_keepalive_calls);
+    assert_int_equal(1, mock_state.tls_session_create_calls);
+
+    deferred_release_peer(&transport);
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, pn_connection_tick(conn, &transport));
+    assert_int_equal(2, mock_state.tls_session_create_calls);
+}
+
+#if PUBNUB_ENABLE_PROXY
+/** A finished proxy tunnel parks in TLS_DEFERRED without re-running CONNECT. */
+static void test_fsm_tls_deferred_after_proxy_complete(void** state)
+{
+    (void)state;
+    mock_reset();
+    mock_state.connect_result           = 0;
+    mock_state.check_connect_script[0]  = 1;
+    mock_state.check_connect_script_len = 1;
+
+    static const char* resp  = "HTTP/1.1 200 Connection established\r\n\r\n";
+    mock_state.recv_data     = (const uint8_t*)resp;
+    mock_state.recv_data_len = strlen(resp);
+
+    pn_proxy_module_t*      module;
+    pn_socket_transport_t   transport = make_proxy_transport(&module);
+    pubnub_http_request_t   req0      = make_request();
+    pubnub_http_request_t   req1      = make_request();
+    pubnub_http_response_t  resp1     = {0};
+    uint8_t                 rx1[1024];
+    pn_socket_connection_t* conn = &transport.connections[1];
+    int                     sends;
+    int                     i;
+
+    assert_non_null(module);
+    deferred_fixture(&transport, &req0, &req1, &resp1, rx1, sizeof(rx1));
+
+    (void)pn_connection_tick(conn, &transport); /* issue connect */
+    assert_int_equal(PN_CONN_PROXY_NEGOTIATING,
+                     pn_connection_tick(conn, &transport));
+    mock_state.check_connect_forbidden = 1;
+    assert_int_equal(PN_CONN_PROXY_NEGOTIATING,
+                     pn_connection_tick(conn, &transport));
+    assert_int_equal(PN_CONN_TLS_DEFERRED, pn_connection_tick(conn, &transport));
+    assert_int_equal(1, conn->proxy_done);
+    assert_null(conn->proxy_session);
+    sends = mock_state.socket_send_calls;
+    assert_int_equal(1, sends);
+
+    for (i = 0; i < 3; ++i) {
+        assert_int_equal(PN_CONN_TLS_DEFERRED, pn_connection_tick(conn, &transport));
+    }
+    assert_int_equal(sends, mock_state.socket_send_calls);
+    assert_int_equal(0, mock_state.tls_session_create_calls);
+
+    deferred_release_peer(&transport);
+    assert_int_equal(PN_CONN_TLS_HANDSHAKING, pn_connection_tick(conn, &transport));
+    assert_int_equal(1, mock_state.tls_session_create_calls);
+    assert_int_equal(sends, mock_state.socket_send_calls);
+    assert_int_equal(1, mock_state.check_connect_calls);
+    assert_int_equal(1, mock_state.set_keepalive_calls);
+    mock_state.check_connect_forbidden = 0;
+
+    pn_connection_cancel(conn, &transport);
+    module->destroy(module, &mock_allocator);
+}
+#endif
+
+/** The fallback trace names the next address only while one remains. */
+static void test_fsm_fallback_log_reports_exhaustion(void** state)
+{
+    (void)state;
+    skip_if_logging_compiled_out();
+    if (!PUBNUB_LOG_LEVEL_ENABLED(PUBNUB_LOG_LEVEL_TRACE)) {
+        skip();
+    }
+    mock_reset();
+    add_second_addr();
+    mock_state.connect_result       = 0;
+    mock_state.check_connect_result = -111;
+
+    pn_socket_transport_t         transport = make_transport();
+    pn_socket_connection_t* const cp        = &transport.connections[0];
+    pubnub_http_request_t         request   = make_request();
+    pubnub_http_response_t        response  = {0};
+    uint8_t                       rx_buf[256];
+
+    cap_attach(&transport);
+    pn_connection_init(cp);
+    cp->rx_buf.data = rx_buf;
+    cp->rx_buf.cap  = sizeof(rx_buf);
+
+    assert_int_equal(0, pn_connection_start(cp, &request, &response, &transport));
+    (void)pn_connection_tick(cp, &transport); /* issue connect to address 1 */
+    (void)pn_connection_tick(cp, &transport); /* probe fails: fall back */
+    assert_true(cap_has("T TCP connect fallback: trying address 2 of 2"));
+    assert_int_equal(0, cap_count("no more addresses"));
+
+    assert_int_equal(PN_CONN_CONNECTING, cp->state);
+    assert_int_equal(PN_CONN_FAILED, pn_connection_tick(cp, &transport));
+    assert_true(cap_has("T TCP connect fallback: no more addresses after "
+                        "address 2 of 2"));
+    assert_int_equal(0, cap_count("trying address 3"));
+    assert_int_equal(0, cap_count("trying address 2 of 1"));
+}
+
+/** A single-address host never logs the impossible "address 2 of 1". */
+static void test_fsm_fallback_log_single_address(void** state)
+{
+    (void)state;
+    skip_if_logging_compiled_out();
+    if (!PUBNUB_LOG_LEVEL_ENABLED(PUBNUB_LOG_LEVEL_TRACE)) {
+        skip();
+    }
+    mock_reset();
+    mock_state.connect_result       = 0;
+    mock_state.check_connect_result = -111;
+
+    pn_socket_transport_t         transport = make_transport();
+    pn_socket_connection_t* const cp        = &transport.connections[0];
+    pubnub_http_request_t         request   = make_request();
+    pubnub_http_response_t        response  = {0};
+    uint8_t                       rx_buf[256];
+
+    cap_attach(&transport);
+    pn_connection_init(cp);
+    cp->rx_buf.data = rx_buf;
+    cp->rx_buf.cap  = sizeof(rx_buf);
+
+    assert_int_equal(0, pn_connection_start(cp, &request, &response, &transport));
+    (void)pn_connection_tick(cp, &transport); /* issue connect */
+    assert_int_equal(PN_CONN_FAILED, pn_connection_tick(cp, &transport));
+    assert_int_equal(0, cap_count("trying address"));
+    assert_true(cap_has("T TCP connect fallback: no more addresses after "
+                        "address 1 of 1"));
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -2085,6 +4282,8 @@ int main(void)
         cmocka_unit_test(test_fsm_connect_timeout),
         cmocka_unit_test(test_fsm_dns_failed_terminates),
         cmocka_unit_test(test_fsm_ipv6_fallback),
+        cmocka_unit_test(test_fsm_connect_pending_defers_tls_session),
+        cmocka_unit_test(test_fsm_connect_error_falls_back_to_next_addr),
         cmocka_unit_test(test_fsm_tls_handshake),
         cmocka_unit_test(test_fsm_cancel),
         cmocka_unit_test(test_fsm_reset),
@@ -2105,7 +4304,63 @@ int main(void)
         cmocka_unit_test(test_fsm_partial_send_then_fail),
         cmocka_unit_test(test_fsm_tls_send_error),
         cmocka_unit_test(test_fsm_body_send_error),
+        cmocka_unit_test(test_fsm_tls_error_logs_backend_error),
+        cmocka_unit_test(test_fsm_recv_error_null_error_hook_safe),
+        cmocka_unit_test(test_fsm_recv_error_logs_tls_backend_error),
+        cmocka_unit_test(test_fsm_header_send_error_logs_tls_detail),
+        cmocka_unit_test(test_fsm_connect_refused_logs_warning),
+        cmocka_unit_test(test_fsm_connect_failure_logs_exhausted_context),
+        cmocka_unit_test(test_fsm_connect_failure_with_remaining_addr_logs_info),
+        cmocka_unit_test(test_fsm_tls_timeout_logs_single_warning),
+        cmocka_unit_test(test_fsm_connected_trace_reports_elapsed),
+        cmocka_unit_test(test_fsm_tls_want_set_on_enter_handshake),
+        cmocka_unit_test(test_fsm_tls_want_follows_backend_want),
+        cmocka_unit_test(test_fsm_tls_want_cleared_on_complete),
+        cmocka_unit_test(test_fsm_tls_want_cleared_on_error),
+        cmocka_unit_test(test_fsm_tls_want_cleared_on_fallback),
+        cmocka_unit_test(test_fsm_tls_want_cleared_on_timeout_fallback),
+        cmocka_unit_test(test_fsm_tls_want_cleared_on_cancel),
+        cmocka_unit_test(test_fsm_tls_want_cleared_on_reset),
+        cmocka_unit_test(test_fsm_tls_want_cleared_on_close_helpers),
+        cmocka_unit_test(test_fsm_tls_want_cleared_on_start),
+        cmocka_unit_test(test_fsm_release_request_keeps_socket_and_tls),
+        cmocka_unit_test(test_fsm_release_request_generation_skips_zero),
+        cmocka_unit_test(test_fsm_release_request_rejects_other_states),
+        cmocka_unit_test(test_fsm_connect_timeout_falls_back_to_next_addr),
+        cmocka_unit_test(test_fsm_connect_timeout_single_addr_unchanged),
+        cmocka_unit_test(test_fsm_connect_timeout_many_addrs_bounded),
+        cmocka_unit_test(test_fsm_connect_timeout_then_error_exhausts),
+        cmocka_unit_test(test_fsm_connect_error_then_timeout_fails_timeout),
+        cmocka_unit_test(test_fsm_connect_timeout_no_fallback_without_budget),
+        cmocka_unit_test(test_fsm_connect_timeout_fallback_logs_info),
+        cmocka_unit_test(test_fsm_tls_deferred_wait_uses_full_window),
+        cmocka_unit_test(test_fsm_connect_budget_skips_exhausted_trailing_family),
+        cmocka_unit_test(test_fsm_connect_budget_capped_at_remaining),
+        cmocka_unit_test(test_fsm_tls_deferred_single_probe),
+        cmocka_unit_test(test_fsm_tls_deferred_survives_check_connect_regression),
+        cmocka_unit_test(test_fsm_keepalive_once_deferred),
+        cmocka_unit_test(test_fsm_keepalive_once_immediate),
+        cmocka_unit_test(test_fsm_keepalive_once_plaintext),
+        cmocka_unit_test(test_fsm_keepalive_once_pending_connect),
+        cmocka_unit_test(test_fsm_fallback_pending_reprobes),
+        cmocka_unit_test(test_fsm_fallback_immediate_applies_keepalive),
+        cmocka_unit_test(test_fsm_tls_deferred_cancel_then_reset_reprobes),
+        cmocka_unit_test(test_fsm_tls_deferred_deadline_without_probe_then_reuse),
+        cmocka_unit_test(test_fsm_tls_deferred_entered_on_peer_busy),
+        cmocka_unit_test(test_fsm_try_connect_pending_forces_connecting),
+        cmocka_unit_test(test_fsm_connecting_valid_socket_always_probes),
+        cmocka_unit_test(test_fsm_tls_deferred_invalid_socket_fails_closed),
+        cmocka_unit_test(test_fsm_try_connect_closes_live_socket),
+        cmocka_unit_test(test_fsm_start_idle_with_live_socket_closes_it),
+        cmocka_unit_test(test_fsm_tls_deferred_from_tls_fallback_immediate),
+        cmocka_unit_test(test_fsm_fallback_log_reports_exhaustion),
+        cmocka_unit_test(test_fsm_fallback_log_single_address),
+        cmocka_unit_test(test_fsm_keepalive_reuse_not_probed),
+        cmocka_unit_test(test_fsm_tls_timeout_fallback_reprobes),
+        cmocka_unit_test(test_fsm_keepalive_reuse_failure_reprobes),
 #if PUBNUB_ENABLE_PROXY
+        cmocka_unit_test(test_fsm_proxy_then_tls_single_probe),
+        cmocka_unit_test(test_fsm_tls_deferred_after_proxy_complete),
         cmocka_unit_test(test_fsm_proxy_negotiate_complete),
         cmocka_unit_test(test_fsm_proxy_negotiate_error),
         cmocka_unit_test(test_fsm_proxy_cancel),

@@ -6,6 +6,7 @@
 
 #include "pubnub/capabilities.h"
 #include "pubnub/providers/allocator.h"
+#include "pubnub/providers/platform.h"
 #include "pubnub/pubnub_compat.h"
 
 #include <stdint.h>
@@ -113,10 +114,22 @@ void pn_feature_registry_set_tick(pn_feature_registry_t* reg,
  * Iterates features in registration order. Returns non-zero if ANY
  * feature's tick reports active work remaining.
  *
- * @param reg Non-NULL registry.
+ * Each slot is read under @p lock (the same lock callers of
+ * pn_feature_register() / pn_feature_registry_set_tick() must hold), then
+ * the lock is released before the tick runs: ticks drive transport I/O and
+ * user callbacks and must never execute under the lock. Features registered
+ * while a pass is in progress are picked up by the next pass. State that has
+ * a tick must stay valid until teardown: re-registering it while a tick runs
+ * would leave that tick on the old pointer.
+ *
+ * @param reg      Non-NULL registry.
+ * @param platform Platform provider supplying lock primitives (may be NULL).
+ * @param lock     Context lock guarding @p reg (may be NULL: no locking).
  * @return Non-zero if at least one feature is active, 0 if all idle.
  */
-int pn_feature_registry_tick_all(pn_feature_registry_t* reg);
+int pn_feature_registry_tick_all(pn_feature_registry_t*      reg,
+                                 pubnub_platform_provider_t* platform,
+                                 pubnub_lock_t*              lock);
 
 /**
  * @brief Cleanup all registered features in reverse order and reset.

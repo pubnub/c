@@ -50,36 +50,6 @@ static char* dup_nonempty(const char* src, pubnub_allocator_provider_t* alloc)
 }
 
 /**
- * @brief Release a terminal pool slot, cancelling its transport handle first.
- *
- * `pn_request_pool_release` calls `pn_request_reset` (memset), which wipes
- * `transport_handle` without freeing the underlying transport object
- * (e.g. `pn_curl_request_t` + RX buffer). The handle must be snapshotted,
- * the slot released, and `cancel()` called on the handle afterwards — the
- * same ordering used by `pn_request_abort` and the `pubnub_deinit` loop.
- */
-static void release_slot_and_cancel_transport(pn_presence_manager_t* mgr,
-                                              pn_request_pool_t*     pool,
-                                              uint16_t               slot_id,
-                                              pn_request_t*          slot)
-{
-    pubnub_transport_handle_t*   th = slot->transport_handle;
-    pubnub_transport_provider_t* transport;
-
-    slot->transport_handle = NULL;
-    pn_request_pool_lock(pool);
-    pn_request_pool_release(pool, slot_id);
-    pn_request_pool_unlock(pool);
-
-    if (NULL != th) {
-        transport = pn_context_pipeline_chain_head(mgr->ctx);
-        if (NULL != transport && NULL != transport->cancel) {
-            transport->cancel(transport, th);
-        }
-    }
-}
-
-/**
  * @brief Cancel the in-flight or pending heartbeat request if one exists.
  *
  * Handles two cases based on whether the slot_id is in the real pool
@@ -90,14 +60,17 @@ static void cancel_active_heartbeat(pn_presence_manager_t* mgr)
     pubnub_platform_provider_t* platform = pn_context_platform(mgr->ctx);
     pubnub_lock_t*              lock     = pn_context_mutex_mem(mgr->ctx);
     uint16_t                    claimed_slot;
+    uint16_t                    claimed_generation;
+    uint16_t                    abort_generation = PN_GENERATION_ANY;
     pn_request_pool_t*          pool;
-    uint16_t                    capacity;
     pn_request_t*               slot;
 
     /* Atomic claim: read + clear active_slot_id under lock. */
     pn_ctx_lock(platform, lock);
-    claimed_slot        = mgr->active_slot_id;
-    mgr->active_slot_id = PUBNUB_SLOT_ID_INVALID;
+    claimed_slot                = mgr->active_slot_id;
+    claimed_generation          = mgr->active_slot_generation;
+    mgr->active_slot_id         = PUBNUB_SLOT_ID_INVALID;
+    mgr->active_slot_generation = 0;
     pn_ctx_unlock(platform, lock);
 
     if (PUBNUB_SLOT_ID_INVALID == claimed_slot) {
@@ -109,51 +82,17 @@ static void cancel_active_heartbeat(pn_presence_manager_t* mgr)
         return;
     }
 
-    capacity = pn_context_pool_capacity(mgr->ctx);
+    if (claimed_slot >= pn_context_pool_capacity(mgr->ctx)) {
+        /* Pending-range id: cancel the queued request, or follow it to the
+         * pool slot it was promoted into and tear that down below. */
+        pn_pending_ref_t ref = pn_context_pending_cancel_or_resolve(
+            mgr->ctx, claimed_slot, claimed_generation, 1);
 
-    if (claimed_slot >= capacity) {
-        /* Pending-range: try to cancel in the pending queue. Convert
-         * the physical circular-buffer index to a logical offset from
-         * head — cancel_at expects logical (0 = oldest). */
-        pn_pending_queue_t* queue = pn_context_pending_queue(mgr->ctx);
-        uint16_t            pending_idx;
-        if (NULL == queue) {
+        if (PN_PENDING_REF_REAL != ref.kind) {
             return;
         }
-
-        pending_idx = (uint16_t)(claimed_slot - capacity);
-        {
-            uint16_t logical =
-                (uint16_t)((pending_idx - queue->head + queue->capacity)
-                           % queue->capacity);
-            pn_pending_cancel_data_t cancel_data = {0};
-            pubnub_res_t             cancel_rc;
-
-            cancel_data.async_cb_future.ctx     = mgr->ctx;
-            cancel_data.async_cb_future.slot_id = claimed_slot;
-            cancel_data.async_cb_future.status  = PUBNUB_IN_PROGRESS;
-            pn_request_pool_lock(pool);
-            cancel_rc = pn_pending_queue_cancel_at(queue, logical, &cancel_data);
-            pn_request_pool_unlock(pool);
-            if (PUBNUB_OK == cancel_rc) {
-                pn_pending_cancel_data_run(&cancel_data);
-                return;
-            }
-        }
-
-        /* Entry was already promoted to a real pool slot. Resolve
-         * the real slot ID via the pending-slot map and fall through
-         * to the real-slot cancel path below. */
-        {
-            const uint16_t* slot_map = pn_context_pending_slot_map(mgr->ctx);
-            if (NULL == slot_map || pending_idx >= PUBNUB_CFG_MAX_PENDING_REQUESTS) {
-                return;
-            }
-            claimed_slot = slot_map[pending_idx];
-            if (claimed_slot >= capacity) {
-                return;
-            }
-        }
+        claimed_slot     = ref.real_slot;
+        abort_generation = ref.real_generation;
     }
 
     /* Real pool slot. */
@@ -161,14 +100,18 @@ static void cancel_active_heartbeat(pn_presence_manager_t* mgr)
     if (NULL == slot) {
         return;
     }
+    if (PN_GENERATION_ANY != abort_generation
+        && abort_generation != slot->generation) {
+        return;
+    }
 
     if (!pn_request_is_terminal(slot) && !pn_request_is_idle(slot)) {
         pn_request_abort(
-            mgr->ctx, claimed_slot, PN_GENERATION_ANY, PUBNUB_ERR_CANCELLED, 0);
+            mgr->ctx, claimed_slot, abort_generation, PUBNUB_ERR_CANCELLED, 0);
     }
 
     if (pn_request_is_terminal(slot)) {
-        release_slot_and_cancel_transport(mgr, pool, claimed_slot, slot);
+        pn_context_release_terminal_slot(mgr->ctx, claimed_slot, PN_GENERATION_ANY);
     }
 }
 
@@ -225,7 +168,8 @@ static void pn_presence_on_complete(pn_request_t* request,
      * the slot was already cleared by cancel_active_heartbeat. */
     pn_ctx_lock(platform, lock);
     if (PUBNUB_SLOT_ID_INVALID != mgr->active_slot_id) {
-        mgr->active_slot_id = request->slot_id;
+        mgr->active_slot_id         = request->slot_id;
+        mgr->active_slot_generation = request->generation;
     }
     pn_presence_event_queue_push(&mgr->event_queue, &event);
     pn_ctx_unlock(platform, lock);
@@ -240,7 +184,6 @@ static void pn_presence_on_complete(pn_request_t* request,
 static void on_leave_complete(pn_request_t* request, pubnub_res_t status, void* user_data)
 {
     pn_presence_manager_t* mgr = (pn_presence_manager_t*)user_data;
-    pn_request_pool_t*     pool;
 
     if (PUBNUB_OK != status && PUBNUB_ERR_CANCELLED != status && NULL != mgr) {
         PN_LOG_WARN(mgr->ctx,
@@ -252,10 +195,7 @@ static void on_leave_complete(pn_request_t* request, pubnub_res_t status, void* 
         return;
     }
 
-    pool = pn_context_request_pool(mgr->ctx);
-    if (NULL != pool) {
-        release_slot_and_cancel_transport(mgr, pool, request->slot_id, request);
-    }
+    pn_context_release_terminal_slot(mgr->ctx, request->slot_id, PN_GENERATION_ANY);
 }
 
 /** @brief Release the active slot if it has reached a terminal state. */
@@ -275,12 +215,13 @@ static void release_terminal_active_slot(pn_presence_manager_t* mgr)
         if (mgr->active_slot_id < cap) {
             old = pn_request_pool_get(pool, mgr->active_slot_id);
             if (NULL != old && pn_request_is_terminal(old)) {
-                release_slot_and_cancel_transport(
-                    mgr, pool, mgr->active_slot_id, old);
+                pn_context_release_terminal_slot(
+                    mgr->ctx, mgr->active_slot_id, PN_GENERATION_ANY);
             }
         }
     }
-    mgr->active_slot_id = PUBNUB_SLOT_ID_INVALID;
+    mgr->active_slot_id         = PUBNUB_SLOT_ID_INVALID;
+    mgr->active_slot_generation = 0;
 }
 
 /**
@@ -380,7 +321,7 @@ static void dispatch_heartbeat(pn_presence_manager_t* mgr)
                                pn_channel_dispatch_state_cleanup,
                                NULL,
                                PUBNUB_HTTP_GET,
-                               config,
+                               mgr->ctx,
                                0);
     if (PUBNUB_OK != rc) {
         pn_prep_release(mgr->ctx, entry);
@@ -417,7 +358,8 @@ static void dispatch_heartbeat(pn_presence_manager_t* mgr)
     }
 
     pn_ctx_lock(platform, lock);
-    mgr->active_slot_id = future.slot_id;
+    mgr->active_slot_id         = future.slot_id;
+    mgr->active_slot_generation = future.generation;
     pn_ctx_unlock(platform, lock);
 }
 
@@ -520,7 +462,7 @@ static void dispatch_leave(pn_presence_manager_t* mgr, uint8_t leave_all)
                                pn_channel_dispatch_state_cleanup,
                                NULL,
                                PUBNUB_HTTP_GET,
-                               config,
+                               mgr->ctx,
                                0);
     if (PUBNUB_OK != rc) {
         pn_prep_release(mgr->ctx, entry);

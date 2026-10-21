@@ -44,6 +44,7 @@ static void conn_close_socket(pn_socket_connection_t* conn,
         conn->socket = PN_INVALID_SOCKET;
     }
     conn->proxy_done = 0; /* proxy tunnel gone with the socket */
+    conn->tls_want   = 0;
 }
 
 /**
@@ -56,6 +57,7 @@ static void conn_destroy_tls(pn_socket_connection_t* conn,
         transport->tls_backend->session_destroy(conn->tls_session);
         conn->tls_session = NULL;
     }
+    conn->tls_want = 0;
 }
 
 /**
@@ -138,7 +140,7 @@ static void conn_fail(pn_socket_connection_t* conn,
                       pubnub_res_t            error_code)
 {
     PUBNUB_LOG(transport->logger,
-               PUBNUB_LOG_LEVEL_WARNING,
+               PUBNUB_LOG_LEVEL_ERROR,
                "conn[%d] connection failed: %u (%s)",
                (int)(conn - transport->connections),
                (unsigned)error_code,
@@ -249,18 +251,114 @@ static int conn_advance_to_next_addr(pn_socket_connection_t* conn)
     return 0;
 }
 
+/** Smallest slice of the transaction budget given to a connect attempt. */
+#define PN_CONNECT_MIN_SLICE_MS 1000U
+
+/** @brief Arm the attempt deadline and remember its budget. */
+static void conn_arm_connect_deadline(pn_socket_connection_t* conn,
+                                      uint64_t                now,
+                                      uint32_t                budget_ms)
+{
+    conn->connect_budget_ms   = budget_ms;
+    conn->connect_deadline_ms = now + (uint64_t)budget_ms;
+}
+
+/** @brief Milliseconds left in the transaction budget (0 once expired). */
+static uint64_t conn_transaction_left_ms(const pn_socket_connection_t* conn,
+                                         uint64_t                      now)
+{
+    return (now < conn->transaction_deadline_ms)
+             ? conn->transaction_deadline_ms - now
+             : 0U;
+}
+
+/** @brief Whether an address after the current one can still be tried. */
+static int conn_has_untried_addr(const pn_socket_connection_t* conn)
+{
+    uint8_t i;
+
+    for (i = (uint8_t)(conn->addr_current + 1U); i < conn->addr_count; ++i) {
+        if (!conn_family_is_exhausted(conn, &conn->resolved_addrs[i])) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/**
+ * @brief Budget for a TCP connect attempt on the current address.
+ *
+ * A non-final address gets half of the remaining transaction budget, the
+ * final one gets all of it. The result is clamped to the per-attempt timeout.
+ */
+static uint32_t conn_tcp_budget_ms(const pn_socket_connection_t* conn, uint64_t now)
+{
+    uint64_t cap;
+    uint64_t left;
+
+    if (conn->addr_count <= 1U) {
+        return PUBNUB_CFG_SOCKET_CONNECT_TIMEOUT_MS;
+    }
+    left = conn_transaction_left_ms(conn, now);
+    cap  = left;
+    if (conn_has_untried_addr(conn)) {
+        cap /= 2U;
+    }
+    if (cap < PN_CONNECT_MIN_SLICE_MS) {
+        cap = (left < PN_CONNECT_MIN_SLICE_MS) ? left : PN_CONNECT_MIN_SLICE_MS;
+    }
+    return (cap < PUBNUB_CFG_SOCKET_CONNECT_TIMEOUT_MS)
+             ? (uint32_t)cap
+             : (uint32_t)PUBNUB_CFG_SOCKET_CONNECT_TIMEOUT_MS;
+}
+
+/**
+ * @brief Shorten the first address' deadline once the address list is known.
+ *
+ * Only shrinks the deadline armed at request start, so a slow DNS wait does
+ * not extend it.
+ */
+static void conn_arm_first_addr_deadline(pn_socket_connection_t* conn,
+                                         pn_socket_transport_t*  transport)
+{
+    uint64_t now    = conn_now_ms(transport);
+    uint32_t budget = conn_tcp_budget_ms(conn, now);
+
+    if (conn->addr_count > 1U && now + budget < conn->connect_deadline_ms) {
+        conn_arm_connect_deadline(conn, now, budget);
+    }
+}
+
+/**
+ * @brief Apply TCP keepalive once the connect on conn->socket is complete.
+ *
+ * Runs exactly once per socket: probing happens only in CONNECTING, a
+ * successful probe (or an immediate connect) always leaves CONNECTING, and a
+ * replacement socket is installed only by conn_try_connect.
+ */
+static void conn_on_tcp_connected(pn_socket_connection_t* conn,
+                                  pn_socket_transport_t*  transport)
+{
+    transport->ops->socket_set_keepalive(
+        transport->ops, conn->socket, &transport->keepalive_config);
+}
+
 /**
  * @brief Attempt TCP connect to the current address.
  *
- * Creates a socket, sets non-blocking, and initiates connect. On
- * immediate success, applies keepalive. Returns the connect result
- * or advances to the next address on failure.
+ * Creates a non-blocking socket and starts the connect. Advances to the next
+ * address on failure. A pending connect moves the state to CONNECTING.
  *
- * @return 1 connected, 0 in-progress, -1 all addresses exhausted.
+ * @return 1 connected, 0 in-progress (state is CONNECTING), -1 all addresses
+ *         exhausted (no socket held).
  */
 static int conn_try_connect(pn_socket_connection_t* conn,
                             pn_socket_transport_t*  transport)
 {
+    if (PN_INVALID_SOCKET != conn->socket) {
+        conn_close_transport(conn, transport);
+    }
+
     while (conn_advance_to_next_addr(conn)) {
         pn_sockaddr_t* addr = &conn->resolved_addrs[conn->addr_current];
 
@@ -268,7 +366,7 @@ static int conn_try_connect(pn_socket_connection_t* conn,
             transport->ops->socket_create(transport->ops, addr->family, 0);
         if (PN_INVALID_SOCKET == sock) {
             PUBNUB_LOG_TEXT(transport->logger,
-                            PUBNUB_LOG_LEVEL_WARNING,
+                            PUBNUB_LOG_LEVEL_ERROR,
                             "socket_create failed");
             conn->addr_current++;
             continue;
@@ -277,7 +375,7 @@ static int conn_try_connect(pn_socket_connection_t* conn,
         int rc = transport->ops->socket_set_nonblocking(transport->ops, sock);
         if (rc < 0) {
             PUBNUB_LOG(transport->logger,
-                       PUBNUB_LOG_LEVEL_WARNING,
+                       PUBNUB_LOG_LEVEL_ERROR,
                        "socket_set_nonblocking failed: rc=%d",
                        rc);
             transport->ops->socket_destroy(transport->ops, sock);
@@ -300,14 +398,14 @@ static int conn_try_connect(pn_socket_connection_t* conn,
             PUBNUB_LOG(transport->logger,
                        PUBNUB_LOG_LEVEL_TRACE,
                        "TCP connect -> [%x:%x:%x:%x:%x:%x:%x:%x]:%u (%s)",
-                       (unsigned)((b[0] << 8) | b[1]),
-                       (unsigned)((b[2] << 8) | b[3]),
-                       (unsigned)((b[4] << 8) | b[5]),
-                       (unsigned)((b[6] << 8) | b[7]),
-                       (unsigned)((b[8] << 8) | b[9]),
-                       (unsigned)((b[10] << 8) | b[11]),
-                       (unsigned)((b[12] << 8) | b[13]),
-                       (unsigned)((b[14] << 8) | b[15]),
+                       ((unsigned)b[0] << 8U) | b[1],
+                       ((unsigned)b[2] << 8U) | b[3],
+                       ((unsigned)b[4] << 8U) | b[5],
+                       ((unsigned)b[6] << 8U) | b[7],
+                       ((unsigned)b[8] << 8U) | b[9],
+                       ((unsigned)b[10] << 8U) | b[11],
+                       ((unsigned)b[12] << 8U) | b[13],
+                       ((unsigned)b[14] << 8U) | b[15],
                        (unsigned)addr->port,
                        conn_effective_host(conn));
             (void)b;
@@ -317,20 +415,27 @@ static int conn_try_connect(pn_socket_connection_t* conn,
         if (rc > 0) {
             /* Immediate connection success. */
             conn->socket = sock;
-            transport->ops->socket_set_keepalive(
-                transport->ops, sock, &transport->keepalive_config);
+            conn_on_tcp_connected(conn, transport);
             return 1;
         }
         if (0 == rc) {
-            /* In-progress — wait for POLLOUT. */
+            /* Pending: wait for POLLOUT. */
             conn->socket = sock;
+            conn->state  = PN_CONN_CONNECTING;
             return 0;
         }
 
-        /* Error — check if family-level failure. */
+        /* Only the last address escalates to WARNING. */
         PUBNUB_LOG(transport->logger,
-                   PUBNUB_LOG_LEVEL_DEBUG,
-                   "socket_connect failed: rc=%d, addr_family=%u",
+                   (conn->addr_current + 1U < conn->addr_count)
+                       ? PUBNUB_LOG_LEVEL_INFO
+                       : PUBNUB_LOG_LEVEL_WARNING,
+                   "conn[%d] socket_connect failed on address %u of %u for %s: "
+                   "rc=%d family=%u",
+                   (int)(conn - transport->connections),
+                   (unsigned)(conn->addr_current + 1),
+                   (unsigned)conn->addr_count,
+                   conn_effective_host(conn),
                    rc,
                    (unsigned)addr->family);
         transport->ops->socket_destroy(transport->ops, sock);
@@ -341,8 +446,14 @@ static int conn_try_connect(pn_socket_connection_t* conn,
     }
 
     /* All addresses exhausted. */
-    PUBNUB_LOG_TEXT(
-        transport->logger, PUBNUB_LOG_LEVEL_WARNING, "all addresses exhausted");
+    PUBNUB_LOG(transport->logger,
+               PUBNUB_LOG_LEVEL_ERROR,
+               "conn[%d] all addresses exhausted for host: %s "
+               "(addr_count=%u, family_exhausted=0x%x)",
+               (int)(conn - transport->connections),
+               conn_effective_host(conn),
+               (unsigned)conn->addr_count,
+               (unsigned)conn->family_exhausted);
     return -1;
 }
 
@@ -757,12 +868,12 @@ static int conn_any_peer_tls_handshaking(const pn_socket_transport_t*  t,
  * directly to SENDING_HEADERS.
  *
  * When another slot is already TLS-handshaking to the same hostname,
- * returns 1 (deferred) without changing state. The caller must set
- * PN_CONN_CONNECTING so the connection re-enters on the next poll.
+ * sets PN_CONN_TLS_DEFERRED and returns 1; tick_tls_deferred re-enters here
+ * on later polls until the gate opens.
  *
  * @return 0 on success (state updated), 1 if deferred (another slot is
- *         handshaking to the same hostname; state unchanged, caller must
- *         set PN_CONN_CONNECTING), -1 on TLS session creation failure.
+ *         handshaking to the same hostname; state is TLS_DEFERRED), -1 on TLS
+ *         session creation failure.
  */
 static int conn_transition_to_tls_or_http(pn_socket_connection_t* conn,
                                           pn_socket_transport_t*  transport)
@@ -773,13 +884,15 @@ static int conn_transition_to_tls_or_http(pn_socket_connection_t* conn,
         int  rc;
         conn_extract_hostname(conn_effective_host(conn), hostname, sizeof(hostname));
 
-        /* Serialize TLS handshakes to the same hostname to reduce
-         * amount of memory temporarily allocated for TSL handshake.
-         * When another slot is handshaking to the same host: stay in
-         * CONNECTING with the TCP socket already established.
-         * tick_connecting re-enters here on the next poll iteration
-         * via socket_check_connect. */
+        /* Serialize TLS handshakes to one hostname to limit peak memory. */
         if (conn_any_peer_tls_handshaking(transport, conn, hostname)) {
+            /* Armed once on entry, so ticks do not extend the wait. */
+            if (PN_CONN_TLS_DEFERRED != conn->state) {
+                conn_arm_connect_deadline(conn,
+                                          conn_now_ms(transport),
+                                          PUBNUB_CFG_SOCKET_CONNECT_TIMEOUT_MS);
+            }
+            conn->state = PN_CONN_TLS_DEFERRED;
             return 1;
         }
 
@@ -789,9 +902,18 @@ static int conn_transition_to_tls_or_http(pn_socket_connection_t* conn,
                                                     transport->ops,
                                                     hostname);
         if (rc < 0) {
+            PUBNUB_LOG(
+                transport->logger,
+                PUBNUB_LOG_LEVEL_ERROR,
+                "conn[%d] conn_transition_to_tls_or_http: TLS session create "
+                "failed for host: %s (rc=%d)",
+                (int)(conn - transport->connections),
+                hostname,
+                rc);
             return -1;
         }
-        conn->state = PN_CONN_TLS_HANDSHAKING;
+        conn->state    = PN_CONN_TLS_HANDSHAKING;
+        conn->tls_want = PN_POLL_WRITE;
         return 0;
     }
 
@@ -820,9 +942,9 @@ static int conn_transition_to_tls_or_http(pn_socket_connection_t* conn,
  * (proxy_done == 0), start proxy negotiation. Otherwise proceed directly
  * to TLS (if secure) or HTTP sending.
  *
- * @return 0 on success (state updated), 1 if deferred (TLS gate busy;
- *         caller must set PN_CONN_CONNECTING), -1 on proxy start or TLS
- *         session creation failure.
+ * @return 0 on success (state updated), 1 if deferred (TLS gate busy; state
+ *         is TLS_DEFERRED), -1 on proxy start or TLS session creation
+ *         failure.
  */
 static int conn_transition_after_connect(pn_socket_connection_t* conn,
                                          pn_socket_transport_t*  transport)
@@ -841,6 +963,14 @@ static int conn_transition_after_connect(pn_socket_connection_t* conn,
             transport->proxy_module, conn, transport, target_host, target_port);
 
         if (PN_PROXY_ERROR == rc) {
+            PUBNUB_LOG(
+                transport->logger,
+                PUBNUB_LOG_LEVEL_ERROR,
+                "conn[%d] conn_transition_after_connect: proxy tunnel start "
+                "failed for target host: %s:%u",
+                (int)(conn - transport->connections),
+                target_host,
+                (unsigned)target_port);
             return -1;
         }
         if (PN_PROXY_COMPLETE == rc) {
@@ -906,6 +1036,15 @@ static pn_conn_state_t tick_dns_resolving(pn_socket_connection_t* conn,
         transport->resolver.state = PN_DNS_STATE_IDLE;
 
         if (rc < 0 || 0 == count) {
+            PUBNUB_LOG(
+                transport->logger,
+                PUBNUB_LOG_LEVEL_ERROR,
+                "conn[%d] tick_dns_resolving: DNS result unusable for host: %s "
+                "(rc=%d, count=%u)",
+                (int)(conn - transport->connections),
+                conn->dns_hostname,
+                rc,
+                (unsigned)count);
             conn_fail(conn, transport, PUBNUB_ERR_TRANSPORT);
             return conn->state;
         }
@@ -923,6 +1062,7 @@ static pn_conn_state_t tick_dns_resolving(pn_socket_connection_t* conn,
             conn->resolved_addrs[i].port = port;
         }
 
+        conn_arm_first_addr_deadline(conn, transport);
         conn->state = PN_CONN_CONNECTING;
         return conn->state;
     }
@@ -932,7 +1072,7 @@ static pn_conn_state_t tick_dns_resolving(pn_socket_connection_t* conn,
          * a fresh DNS lookup after a failure. */
         transport->resolver.state = PN_DNS_STATE_IDLE;
         PUBNUB_LOG(transport->logger,
-                   PUBNUB_LOG_LEVEL_WARNING,
+                   PUBNUB_LOG_LEVEL_ERROR,
                    "DNS resolution failed for host: %s",
                    conn_effective_host(conn));
         conn_fail(conn, transport, PUBNUB_ERR_TRANSPORT);
@@ -969,47 +1109,64 @@ static void conn_fallback_next_addr(pn_socket_connection_t* conn,
      * gets a full budget rather than inheriting the remnant of the
      * previous (failed) address's window. Without this, a slow first
      * attempt leaves almost no time for the fallback. */
-    uint64_t now              = conn_now_ms(transport);
-    conn->connect_deadline_ms = now + PUBNUB_CFG_SOCKET_CONNECT_TIMEOUT_MS;
+    uint64_t now = conn_now_ms(transport);
 
-    PUBNUB_LOG(transport->logger,
-               PUBNUB_LOG_LEVEL_TRACE,
-               "TCP connect fallback: trying address %u of %u"
-               " for %s (new deadline in %u ms)",
-               (unsigned)(conn->addr_current + 1),
-               (unsigned)conn->addr_count,
-               conn_effective_host(conn),
-               (unsigned)PUBNUB_CFG_SOCKET_CONNECT_TIMEOUT_MS);
+    /* Advances the address so the trace names the address that is tried next. */
+    int has_addr = conn_advance_to_next_addr(conn);
+    conn_arm_connect_deadline(conn, now, conn_tcp_budget_ms(conn, now));
+    if (0 != has_addr) {
+        PUBNUB_LOG(transport->logger,
+                   PUBNUB_LOG_LEVEL_TRACE,
+                   "TCP connect fallback: trying address %u of %u"
+                   " for %s (new deadline in %u ms)",
+                   (unsigned)(conn->addr_current + 1),
+                   (unsigned)conn->addr_count,
+                   conn_effective_host(conn),
+                   (unsigned)conn->connect_budget_ms);
+    }
+    if (0 == has_addr) {
+        PUBNUB_LOG(transport->logger,
+                   PUBNUB_LOG_LEVEL_TRACE,
+                   "TCP connect fallback: no more addresses after address %u "
+                   "of %u for %s",
+                   (unsigned)conn->addr_current,
+                   (unsigned)conn->addr_count,
+                   conn_effective_host(conn));
+    }
 
     int try_rc = conn_try_connect(conn, transport);
     if (1 == try_rc) {
         int transition_rc = conn_transition_after_connect(conn, transport);
-        if (1 == transition_rc) {
-            conn->state = PN_CONN_CONNECTING;
-        } else if (transition_rc < 0) {
+        if (transition_rc < 0) {
             conn_fail(conn, transport, PUBNUB_ERR_TRANSPORT);
         }
     } else if (-1 == try_rc) {
+        PUBNUB_LOG(
+            transport->logger,
+            PUBNUB_LOG_LEVEL_DEBUG,
+            "conn[%d] conn_fallback_next_addr: all addresses exhausted for "
+            "host: %s (addr_count=%u, addr_current=%u)",
+            (int)(conn - transport->connections),
+            conn_effective_host(conn),
+            (unsigned)conn->addr_count,
+            (unsigned)conn->addr_current);
         conn_fail(conn, transport, PUBNUB_ERR_TRANSPORT);
     }
 }
 
 /**
- * @brief Handle a successful TCP connect: apply keepalive and transition.
+ * @brief Handle a confirmed TCP connect: transition to TLS, proxy or HTTP.
  *
- * On transition failure, falls back to the next address. On deferral
- * (TLS gate busy for same hostname), sets CONNECTING to re-enter on
- * the next poll without destroying the established TCP socket.
+ * A deferred TLS handshake keeps the connected socket.
  */
 static void conn_handle_connected(pn_socket_connection_t* conn,
                                   pn_socket_transport_t*  transport)
 {
     int rc;
 
-    transport->ops->socket_set_keepalive(
-        transport->ops, conn->socket, &transport->keepalive_config);
     rc = conn_transition_after_connect(conn, transport);
     if (1 == rc) {
+#ifdef PN_DEBUG_SOCKET_OPS
         uint64_t pn_now    = conn_now_ms(transport);
         uint64_t pn_budget = (pn_now < conn->connect_deadline_ms)
                                ? (conn->connect_deadline_ms - pn_now)
@@ -1022,20 +1179,27 @@ static void conn_handle_connected(pn_socket_connection_t* conn,
                    (unsigned)pn_budget);
         (void)pn_now;
         (void)pn_budget;
-        conn->state = PN_CONN_CONNECTING;
-    } else if (rc < 0) {
+#endif
+        return;
+    }
+    if (rc < 0) {
         /* Permanent failure (e.g. no TLS backend) — fail closed, not
          * per-address retry. */
         conn_fail(conn, transport, PUBNUB_ERR_TRANSPORT);
     } else {
-        PUBNUB_LOG(transport->logger,
-                   PUBNUB_LOG_LEVEL_TRACE,
-                   "conn[%d] TCP connected fd=%d to %s",
-                   (int)(conn - transport->connections),
-                   (int)conn->socket,
-                   conn_effective_host(conn));
-        conn->connect_deadline_ms =
-            conn_now_ms(transport) + (uint64_t)PUBNUB_CFG_SOCKET_CONNECT_TIMEOUT_MS;
+        /* Also reached from TLS_DEFERRED. */
+        PUBNUB_LOG(
+            transport->logger,
+            PUBNUB_LOG_LEVEL_TRACE,
+            "conn[%d] TCP connected fd=%d to %s (%u ms since attempt "
+            "start)",
+            (int)(conn - transport->connections),
+            (int)conn->socket,
+            conn_effective_host(conn),
+            (unsigned)(conn_now_ms(transport)
+                       - (conn->connect_deadline_ms - conn->connect_budget_ms)));
+        conn_arm_connect_deadline(
+            conn, conn_now_ms(transport), PUBNUB_CFG_SOCKET_CONNECT_TIMEOUT_MS);
     }
 }
 
@@ -1043,14 +1207,14 @@ static void conn_handle_connected(pn_socket_connection_t* conn,
  * @brief Check the connect deadline after a TLS deferral.
  *
  * When conn_handle_connected defers TLS (a peer is handshaking to the
- * same hostname), the connection stays in CONNECTING with TCP already
+ * same hostname), the connection waits in TLS_DEFERRED with TCP already
  * established. This helper bounds the wait so a stuck peer handshake
  * cannot stall the deferred connection indefinitely.
  */
 static void conn_check_tls_deferred_deadline(pn_socket_connection_t* conn,
                                              pn_socket_transport_t*  transport)
 {
-    if (PN_CONN_CONNECTING == conn->state) {
+    if (PN_CONN_TLS_DEFERRED == conn->state) {
         uint64_t now = conn_now_ms(transport);
         if (now >= conn->connect_deadline_ms) {
             PUBNUB_LOG(transport->logger,
@@ -1059,11 +1223,50 @@ static void conn_check_tls_deferred_deadline(pn_socket_connection_t* conn,
                        (int)(conn - transport->connections),
                        (unsigned)(now
                                   - (conn->connect_deadline_ms
-                                     - PUBNUB_CFG_SOCKET_CONNECT_TIMEOUT_MS)));
+                                     - conn->connect_budget_ms)));
             conn_close_socket(conn, transport);
             conn_fail(conn, transport, PUBNUB_ERR_TIMEOUT);
         }
     }
+}
+
+/**
+ * @brief Handle an expired TCP connect deadline.
+ *
+ * Tries the next address when one remains with enough budget. Otherwise
+ * closes the socket and fails the request with PUBNUB_ERR_TIMEOUT.
+ */
+static void conn_on_connect_timeout(pn_socket_connection_t* conn,
+                                    pn_socket_transport_t*  transport,
+                                    uint64_t                now)
+{
+    PUBNUB_LOG(transport->logger,
+               PUBNUB_LOG_LEVEL_TRACE,
+               "TCP connect deadline expired for %s"
+               " (addr %u of %u, fd=%d)",
+               conn_effective_host(conn),
+               (unsigned)(conn->addr_current + 1),
+               (unsigned)conn->addr_count,
+               (int)conn->socket);
+    PUBNUB_LOG(transport->logger,
+               PUBNUB_LOG_LEVEL_DEBUG,
+               "TCP connect timeout for host: %s",
+               conn_effective_host(conn));
+    if (conn_has_untried_addr(conn)
+        && conn_transaction_left_ms(conn, now) >= PN_CONNECT_MIN_SLICE_MS) {
+        PUBNUB_LOG(transport->logger,
+                   PUBNUB_LOG_LEVEL_INFO,
+                   "conn[%d] TCP connect timed out on address %u of %u "
+                   "for %s, trying next",
+                   (int)(conn - transport->connections),
+                   (unsigned)(conn->addr_current + 1),
+                   (unsigned)conn->addr_count,
+                   conn_effective_host(conn));
+        conn_fallback_next_addr(conn, transport);
+        return;
+    }
+    conn_close_socket(conn, transport);
+    conn_fail(conn, transport, PUBNUB_ERR_TIMEOUT);
 }
 
 /**
@@ -1083,6 +1286,15 @@ static pn_conn_state_t tick_connecting(pn_socket_connection_t* conn,
         if (0 == rc) {
             return conn->state;
         }
+        PUBNUB_LOG(
+            transport->logger,
+            PUBNUB_LOG_LEVEL_DEBUG,
+            "conn[%d] tick_connecting: all addresses exhausted before socket "
+            "creation for host: %s (addr_count=%u, addr_current=%u)",
+            (int)(conn - transport->connections),
+            conn_effective_host(conn),
+            (unsigned)conn->addr_count,
+            (unsigned)conn->addr_current);
         conn_fail(conn, transport, PUBNUB_ERR_TRANSPORT);
         return conn->state;
     }
@@ -1090,6 +1302,7 @@ static pn_conn_state_t tick_connecting(pn_socket_connection_t* conn,
     /* Socket exists — check if connect completed. */
     int rc = transport->ops->socket_check_connect(transport->ops, conn->socket);
     if (1 == rc) {
+        conn_on_tcp_connected(conn, transport);
         conn_handle_connected(conn, transport);
         conn_check_tls_deferred_deadline(conn, transport);
         return conn->state;
@@ -1099,30 +1312,52 @@ static pn_conn_state_t tick_connecting(pn_socket_connection_t* conn,
         /* Still in progress — check deadline. */
         uint64_t now = conn_now_ms(transport);
         if (now >= conn->connect_deadline_ms) {
-            PUBNUB_LOG(transport->logger,
-                       PUBNUB_LOG_LEVEL_TRACE,
-                       "TCP connect deadline expired for %s"
-                       " (addr %u of %u, fd=%d)",
-                       conn_effective_host(conn),
-                       (unsigned)(conn->addr_current + 1),
-                       (unsigned)conn->addr_count,
-                       (int)conn->socket);
-            PUBNUB_LOG(transport->logger,
-                       PUBNUB_LOG_LEVEL_DEBUG,
-                       "TCP connect timeout for host: %s",
-                       conn_effective_host(conn));
-            conn_close_socket(conn, transport);
-            conn_fail(conn, transport, PUBNUB_ERR_TIMEOUT);
+            conn_on_connect_timeout(conn, transport, now);
         }
         return conn->state;
     }
 
-    /* Connect error on current address — try next. */
+    /* Only the last address escalates to WARNING. */
+    PUBNUB_LOG(transport->logger,
+               (conn->addr_current + 1U < conn->addr_count)
+                   ? PUBNUB_LOG_LEVEL_INFO
+                   : PUBNUB_LOG_LEVEL_WARNING,
+               "conn[%d] TCP connect failed on address %u of %u for %s: rc=%d",
+               (int)(conn - transport->connections),
+               (unsigned)(conn->addr_current + 1),
+               (unsigned)conn->addr_count,
+               conn_effective_host(conn),
+               rc);
     if (pn_is_family_unreachable(rc)) {
         conn->family_exhausted |=
             conn_family_bit(&conn->resolved_addrs[conn->addr_current]);
     }
     conn_fallback_next_addr(conn, transport);
+    return conn->state;
+}
+
+/**
+ * @brief Tick: TLS_DEFERRED state.
+ *
+ * Does not probe the socket, because the connect is already confirmed. Retries
+ * the TLS gate and bounds the wait by the connect deadline.
+ */
+static pn_conn_state_t tick_tls_deferred(pn_socket_connection_t* conn,
+                                         pn_socket_transport_t*  transport)
+{
+    if (PN_INVALID_SOCKET == conn->socket) {
+        /* Unreachable: this state is entered only with a connected socket. */
+        PUBNUB_LOG(transport->logger,
+                   PUBNUB_LOG_LEVEL_ERROR,
+                   "conn[%d] tick_tls_deferred: no socket for host: %s",
+                   (int)(conn - transport->connections),
+                   conn_effective_host(conn));
+        conn_fail(conn, transport, PUBNUB_ERR_INTERNAL);
+        return conn->state;
+    }
+
+    conn_handle_connected(conn, transport);
+    conn_check_tls_deferred_deadline(conn, transport);
     return conn->state;
 }
 
@@ -1153,9 +1388,7 @@ static pn_conn_state_t tick_proxy_negotiating(pn_socket_connection_t* conn,
         }
         conn->proxy_done = 1;
         tls_rc           = conn_transition_to_tls_or_http(conn, transport);
-        if (1 == tls_rc) {
-            conn->state = PN_CONN_CONNECTING;
-        } else if (tls_rc < 0) {
+        if (tls_rc < 0) {
             conn_fail(conn, transport, PUBNUB_ERR_TRANSPORT);
         }
         return conn->state;
@@ -1168,6 +1401,13 @@ static pn_conn_state_t tick_proxy_negotiating(pn_socket_connection_t* conn,
                                              transport->allocator);
             conn->proxy_session = NULL;
         }
+        PUBNUB_LOG(
+            transport->logger,
+            PUBNUB_LOG_LEVEL_ERROR,
+            "conn[%d] tick_proxy_negotiating: proxy tunnel negotiation failed "
+            "for host: %s",
+            (int)(conn - transport->connections),
+            conn_effective_host(conn));
         conn_fail(conn, transport, PUBNUB_ERR_TRANSPORT);
         return conn->state;
     }
@@ -1186,61 +1426,104 @@ static pn_conn_state_t tick_proxy_negotiating(pn_socket_connection_t* conn,
 }
 
 /**
+ * @brief Log a failed TLS handshake with the backend's own error detail.
+ *
+ * Must run before the TLS session is destroyed.
+ *
+ * @param conn      Connection whose handshake failed.
+ * @param transport Owning transport instance.
+ */
+static void conn_log_tls_handshake_error(const pn_socket_connection_t* conn,
+                                         const pn_socket_transport_t* transport)
+{
+#if PUBNUB_CFG_MAX_LOG_MESSAGE_SIZE > 0
+    if (PUBNUB_LOG_LEVEL_ENABLED(PUBNUB_LOG_LEVEL_WARNING)
+        && NULL != transport->logger && NULL != transport->logger->log) {
+        const pn_tls_backend_t* backend = transport->tls_backend;
+        const char*             label   = NULL;
+        int                     tls_err = 0;
+
+        if (NULL != backend && NULL != backend->get_session_error) {
+            tls_err = backend->get_session_error(conn->tls_session);
+            if (NULL != backend->session_error_str) {
+                label = backend->session_error_str(tls_err);
+            }
+        }
+        PUBNUB_LOG(transport->logger,
+                   PUBNUB_LOG_LEVEL_WARNING,
+                   "conn[%d] TLS error on address %u of %u for %s, trying next "
+                   "(new deadline in %u ms) tls_err=%d (%s)",
+                   (int)(conn - transport->connections),
+                   (unsigned)(conn->addr_current + 1),
+                   (unsigned)conn->addr_count,
+                   conn_effective_host(conn),
+                   (unsigned)PUBNUB_CFG_SOCKET_CONNECT_TIMEOUT_MS,
+                   tls_err,
+                   (NULL != label) ? label : "n/a");
+    }
+#else
+    (void)conn;
+    (void)transport;
+#endif
+}
+
+/**
  * @brief Tick: TLS_HANDSHAKING state.
  */
 static pn_conn_state_t tick_tls_handshaking(pn_socket_connection_t* conn,
                                             pn_socket_transport_t*  transport)
 {
     if (NULL == transport->tls_backend || NULL == conn->tls_session) {
+        PUBNUB_LOG(transport->logger,
+                   PUBNUB_LOG_LEVEL_DEBUG,
+                   "conn[%d] tick_tls_handshaking: cannot start handshake for "
+                   "host: %s "
+                   "(%s)",
+                   (int)(conn - transport->connections),
+                   conn_effective_host(conn),
+                   (NULL == transport->tls_backend) ? "no TLS backend"
+                                                    : "no TLS session");
         conn_fail(conn, transport, PUBNUB_ERR_TRANSPORT);
         return conn->state;
     }
 
     int rc = transport->tls_backend->handshake(conn->tls_session);
     if (PN_TLS_OK == rc) {
-        conn->state = PN_CONN_SENDING_HEADERS;
+        conn->tls_want = 0;
+        conn->state    = PN_CONN_SENDING_HEADERS;
         return conn->state;
     }
 
     if (PN_TLS_WANT_READ == rc || PN_TLS_WANT_WRITE == rc) {
+        conn->tls_want = (PN_TLS_WANT_READ == rc) ? PN_POLL_READ : PN_POLL_WRITE;
         /* Need to wait for socket readiness — check deadline. */
         uint64_t now = conn_now_ms(transport);
         if (now >= conn->connect_deadline_ms) {
             int try_rc;
             int transition_rc;
             PUBNUB_LOG(transport->logger,
-                       PUBNUB_LOG_LEVEL_DEBUG,
-                       "conn[%d] TLS handshake timed out for host: %s",
-                       (int)(conn - transport->connections),
-                       conn_effective_host(conn));
-            conn_close_all(conn, transport);
-            /* Try next address with a fresh connect budget. */
-            PUBNUB_LOG(transport->logger,
-                       PUBNUB_LOG_LEVEL_DEBUG,
-                       "conn[%d] TLS timeout on address %u of %u for %s,"
-                       " trying next (new deadline in %u ms)",
+                       PUBNUB_LOG_LEVEL_WARNING,
+                       "conn[%d] TLS handshake timed out on address %u of %u "
+                       "for %s (waiting for %s), trying next (new deadline in "
+                       "%u ms)",
                        (int)(conn - transport->connections),
                        (unsigned)(conn->addr_current + 1),
                        (unsigned)conn->addr_count,
                        conn_effective_host(conn),
+                       (PN_TLS_WANT_READ == rc) ? "read" : "write",
                        (unsigned)PUBNUB_CFG_SOCKET_CONNECT_TIMEOUT_MS);
+            conn_close_all(conn, transport);
+            /* Next address gets a fresh connect budget. */
             conn->addr_current++;
-            conn->connect_deadline_ms = now + PUBNUB_CFG_SOCKET_CONNECT_TIMEOUT_MS;
+            conn_arm_connect_deadline(conn, now, PUBNUB_CFG_SOCKET_CONNECT_TIMEOUT_MS);
+            /* Pending connect: the state is CONNECTING, so POLLOUT is awaited first. */
             try_rc = conn_try_connect(conn, transport);
             if (1 == try_rc) {
                 transition_rc = conn_transition_after_connect(conn, transport);
-                if (1 == transition_rc) {
-                    conn->state = PN_CONN_CONNECTING;
-                } else if (transition_rc < 0) {
+                if (transition_rc < 0) {
                     conn_fail(conn, transport, PUBNUB_ERR_TRANSPORT);
                 }
-            } else if (0 == try_rc) {
-                /* New TCP connection in-progress: must wait for it to
-                 * complete before starting a new TLS session
-                 * (tls_session is NULL now). Drop back to CONNECTING
-                 * so tick_connecting handles POLLOUT. */
-                conn->state = PN_CONN_CONNECTING;
-            } else {
+            } else if (-1 == try_rc) {
                 conn_fail(conn, transport, PUBNUB_ERR_TIMEOUT);
             }
         }
@@ -1252,37 +1535,84 @@ static pn_conn_state_t tick_tls_handshaking(pn_socket_connection_t* conn,
         int      try_rc;
         int      transition_rc;
 
-        PUBNUB_LOG(transport->logger,
-                   PUBNUB_LOG_LEVEL_DEBUG,
-                   "conn[%d] TLS error on address %u of %u for %s,"
-                   " trying next (new deadline in %u ms)",
-                   (int)(conn - transport->connections),
-                   (unsigned)(conn->addr_current + 1),
-                   (unsigned)conn->addr_count,
-                   conn_effective_host(conn),
-                   (unsigned)PUBNUB_CFG_SOCKET_CONNECT_TIMEOUT_MS);
+        /* Log before conn_close_all, which destroys the TLS session. */
+        conn_log_tls_handshake_error(conn, transport);
         conn_close_all(conn, transport);
         conn->addr_current++;
 
         now_tls = conn_now_ms(transport);
-        conn->connect_deadline_ms = now_tls + PUBNUB_CFG_SOCKET_CONNECT_TIMEOUT_MS;
+        conn_arm_connect_deadline(conn, now_tls, PUBNUB_CFG_SOCKET_CONNECT_TIMEOUT_MS);
+        /* A pending connect (0 == try_rc) needs no handling: the state is
+         * already CONNECTING to wait for POLLOUT before TLS. */
         try_rc = conn_try_connect(conn, transport);
         if (1 == try_rc) {
             transition_rc = conn_transition_after_connect(conn, transport);
-            if (1 == transition_rc) {
-                conn->state = PN_CONN_CONNECTING;
-            } else if (transition_rc < 0) {
+            if (transition_rc < 0) {
                 conn_fail(conn, transport, PUBNUB_ERR_TRANSPORT);
             }
-        } else if (0 == try_rc) {
-            /* New TCP connection in-progress: must wait for POLLOUT
-             * before TLS. tls_session was cleared by conn_close_all. */
-            conn->state = PN_CONN_CONNECTING;
-        } else {
+        } else if (-1 == try_rc) {
+            PUBNUB_LOG(
+                transport->logger,
+                PUBNUB_LOG_LEVEL_DEBUG,
+                "conn[%d] tick_tls_handshaking: TLS error and all addresses "
+                "exhausted for host: %s (addr_count=%u, addr_current=%u)",
+                (int)(conn - transport->connections),
+                conn_effective_host(conn),
+                (unsigned)conn->addr_count,
+                (unsigned)conn->addr_current);
             conn_fail(conn, transport, PUBNUB_ERR_TRANSPORT);
         }
     }
     return conn->state;
+}
+
+/**
+ * @brief Log a send/receive failure, adding the TLS backend error if known.
+ *
+ * @param conn      Connection that failed.
+ * @param transport Owning transport instance.
+ * @param op        Static operation label ("header send", "body send", "recv").
+ * @param rc        Failing return code of the send/receive call.
+ */
+static void conn_log_io_error(const pn_socket_connection_t* conn,
+                              const pn_socket_transport_t*  transport,
+                              const char*                   op,
+                              int                           rc)
+{
+#if PUBNUB_CFG_MAX_LOG_MESSAGE_SIZE > 0
+    if (PUBNUB_LOG_LEVEL_ENABLED(PUBNUB_LOG_LEVEL_ERROR)
+        && NULL != transport->logger && NULL != transport->logger->log) {
+        const pn_tls_backend_t* backend = transport->tls_backend;
+
+        if (NULL != conn->tls_session && NULL != backend
+            && NULL != backend->get_session_error) {
+            int         tls_err = backend->get_session_error(conn->tls_session);
+            const char* label   = (NULL != backend->session_error_str)
+                                    ? backend->session_error_str(tls_err)
+                                    : NULL;
+            PUBNUB_LOG(transport->logger,
+                       PUBNUB_LOG_LEVEL_ERROR,
+                       "conn[%d] %s error: rc=%d tls_err=%d (%s)",
+                       (int)(conn - transport->connections),
+                       op,
+                       rc,
+                       tls_err,
+                       (NULL != label) ? label : "n/a");
+        } else {
+            PUBNUB_LOG(transport->logger,
+                       PUBNUB_LOG_LEVEL_ERROR,
+                       "conn[%d] %s error: rc=%d",
+                       (int)(conn - transport->connections),
+                       op,
+                       rc);
+        }
+    }
+#else
+    (void)conn;
+    (void)transport;
+    (void)op;
+    (void)rc;
+#endif
 }
 
 /**
@@ -1345,8 +1675,7 @@ static pn_conn_state_t tick_sending_headers(pn_socket_connection_t* conn,
         return conn->state;
     }
 
-    PUBNUB_LOG(
-        transport->logger, PUBNUB_LOG_LEVEL_WARNING, "header send error: rc=%d", rc);
+    conn_log_io_error(conn, transport, "header send", rc);
     conn_fail(conn, transport, PUBNUB_ERR_TRANSPORT);
     return conn->state;
 }
@@ -1405,8 +1734,7 @@ static pn_conn_state_t tick_sending_body(pn_socket_connection_t* conn,
         return conn->state;
     }
 
-    PUBNUB_LOG(
-        transport->logger, PUBNUB_LOG_LEVEL_WARNING, "body send error: rc=%d", rc);
+    conn_log_io_error(conn, transport, "body send", rc);
     conn_fail(conn, transport, PUBNUB_ERR_TRANSPORT);
     return conn->state;
 }
@@ -1542,29 +1870,6 @@ static void conn_finalize_response(pn_socket_connection_t* conn,
 }
 
 /**
- * @brief Log a receive error, including the TLS-level error when present.
- */
-static void conn_log_recv_error(pn_socket_connection_t* conn,
-                                pn_socket_transport_t*  transport,
-                                int                     rc)
-{
-    /* Compiled-out logging turns every PUBNUB_LOG below into ((void)0),
-     * leaving the status code unreferenced. */
-    (void)rc;
-
-    PUBNUB_LOG(transport->logger, PUBNUB_LOG_LEVEL_WARNING, "recv error: rc=%d", rc);
-
-    if (NULL != conn->tls_session && NULL != transport->tls_backend) {
-        int tls_err = transport->tls_backend->get_session_error(conn->tls_session);
-        PUBNUB_LOG(transport->logger,
-                   PUBNUB_LOG_LEVEL_WARNING,
-                   "TLS recv error: %d",
-                   tls_err);
-        (void)tls_err;
-    }
-}
-
-/**
  * @brief Tick: RECEIVING_RESPONSE state.
  */
 static pn_conn_state_t tick_receiving_response(pn_socket_connection_t* conn,
@@ -1574,6 +1879,14 @@ static pn_conn_state_t tick_receiving_response(pn_socket_connection_t* conn,
     int    rc;
 
     if (NULL == conn->rx_buf.data) {
+        PUBNUB_LOG(
+            transport->logger,
+            PUBNUB_LOG_LEVEL_ERROR,
+            "conn[%d] tick_receiving_response: no receive buffer for host: %s "
+            "(rx_buf.len=%lu)",
+            (int)(conn - transport->connections),
+            conn_effective_host(conn),
+            (unsigned long)conn->rx_buf.len);
         conn_fail(conn, transport, PUBNUB_ERR_TRANSPORT);
         return conn->state;
     }
@@ -1609,6 +1922,15 @@ static pn_conn_state_t tick_receiving_response(pn_socket_connection_t* conn,
         }
 
         if (PN_HTTP_PARSE_ERROR == result) {
+            PUBNUB_LOG(
+                transport->logger,
+                PUBNUB_LOG_LEVEL_ERROR,
+                "conn[%d] tick_receiving_response: HTTP response parse error "
+                "for host: %s (rx_buf.len=%lu, requests_on_connection=%u)",
+                (int)(conn - transport->connections),
+                conn_effective_host(conn),
+                (unsigned long)conn->rx_buf.len,
+                (unsigned)conn->requests_on_connection);
             conn_fail(conn, transport, PUBNUB_ERR_TRANSPORT);
             return conn->state;
         }
@@ -1634,12 +1956,23 @@ static pn_conn_state_t tick_receiving_response(pn_socket_connection_t* conn,
         if (PN_HTTP_PARSE_COMPLETE == pn_http_parser_signal_eof(&conn->parser)) {
             conn_finalize_response(conn, transport);
         } else {
+            PUBNUB_LOG(
+                transport->logger,
+                PUBNUB_LOG_LEVEL_ERROR,
+                "conn[%d] tick_receiving_response: peer closed before response "
+                "completed for host: %s (fd=%d, requests_on_connection=%u, "
+                "rx_buf.len=%lu)",
+                (int)(conn - transport->connections),
+                conn_effective_host(conn),
+                (int)conn->socket,
+                (unsigned)conn->requests_on_connection,
+                (unsigned long)conn->rx_buf.len);
             conn_fail(conn, transport, PUBNUB_ERR_TRANSPORT);
         }
         return conn->state;
     }
 
-    conn_log_recv_error(conn, transport, rc);
+    conn_log_io_error(conn, transport, "recv", rc);
     conn_fail(conn, transport, PUBNUB_ERR_TRANSPORT);
     return conn->state;
 }
@@ -1663,6 +1996,15 @@ static int tick_complete_handle_redirect(pn_socket_connection_t* conn,
     pubnub_res_t         prc;
 
     if (conn->redirect_count >= PUBNUB_CFG_SOCKET_MAX_REDIRECTS) {
+        PUBNUB_LOG(
+            transport->logger,
+            PUBNUB_LOG_LEVEL_ERROR,
+            "conn[%d] tick_complete_handle_redirect: redirect limit reached "
+            "for host: %s (redirect_count=%u, max=%u)",
+            (int)(conn - transport->connections),
+            conn_effective_host(conn),
+            (unsigned)conn->redirect_count,
+            (unsigned)PUBNUB_CFG_SOCKET_MAX_REDIRECTS);
         conn_free_redirect(conn, transport);
         conn_close_all(conn, transport);
         if (NULL != conn->response) {
@@ -1709,7 +2051,7 @@ static int tick_complete_handle_redirect(pn_socket_connection_t* conn,
      * secure origin must never be talked out of TLS by a Location header. */
     if (conn_effective_secure(conn) && 0 == new_secure) {
         PUBNUB_LOG_TEXT(transport->logger,
-                        PUBNUB_LOG_LEVEL_WARNING,
+                        PUBNUB_LOG_LEVEL_ERROR,
                         "rejecting redirect: https->http downgrade blocked");
         pn_strfree(new_host, transport->allocator);
         pn_strfree(new_path, transport->allocator);
@@ -1817,7 +2159,8 @@ static pn_conn_state_t tick_closing(pn_socket_connection_t* conn,
     /* Close only TLS + socket. rx_buf and decomp_buf are kept alive so
      * that route_completions / feature callbacks can still read the
      * body after this poll cycle. They are freed when the connection
-     * is reused (pn_connection_start) or reset (pn_connection_reset). */
+     * is reused (pn_connection_start), reset (pn_connection_reset) or its
+     * request is released (socket_cancel). */
     conn_close_transport(conn, transport);
     conn->connected_host[0]      = '\0';
     conn->connected_port         = 0;
@@ -2078,6 +2421,14 @@ static int conn_begin_dns(pn_socket_connection_t* conn,
     transport->resolver.state = PN_DNS_STATE_IDLE;
 
     if (rc < 0 || 0 == count) {
+        PUBNUB_LOG(transport->logger,
+                   PUBNUB_LOG_LEVEL_ERROR,
+                   "conn[%d] conn_begin_dns: no usable addresses for host: %s "
+                   "(rc=%d, count=%u)",
+                   (int)(conn - transport->connections),
+                   hostname,
+                   rc,
+                   (unsigned)count);
         return -1;
     }
     conn->addr_count   = (uint8_t)count;
@@ -2087,6 +2438,7 @@ static int conn_begin_dns(pn_socket_connection_t* conn,
         conn->resolved_addrs[i].port = port;
     }
 
+    conn_arm_first_addr_deadline(conn, transport);
     conn->state = PN_CONN_CONNECTING;
     return 0;
 }
@@ -2114,11 +2466,21 @@ int pn_connection_start(pn_socket_connection_t*      conn,
     }
 
     if (PN_CONN_IDLE != conn->state && PN_CONN_KEEP_ALIVE_IDLE != conn->state) {
+        PUBNUB_LOG(
+            transport->logger,
+            PUBNUB_LOG_LEVEL_ERROR,
+            "conn[%d] pn_connection_start: rejected, connection state=%d is "
+            "neither IDLE nor KEEP_ALIVE_IDLE",
+            (int)(conn - transport->connections),
+            (int)conn->state);
         return -1;
     }
 
+    conn->tls_want = 0;
+
     /* Free deferred buffers from a prior request that went through the
-     * close path (tick_closing). Safe because pn_connection_start is
+     * close path (tick_closing); release via socket_cancel -> reset is the
+     * other point that frees them. Safe because pn_connection_start is
      * called only when dispatching a new request, after the core has
      * finished reading the previous response. */
     if (PN_CONN_IDLE == conn->state) {
@@ -2152,11 +2514,19 @@ int pn_connection_start(pn_socket_connection_t*      conn,
     if (0 == timeout) {
         timeout = PUBNUB_CFG_TRANSACTION_TIMEOUT_MS;
     }
-    conn->connect_deadline_ms     = now + PUBNUB_CFG_SOCKET_CONNECT_TIMEOUT_MS;
+    conn_arm_connect_deadline(conn, now, PUBNUB_CFG_SOCKET_CONNECT_TIMEOUT_MS);
     conn->transaction_deadline_ms = now + (uint64_t)timeout;
 
     /* Build headers early (needed for both reuse and fresh paths). */
     if (0 != conn_build_headers(conn, request)) {
+        PUBNUB_LOG(
+            transport->logger,
+            PUBNUB_LOG_LEVEL_ERROR,
+            "conn[%d] pn_connection_start: request header build failed for "
+            "host: %s (header buffer %lu bytes)",
+            (int)(conn - transport->connections),
+            (NULL != request->host) ? request->host : "(null)",
+            (unsigned long)sizeof(conn->header_buf));
         return -1;
     }
 
@@ -2167,6 +2537,11 @@ int pn_connection_start(pn_socket_connection_t*      conn,
         && conn_try_keepalive_reuse(
             conn, transport, request, now, hostname, sizeof(hostname))) {
         return 0;
+    }
+
+    /* Defensive: every path into IDLE has already closed the socket. */
+    if (PN_INVALID_SOCKET != conn->socket) {
+        conn_close_transport(conn, transport);
     }
 
     /* When a proxy is configured the connection targets the proxy port;
@@ -2195,6 +2570,8 @@ pn_conn_state_t pn_connection_tick(pn_socket_connection_t* conn,
 
     case PN_CONN_CONNECTING: return tick_connecting(conn, transport);
 
+    case PN_CONN_TLS_DEFERRED: return tick_tls_deferred(conn, transport);
+
     case PN_CONN_PROXY_NEGOTIATING:
         return tick_proxy_negotiating(conn, transport);
 
@@ -2216,6 +2593,21 @@ pn_conn_state_t pn_connection_tick(pn_socket_connection_t* conn,
 
     /* Unreachable — all enum values covered. */
     return conn->state;
+}
+
+/**
+ * @brief Next connection generation, skipping 0.
+ *
+ * Generation 0 is reserved so that an encoded handle is never NULL.
+ */
+static uint16_t conn_next_generation(const pn_socket_connection_t* conn)
+{
+    uint16_t next_gen = (uint16_t)(conn->generation + 1U);
+
+    if (0 == next_gen) {
+        next_gen = 1;
+    }
+    return next_gen;
 }
 
 void pn_connection_cancel(pn_socket_connection_t* conn,
@@ -2261,6 +2653,26 @@ void pn_connection_cancel(pn_socket_connection_t* conn,
     conn->state         = PN_CONN_CANCELLED;
 }
 
+int pn_connection_release_request(pn_socket_connection_t* conn,
+                                  pn_socket_transport_t*  transport)
+{
+    if (NULL == conn || NULL == transport) {
+        return 0;
+    }
+    if (PN_CONN_KEEP_ALIVE_IDLE != conn->state || PN_INVALID_SOCKET == conn->socket) {
+        return 0;
+    }
+
+    /* The response aliases these buffers, so they are freed on release. */
+    pn_conn_free_decomp_buf(conn, transport);
+    conn_release_rx_buf(conn, transport);
+    conn->request       = NULL;
+    conn->response      = NULL;
+    conn->generation    = conn_next_generation(conn);
+    conn->idle_since_ms = conn_now_ms(transport);
+    return 1;
+}
+
 void pn_connection_reset(pn_socket_connection_t* conn,
                          pn_socket_transport_t*  transport)
 {
@@ -2271,10 +2683,7 @@ void pn_connection_reset(pn_socket_connection_t* conn,
 
     /* Bump generation before recycling so stale tagged handles that
      * encode the old generation are rejected by socket_cancel. */
-    next_gen = (uint16_t)(conn->generation + 1U);
-    if (0 == next_gen) {
-        next_gen = 1;
-    }
+    next_gen = conn_next_generation(conn);
 
     /* Free proxy session if any. */
     if (PUBNUB_ENABLE_PROXY && NULL != conn->proxy_session) {
@@ -2294,6 +2703,7 @@ void pn_connection_reset(pn_socket_connection_t* conn,
     conn->tls_session            = NULL;
     conn->proxy_session          = NULL;
     conn->proxy_done             = 0;
+    conn->tls_want               = 0;
     conn->decomp_buf             = NULL;
     conn->addr_count             = 0;
     conn->addr_current           = 0;

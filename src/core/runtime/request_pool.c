@@ -98,13 +98,7 @@ void pn_request_pool_deinit(pn_request_pool_t* pool)
             /* Mirror pn_request_pool_release: a slot may be sitting
              * in a terminal state with a parsed-body cache when the
              * context is torn down. */
-            if (NULL != slot->parsed_body_tree && NULL != slot->parsed_body_owner
-                && NULL != slot->parsed_body_owner->value_destroy) {
-                slot->parsed_body_owner->value_destroy(slot->parsed_body_owner,
-                                                       slot->parsed_body_tree);
-                slot->parsed_body_tree  = NULL;
-                slot->parsed_body_owner = NULL;
-            }
+            pn_request_release_parsed_body(slot);
         }
         if (NULL != pool->allocator->free) {
             PN_FREE(pool->allocator, pool->slots);
@@ -197,16 +191,9 @@ void pn_request_pool_release(pn_request_pool_t* pool, uint16_t slot_id)
      * pointers. The owning provider is captured at parse time so the
      * destructor stays paired with the constructor across mismatched
      * default/custom serialization providers. */
-    if (NULL != slot->parsed_body_tree && NULL != slot->parsed_body_owner
-        && NULL != slot->parsed_body_owner->value_destroy) {
-        slot->parsed_body_owner->value_destroy(slot->parsed_body_owner,
-                                               slot->parsed_body_tree);
-    }
-    slot->parsed_body_tree      = NULL;
-    slot->parsed_body_owner     = NULL;
-    slot->parsed_body_attempted = 0;
-    slot->svc_error_kind        = 0;
-    slot->svc_error_classified  = 0;
+    pn_request_release_parsed_body(slot);
+    slot->svc_error_kind       = 0;
+    slot->svc_error_classified = 0;
 
     /* pn_request_reset() zeroes every field except slot_id (which it
      * captures and restores), so the slot comes back out IDLE with

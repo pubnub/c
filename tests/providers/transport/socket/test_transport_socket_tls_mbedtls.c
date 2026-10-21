@@ -10,16 +10,25 @@
 #include "providers/transport/socket/platform/pn_socket_types.h"
 #include "providers/transport/socket/tls/pn_tls_backend.h"
 #include "pubnub/providers/allocator.h"
+#include "pubnub/providers/logger.h"
 #include "pubnub/providers/provider_deps.h"
 
 #include <setjmp.h>
 #include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include <cmocka.h>
+
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <signal.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
 
 #if defined(PUBNUB_TEST_NETWORK) && !defined(_WIN32)
 #include <fcntl.h>
@@ -159,9 +168,164 @@ static void test_tls_config_secure_by_default(void** state)
     assert_int_equal(1, cfg.use_system_certs);
 }
 
-#if defined(PUBNUB_TEST_NETWORK) && !defined(_WIN32)
+/**
+ * @brief Error codes map to their own mbedTLS names.
+ *
+ * Unknown codes must yield NULL so callers can fall back to generic text.
+ */
+static void test_tls_mbedtls_error_str_labels(void** state)
+{
+    (void)state;
+
+    static const struct {
+        int         code;
+        const char* label;
+    } cases[] = {
+        {-0x2700, "X509_CERT_VERIFY_FAILED"  },
+        {-0x2800, "X509_BAD_INPUT_DATA"      },
+        {-0x7780, "SSL_FATAL_ALERT_MESSAGE"  },
+        {-0x7700, "SSL_UNEXPECTED_MESSAGE"   },
+        {-0x7880, "SSL_PEER_CLOSE_NOTIFY"    },
+        {-0x7280, "SSL_CONN_EOF"             },
+        {-0x6800, "SSL_TIMEOUT"              },
+        {-0x6480, "SSL_EARLY_MESSAGE"        },
+        {-0x7200, "SSL_INVALID_RECORD"       },
+        {-0x7180, "SSL_INVALID_MAC"          },
+        {-0x7480, "SSL_NO_CLIENT_CERTIFICATE"},
+        {-0x7A00, "SSL_BAD_CERTIFICATE"      },
+        {-0x7100, "SSL_BAD_INPUT_DATA"       },
+        {-0x7F00, "SSL_ALLOC_FAILED"         },
+        {-0x0050, "NET_CONN_RESET"           },
+        {-0x004E, "NET_SEND_FAILED"          },
+        {-0x004C, "NET_RECV_FAILED"          },
+    };
+
+    const size_t n = sizeof(cases) / sizeof(cases[0]);
+    size_t       i;
+    size_t       j;
+
+    assert_non_null(pn_tls_mbedtls_backend.session_error_str);
+    for (i = 0; i < n; ++i) {
+        const char* got = pn_tls_mbedtls_backend.session_error_str(cases[i].code);
+        assert_non_null(got);
+        assert_string_equal(cases[i].label, got);
+        for (j = i + 1; j < n; ++j) {
+            assert_string_not_equal(cases[i].label, cases[j].label);
+        }
+    }
+
+    assert_null(pn_tls_mbedtls_backend.session_error_str(0));
+    assert_null(pn_tls_mbedtls_backend.session_error_str(-1));
+    assert_null(pn_tls_mbedtls_backend.session_error_str(-0x1234));
+}
+
+#if !defined(_WIN32)
 
 extern const struct pn_socket_platform_ops pn_posix_socket_ops;
+
+/** Capacity of the captured log text. */
+#define CAP_LOG_SIZE 4096
+
+/**
+ * @brief Logger that records every text entry as "<level-letter> <message>\n".
+ */
+typedef struct cap_logger {
+    /** Base provider (must be first member). */
+    pubnub_logger_provider_t base;
+    /** Concatenated captured entries (NUL-terminated). */
+    char text[CAP_LOG_SIZE];
+    /** Bytes used in text. */
+    size_t len;
+} cap_logger_t;
+
+static cap_logger_t g_cap;
+
+/**
+ * @brief Logger callback: append a text entry to the capture buffer.
+ *
+ * @param self  Provider (a cap_logger_t).
+ * @param entry Log entry; only text entries are recorded.
+ */
+static void cap_log(struct pubnub_logger_provider* self,
+                    const pubnub_log_entry_t*      entry)
+{
+    cap_logger_t* cap = (cap_logger_t*)self;
+    char          letter;
+    int           n;
+
+    if (PUBNUB_LOG_ENTRY_TEXT != entry->type) {
+        return;
+    }
+    switch (entry->level) {
+    case PUBNUB_LOG_LEVEL_TRACE: letter = 'T'; break;
+    case PUBNUB_LOG_LEVEL_DEBUG: letter = 'D'; break;
+    case PUBNUB_LOG_LEVEL_INFO: letter = 'I'; break;
+    case PUBNUB_LOG_LEVEL_WARNING: letter = 'W'; break;
+    default: letter = 'E'; break;
+    }
+    n = snprintf(cap->text + cap->len,
+                 sizeof(cap->text) - cap->len,
+                 "%c %s\n",
+                 letter,
+                 ((const pubnub_log_entry_text_t*)entry)->message);
+    if (0 < n && (size_t)n < sizeof(cap->text) - cap->len) {
+        cap->len += (size_t)n;
+    }
+}
+
+/** @brief A failed handshake logs the code, then the mbedTLS text. */
+static void test_tls_mbedtls_handshake_failure_logs(void** state)
+{
+    (void)state;
+    if (0 == PUBNUB_CFG_MAX_LOG_MESSAGE_SIZE) {
+        skip();
+    }
+
+    static const char garbage[] = "HTTP/1.1 400 Bad Request\r\n\r\n";
+    int               fds[2]    = {-1, -1};
+    pn_tls_config_t   cfg       = PN_TLS_CONFIG_INIT;
+    void*             ctx       = NULL;
+    void*             sess      = NULL;
+    int               rc        = 0;
+    int               i         = 0;
+
+    memset(&g_cap, 0, sizeof(g_cap));
+    g_cap.base.log = cap_log;
+
+    pubnub_provider_deps_t deps = tracking_deps;
+    deps.logger                 = &g_cap.base;
+
+    assert_int_equal(0, socketpair(AF_UNIX, SOCK_STREAM, 0, fds));
+    (void)fcntl(fds[0], F_SETFL, fcntl(fds[0], F_GETFL, 0) | O_NONBLOCK);
+    (void)fcntl(fds[1], F_SETFL, fcntl(fds[1], F_GETFL, 0) | O_NONBLOCK);
+    assert_int_equal((int)sizeof(garbage) - 1,
+                     (int)write(fds[1], garbage, sizeof(garbage) - 1));
+
+    cfg.skip_verify = 1;
+    ctx             = pn_tls_mbedtls_backend.ctx_create(&cfg, &deps);
+    assert_non_null(ctx);
+    assert_int_equal(
+        0,
+        pn_tls_mbedtls_backend.session_create(
+            &sess, ctx, (pn_socket_t)fds[0], &pn_posix_socket_ops, "localhost"));
+
+    for (i = 0; i < 10 && 0 <= rc; ++i) {
+        rc = pn_tls_mbedtls_backend.handshake(sess);
+    }
+    assert_true(0 > rc);
+    assert_non_null(strstr(g_cap.text, "W TLS handshake error: rc=-"));
+    assert_non_null(strstr(g_cap.text, " resume="));
+    assert_non_null(strstr(g_cap.text, " ("));
+
+    pn_tls_mbedtls_backend.session_destroy(sess);
+    pn_tls_mbedtls_backend.ctx_destroy(ctx);
+    close(fds[0]);
+    close(fds[1]);
+}
+
+#endif /* !defined(_WIN32) */
+
+#if defined(PUBNUB_TEST_NETWORK) && !defined(_WIN32)
 
 static pn_socket_t connect_tcp(const char* hostname, const char* port)
 {
@@ -401,6 +565,10 @@ int main(void)
         cmocka_unit_test(test_ctx_create_null_deps),
         cmocka_unit_test(test_session_create_uses_allocator),
         cmocka_unit_test(test_tls_config_secure_by_default),
+        cmocka_unit_test(test_tls_mbedtls_error_str_labels),
+#if !defined(_WIN32)
+        cmocka_unit_test(test_tls_mbedtls_handshake_failure_logs),
+#endif
 #if defined(PUBNUB_TEST_NETWORK) && !defined(_WIN32)
         cmocka_unit_test(test_tls_mbedtls_integration),
         cmocka_unit_test(test_tls_rejects_expired_cert),

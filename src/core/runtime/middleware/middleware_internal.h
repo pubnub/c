@@ -451,6 +451,25 @@ void pn_middleware_retry_destroy(pubnub_transport_provider_t* mw,
                                  pubnub_allocator_provider_t* allocator);
 
 /**
+ * @brief Drop retries that would still target a previous origin.
+ *
+ * Every tracked request dispatched under an older origin generation than
+ * @p current_generation that is waiting out its backoff is finished with a
+ * transport error (the core then aborts it and the owning feature re-issues
+ * it against the current origin). Older attempts already in flight are left
+ * running, but a later failure of such an attempt is reported instead of
+ * retried. Requests dispatched under @p current_generation are untouched.
+ *
+ * @param mw                 Retry middleware returned by
+ *                           pn_middleware_retry_create(); NULL is a no-op.
+ * @param current_generation Current context origin generation.
+ * @note Call only from the thread that owns the transport (the tick or the
+ *       background thread): the retry slots are not synchronized.
+ */
+void pn_middleware_retry_cancel_waiting(pubnub_transport_provider_t* mw,
+                                        uint16_t current_generation);
+
+/**
  * @brief Copy the host string (with NUL terminator) into the request
  *        scratch buffer and point @c request->host at the copy.
  *

@@ -792,7 +792,7 @@ static void test_successful_retry_after_backoff(void** state)
     assert_int_equal(200, caller_response.status_code);
 }
 
-/* pn_retry_delay_exponential UB-fix tests (attempt >= 32, max_delay=0). */
+/* pn_retry_delay_exponential with attempt >= 32 and max_delay=0. */
 
 static void test_delay_exponential_attempt_zero(void** state)
 {
@@ -1155,6 +1155,11 @@ static void test_redispatch_null_handle_reports_error(void** state)
     /* Caller must see an immediate transport error, not PENDING. */
     assert_int_equal(PUBNUB_HTTP_ERROR, caller_response.completion);
     assert_int_equal(PUBNUB_ERR_TRANSPORT, caller_response.transport_error);
+
+    /* Suspension is lifted only after a successful send; cancel() clears it
+     * when the core reaps the request. */
+    assert_int_equal(1, req.http_request.deadline_suspended);
+    s_retry_mw.base.cancel(&s_retry_mw.base, handle);
     assert_int_equal(0, req.http_request.deadline_suspended);
 }
 
@@ -1507,13 +1512,8 @@ drive_to_transport_error_terminal(pn_request_t*           req,
     return handle;
 }
 
-/** Bug B5 (primary crash regression): a retry-tracked request that
- *  exhausts its retries after a transport-level error must leave the slot
- *  DONE with its request pointer intact, so the core's cancel() (via
- *  abort of the transport failure) resolves the slot and forwards the
- *  INNER handle — never the request pointer — to the inner transport.
- *  Forwarding the request pointer crashed the curl backend, which casts
- *  the handle to its own request type without validation. */
+/** cancel() after transport-error exhaustion forwards the inner handle,
+ *  never the request pointer. */
 static void test_transport_error_exhaustion_cancel_uses_inner_handle(void** state)
 {
     (void)state;
@@ -1538,9 +1538,7 @@ static void test_transport_error_exhaustion_cancel_uses_inner_handle(void** stat
     assert_ptr_equal((void*)s_retry_mw.slots[0].request, (void*)&req.http_request);
     assert_non_null(s_retry_mw.slots[0].inner_handle);
 
-    /* Core aborts by calling cancel() with the request-as-handle. The
-     * redispatch already cancelled attempt 0's inner handle, so measure
-     * the delta this cancel() adds rather than the absolute count. */
+    /* Count the delta: attempt 0's inner handle was cancelled on redispatch. */
     int cancels_before = s_inner_cancel_count;
     s_retry_mw.base.cancel(&s_retry_mw.base, handle);
 
@@ -1559,9 +1557,8 @@ static void test_transport_error_exhaustion_cancel_uses_inner_handle(void** stat
     assert_null(s_retry_mw.slots[0].inner_handle);
 }
 
-/** Bug B5 (state machine): after transport-error exhaustion, and before
- *  cancel(), the slot stays DONE (not reclaimed) and still owns the
- *  request pointer and inner handle. */
+/** After transport-error exhaustion the slot stays DONE and owns its
+ *  request pointer and inner handle until cancel(). */
 static void test_transport_error_exhaustion_slot_persists(void** state)
 {
     (void)state;
@@ -1638,10 +1635,8 @@ static void test_success_terminal_persists_until_cancel(void** state)
     assert_null(s_retry_mw.slots[0].inner_handle);
 }
 
-/** Bug B5 (passthrough cancel): an excluded-endpoint request returns the
- *  inner handle directly (not tracked). cancel() must delegate straight
- *  to the inner transport with that inner handle — find_slot_by_request()
- *  correctly returns NULL for the foreign pointer. */
+/** cancel() on an untracked (excluded-endpoint) handle delegates
+ *  straight to the inner transport. */
 static void test_passthrough_cancel_delegates_to_inner(void** state)
 {
     (void)state;
@@ -1668,8 +1663,7 @@ static void test_passthrough_cancel_delegates_to_inner(void** state)
                      (pubnub_transport_handle_t*)&s_fake_inner_handle);
 }
 
-/** Bug B5 (robustness): cancel() with NULL handle or NULL self must be a
- *  no-op that never touches the inner transport and never crashes. */
+/** cancel() with a NULL handle or NULL self is a no-op. */
 static void test_cancel_null_args_are_noops(void** state)
 {
     (void)state;
@@ -1682,10 +1676,8 @@ static void test_cancel_null_args_are_noops(void** state)
     assert_int_equal(0, s_inner_cancel_count);
 }
 
-/** Bug B5 (idempotency): after cancel() reclaims a transport-error slot
- *  to IDLE, a second cancel() with the same (stale) handle must not match
- *  a live slot and must not crash. It falls through to passthrough (the
- *  real transport validates stale handles at the socket level). */
+/** A second cancel() with a stale handle matches no live slot and falls
+ *  through to passthrough. */
 static void test_transport_error_double_cancel_safe(void** state)
 {
     (void)state;
@@ -1701,15 +1693,11 @@ static void test_transport_error_double_cancel_safe(void** state)
     pubnub_transport_handle_t* handle =
         drive_to_transport_error_terminal(&req, &caller_response);
 
-    /* First cancel reclaims the slot (one inner cancel on top of the
-     * redispatch's earlier cancel of attempt 0). */
     int cancels_before = s_inner_cancel_count;
     s_retry_mw.base.cancel(&s_retry_mw.base, handle);
     assert_int_equal(PN_RETRY_SLOT_IDLE, s_retry_mw.slots[0].state);
     assert_int_equal(cancels_before + 1, s_inner_cancel_count);
 
-    /* Second cancel: slot is IDLE and request cleared → no match →
-     * passthrough. No crash, slot stays IDLE. */
     s_retry_mw.base.cancel(&s_retry_mw.base, handle);
     assert_int_equal(PN_RETRY_SLOT_IDLE, s_retry_mw.slots[0].state);
 }
@@ -1788,10 +1776,8 @@ static void test_exhausted_http_error_persists_until_cancel(void** state)
 }
 
 #if PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS >= 2
-/** Bug B5 (concurrency isolation): with one slot exhausted to a DONE
- *  transport-error terminal and another still IN_FLIGHT, cancelling the
- *  DONE one must reclaim only that slot and leave the IN_FLIGHT slot
- *  untouched. */
+/** Cancelling a DONE transport-error slot reclaims only that slot, leaving
+ *  a concurrent IN_FLIGHT slot untouched. */
 static void test_transport_error_cancel_isolates_other_slot(void** state)
 {
     (void)state;

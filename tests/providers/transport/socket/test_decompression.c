@@ -199,6 +199,14 @@ void pn_connection_cancel(pn_socket_connection_t* conn,
     conn->state = PN_CONN_CANCELLED;
 }
 
+int pn_connection_release_request(pn_socket_connection_t* conn,
+                                  pn_socket_transport_t*  transport)
+{
+    (void)conn;
+    (void)transport;
+    return 0;
+}
+
 void pn_connection_reset(pn_socket_connection_t* conn,
                          pn_socket_transport_t*  transport)
 {

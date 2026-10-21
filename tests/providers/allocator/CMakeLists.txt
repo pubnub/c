@@ -16,11 +16,13 @@ if(PUBNUB_PROVIDER_ALLOCATOR STREQUAL "stdlib")
     # OOM injection -- failure-injecting allocator wrapping malloc, used
     # to exercise feature error paths under allocation failure.  Built
     # only for the stdlib backend (the mock delegates to malloc).
-    pubnub_add_unit_test(
-        test_provider_allocator_oom_injection_units
-        SOURCES oom_injection_units.c mock_oom_allocator.c
-        LIBS pubnub
-    )
+    if(NOT PUBNUB_CFG_NO_HEAP)
+        pubnub_add_unit_test(
+            test_provider_allocator_oom_injection_units
+            SOURCES oom_injection_units.c mock_oom_allocator.c
+            LIBS pubnub
+        )
+    endif()
 endif()
 
 # Arena allocator -- built when the arena provider is active.

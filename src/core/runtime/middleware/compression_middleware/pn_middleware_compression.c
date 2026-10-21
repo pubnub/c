@@ -200,6 +200,10 @@ static pubnub_transport_handle_t* compression_send(pubnub_transport_provider_t* 
 
     pn_middleware_compression_t* mw = (pn_middleware_compression_t*)self;
     if (NULL == mw->next) {
+        PUBNUB_LOG_TEXT(mw->logger,
+                        PUBNUB_LOG_LEVEL_ERROR,
+                        "compression middleware: no next transport layer, "
+                        "request not sent");
         response->completion = PUBNUB_HTTP_ERROR;
         return NULL;
     }

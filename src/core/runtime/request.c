@@ -317,12 +317,9 @@ pubnub_res_t pn_request_on_success(pn_request_t* req, pubnub_res_t status)
 
     req->result = status;
 
-    /* Keep transport_handle live on success: response->body aliases the
-     * transport's rx buffer, which the handle owns. Clearing it here would
-     * strand the handle (no later cancel reaches it) and dangle the body
-     * before the caller reads it. pubnub_future_release cancels the handle
-     * (freeing rx_buf) once the caller is done. The failure path clears it
-     * because that handle carries no readable body. */
+    /* Keep transport_handle: response->body aliases its rx buffer, which
+     * the cancel on future release frees. Failures keep it so an HTTP
+     * 4xx/5xx body stays readable. */
 
     /* Defer callback delivery: enter COMPLETING if a callback is
      * registered so the caller can release the lock first. */
@@ -353,15 +350,15 @@ pubnub_res_t pn_request_on_failure_impl(pn_request_t* req,
     (void)caller_line;
 #endif
 
-    req->result           = status;
-    req->transport_handle = NULL;
+    /* Keep transport_handle: the transport owner cancels it on future
+     * release, deferred release or context teardown. */
+    req->result = status;
 
     req->state =
         (NULL != req->on_complete) ? PN_REQUEST_COMPLETING : PN_REQUEST_FAILED;
 
-    /* Release-store the publication gate LAST: it makes result, state, and
-     * transport_handle=NULL visible to the lock-free reader in
-     * pn_request_is_ready. */
+    /* Release-store the publication gate LAST: it makes result and state
+     * visible to the lock-free reader in pn_request_is_ready. */
     PUBNUB_ATOMIC_STORE_U8(&req->ready, 1);
     return PUBNUB_OK;
 }
@@ -385,6 +382,21 @@ void pn_request_deliver_notification(pn_request_t* req)
         req->state = (PUBNUB_OK == req->result) ? PN_REQUEST_COMPLETE
                                                 : PN_REQUEST_FAILED;
     }
+}
+
+void pn_request_release_parsed_body(pn_request_t* req)
+{
+    if (NULL == req) {
+        return;
+    }
+    if (NULL != req->parsed_body_tree && NULL != req->parsed_body_owner
+        && NULL != req->parsed_body_owner->value_destroy) {
+        req->parsed_body_owner->value_destroy(req->parsed_body_owner,
+                                              req->parsed_body_tree);
+    }
+    req->parsed_body_tree      = NULL;
+    req->parsed_body_owner     = NULL;
+    req->parsed_body_attempted = 0;
 }
 
 pubnub_json_value_t* pn_request_get_parsed_body(pn_request_t* req,

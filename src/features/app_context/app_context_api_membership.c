@@ -16,6 +16,38 @@
 #include <stdint.h>
 #include <string.h>
 
+/**
+ * @brief Validate set membership options and check constraints.
+ *
+ * Verifies that the options are valid and that custom_value fields do not
+ * have custom set (mutual exclusivity). The SDK owns all custom_value
+ * pointers on every return path.
+ *
+ * @param opts Options to validate (non-NULL).
+ * @return PUBNUB_OK if valid, PUBNUB_ERR_INVALID_ARGUMENT otherwise.
+ */
+static pubnub_res_t
+pn_validate_set_memberships_opts(const pubnub_set_memberships_opts_t* opts)
+{
+    size_t i;
+
+    if (0 == opts->set_count && 0 == opts->remove_count) {
+        return PUBNUB_ERR_INVALID_ARGUMENT;
+    }
+
+    if (opts->set_count > 0 && NULL == opts->set) {
+        return PUBNUB_ERR_INVALID_ARGUMENT;
+    }
+
+    for (i = 0; i < opts->set_count; ++i) {
+        if (NULL != opts->set[i].custom && NULL != opts->set[i].custom_value) {
+            return PUBNUB_ERR_INVALID_ARGUMENT;
+        }
+    }
+
+    return PUBNUB_OK;
+}
+
 pubnub_future_t pubnub_get_memberships(pubnub_context_t* ctx,
                                        const pubnub_get_memberships_opts_t* opts)
 {
@@ -95,20 +127,20 @@ pubnub_future_t pubnub_set_memberships(pubnub_context_t* ctx,
     pubnub_buffer_t                  body_buf = {0};
     char*                            encoded  = NULL;
     pubnub_res_t                     rc;
-    size_t                           i;
+    int                              builder_owns = 0;
 
     if (NULL == opts) {
         return pn_failed_future(PUBNUB_ERR_INVALID_ARGUMENT);
     }
 
-    if (0 == opts->set_count && 0 == opts->remove_count) {
-        return pn_failed_future(PUBNUB_ERR_INVALID_ARGUMENT);
-    }
+    /* The SDK owns every set[i].custom_value on every return path; the
+     * body builder takes them over, so they are only discarded here
+     * while builder_owns is 0. */
+    serial = pn_context_serialization(ctx);
 
-    for (i = 0; i < opts->set_count; ++i) {
-        if (NULL != opts->set[i].custom && NULL != opts->set[i].custom_value) {
-            return pn_failed_future(PUBNUB_ERR_INVALID_ARGUMENT);
-        }
+    rc = pn_validate_set_memberships_opts(opts);
+    if (PUBNUB_OK != rc) {
+        goto reject_rc;
     }
 
     rc = pn_feature_prepare(ctx,
@@ -120,7 +152,7 @@ pubnub_future_t pubnub_set_memberships(pubnub_context_t* ctx,
                             opts->timeout_ms,
                             &prep);
     if (PUBNUB_OK != rc) {
-        return pn_failed_future(rc);
+        goto reject_rc;
     }
     state = (pn_app_context_state_t*)prep.state;
 
@@ -134,10 +166,9 @@ pubnub_future_t pubnub_set_memberships(pubnub_context_t* ctx,
                            (int)PUBNUB_ERR_INVALID_ARGUMENT,
                            pubnub_res_str(PUBNUB_ERR_INVALID_ARGUMENT),
                            NULL);
-        return pn_failed_future(PUBNUB_ERR_INVALID_ARGUMENT);
+        goto reject;
     }
 
-    serial = pn_context_serialization(ctx);
     if (NULL == serial || NULL == serial->serialize) {
         rc = PUBNUB_ERR_PROVIDER_MISSING;
         goto cleanup;
@@ -150,7 +181,8 @@ pubnub_future_t pubnub_set_memberships(pubnub_context_t* ctx,
     }
     state->owned_body_buf = body_buf;
 
-    rc = pn_memberships_build_body(serial,
+    builder_owns = 1;
+    rc           = pn_memberships_build_body(serial,
                                    prep.allocator,
                                    opts->set,
                                    opts->set_count,
@@ -194,6 +226,15 @@ pubnub_future_t pubnub_set_memberships(pubnub_context_t* ctx,
 cleanup:
     pn_feature_prep_release(ctx, &prep);
     PN_LOG_ERROR_ENTRY(ctx, (int)rc, pubnub_res_str(rc), NULL);
+    if (0 == builder_owns) {
+        pn_app_context_discard_relation_customs(serial, opts->set, opts->set_count);
+    }
+    return pn_failed_future(rc);
+
+reject:
+    rc = PUBNUB_ERR_INVALID_ARGUMENT;
+reject_rc:
+    pn_app_context_discard_relation_customs(serial, opts->set, opts->set_count);
     return pn_failed_future(rc);
 }
 

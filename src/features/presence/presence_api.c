@@ -9,6 +9,7 @@
 #endif
 
 #include "core/core_internal.h"
+#include "core/pn_lock.h"
 #include "core/protocol_common/pn_buf_serialize.h"
 #include "core/protocol_common/pn_url_encode.h"
 #include "presence_effects.h"
@@ -186,6 +187,8 @@ static const pn_presence_state_parsed_t* get_state_parse(const pubnub_future_t f
  * If the manager is not yet created, allocates it and registers it
  * in the feature registry with the cleanup and tick callbacks.
  * Returns the manager on success, NULL on allocation failure.
+ *
+ * @pre Caller MUST hold the context lock during the call.
  */
 static pn_presence_manager_t* pn_ensure_presence_manager(pubnub_context_t* ctx)
 {
@@ -213,6 +216,28 @@ static pn_presence_manager_t* pn_ensure_presence_manager(pubnub_context_t* ctx)
     return mgr;
 }
 
+/**
+ * @brief Look up the presence manager under the context lock.
+ *
+ * The manager is created and registered lazily by a user thread, so the
+ * registry read must be ordered against that write. Manager entry points
+ * take the lock themselves, hence the lookup is released before they run.
+ *
+ * @return Registered manager, or NULL when presence was never joined.
+ */
+static pn_presence_manager_t* pn_presence_manager_get(pubnub_context_t* ctx)
+{
+    pubnub_platform_provider_t* platform = pn_context_platform(ctx);
+    pubnub_lock_t*              lock     = pn_context_mutex_mem(ctx);
+    pn_presence_manager_t*      mgr;
+
+    pn_ctx_lock(platform, lock);
+    mgr = (pn_presence_manager_t*)pn_context_feature_state(
+        ctx, PUBNUB_FEATURE_PRESENCE);
+    pn_ctx_unlock(platform, lock);
+    return mgr;
+}
+
 void pn_presence_api_joined(pubnub_context_t* ctx,
                             const char*       channels,
                             const char*       groups)
@@ -221,7 +246,12 @@ void pn_presence_api_joined(pubnub_context_t* ctx,
         return;
     }
 
+    pubnub_platform_provider_t* platform = pn_context_platform(ctx);
+    pubnub_lock_t*              lock     = pn_context_mutex_mem(ctx);
+
+    pn_ctx_lock(platform, lock);
     pn_presence_manager_t* mgr = pn_ensure_presence_manager(ctx);
+    pn_ctx_unlock(platform, lock);
     if (NULL == mgr) {
         return;
     }
@@ -240,8 +270,7 @@ void pn_presence_api_left(pubnub_context_t* ctx,
         return;
     }
 
-    pn_presence_manager_t* mgr = (pn_presence_manager_t*)pn_context_feature_state(
-        ctx, PUBNUB_FEATURE_PRESENCE);
+    pn_presence_manager_t* mgr = pn_presence_manager_get(ctx);
     if (NULL == mgr) {
         return;
     }
@@ -264,8 +293,7 @@ void pn_presence_api_left_all(pubnub_context_t* ctx)
         return;
     }
 
-    pn_presence_manager_t* mgr = (pn_presence_manager_t*)pn_context_feature_state(
-        ctx, PUBNUB_FEATURE_PRESENCE);
+    pn_presence_manager_t* mgr = pn_presence_manager_get(ctx);
     if (NULL == mgr) {
         return;
     }
@@ -279,8 +307,7 @@ void pn_presence_api_disconnect(pubnub_context_t* ctx)
         return;
     }
 
-    pn_presence_manager_t* mgr = (pn_presence_manager_t*)pn_context_feature_state(
-        ctx, PUBNUB_FEATURE_PRESENCE);
+    pn_presence_manager_t* mgr = pn_presence_manager_get(ctx);
     if (NULL == mgr) {
         return;
     }
@@ -294,8 +321,7 @@ void pn_presence_api_reconnect(pubnub_context_t* ctx)
         return;
     }
 
-    pn_presence_manager_t* mgr = (pn_presence_manager_t*)pn_context_feature_state(
-        ctx, PUBNUB_FEATURE_PRESENCE);
+    pn_presence_manager_t* mgr = pn_presence_manager_get(ctx);
     if (NULL == mgr) {
         return;
     }

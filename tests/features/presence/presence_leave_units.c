@@ -456,6 +456,103 @@ static void test_no_suppress_leave_events_allows_dispatch(void** state)
     pn_presence_manager_cleanup(mgr, &s_mock_allocator);
 }
 
+/* Transport whose send() completes inline and hands out a heap handle that
+ * only cancel() frees, so a cancel that never reaches the transport (or
+ * reaches it with a foreign pointer) shows up as a live handle. */
+static int                        s_owned_outstanding;
+static int                        s_owned_cancel_count;
+static pubnub_transport_handle_t* s_owned_last_sent;
+static pubnub_transport_handle_t* s_owned_last_cancelled;
+
+static pubnub_transport_handle_t* owned_send(pubnub_transport_provider_t* self,
+                                             pubnub_http_request_t*       req,
+                                             pubnub_http_response_t*      resp)
+{
+    int* handle;
+
+    (void)self;
+    (void)req;
+    handle = (int*)malloc(sizeof(*handle));
+    assert_non_null(handle);
+    *handle = 0x5a5a;
+    s_owned_outstanding++;
+    s_owned_last_sent = (pubnub_transport_handle_t*)handle;
+
+    resp->completion  = PUBNUB_HTTP_COMPLETE;
+    resp->status_code = 200;
+    resp->body        = (const uint8_t*)"{}";
+    resp->body_len    = 2;
+    return (pubnub_transport_handle_t*)handle;
+}
+
+static void owned_cancel(pubnub_transport_provider_t* self,
+                         pubnub_transport_handle_t*   handle)
+{
+    (void)self;
+    s_owned_cancel_count++;
+    s_owned_last_cancelled = handle;
+    if (handle == s_owned_last_sent) {
+        free(handle);
+        s_owned_outstanding--;
+    }
+}
+
+static pubnub_transport_provider_t s_owned_transport = {
+    .send              = owned_send,
+    .poll              = mock_poll,
+    .cancel            = owned_cancel,
+    .set_tls_ca_bundle = NULL,
+    .set_tls_verify    = NULL,
+};
+
+/**
+ * Completing a leave cancels the transport's own handle before releasing the
+ * slot, since release bumps the generation the retry middleware looks up by.
+ */
+static void test_leave_completion_cancels_inner_handle_before_release(void** state)
+{
+    (void)state;
+    pubnub_config_t        cfg = pubnub_config_defaults();
+    pubnub_context_t*      ctx;
+    pn_presence_manager_t* mgr;
+
+    cfg.subscribe_key              = "sub-test";
+    cfg.user_id                    = "test-user";
+    cfg.allocator                  = &s_mock_allocator;
+    cfg.transport                  = &s_owned_transport;
+    cfg.serialization              = &s_mock_serialization;
+    cfg.platform                   = &s_mock_platform;
+    cfg.suppress_leave_events      = 0;
+    cfg.retry_configuration.policy = PUBNUB_RETRY_LINEAR;
+    /* Defaults exempt presence from retry; track it so the middleware
+     * hands the core its own handle. */
+    cfg.retry_configuration.excluded_endpoints = 0;
+
+    s_owned_outstanding    = 0;
+    s_owned_cancel_count   = 0;
+    s_owned_last_sent      = NULL;
+    s_owned_last_cancelled = NULL;
+
+    ctx = pubnub_create(&cfg);
+    assert_non_null(ctx);
+    mgr = pn_presence_manager_create(ctx, &s_mock_allocator);
+    assert_non_null(mgr);
+
+    mgr->ee_state = PN_PRESENCE_STATE_HEARTBEAT_COOLDOWN;
+    pn_presence_left(mgr, "", "", "ch1", "", 1);
+    pn_presence_feature_tick(mgr);
+    assert_non_null(s_owned_last_sent);
+
+    (void)pubnub_process(ctx);
+
+    assert_int_equal(1, s_owned_cancel_count);
+    assert_ptr_equal(s_owned_last_cancelled, s_owned_last_sent);
+    assert_int_equal(0, s_owned_outstanding);
+
+    pubnub_destroy(ctx);
+    pn_presence_manager_cleanup(mgr, &s_mock_allocator);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -476,6 +573,7 @@ int main(void)
         /* suppress_leave_events dispatch gating */
         cmocka_unit_test(test_suppress_leave_events_prevents_dispatch),
         cmocka_unit_test(test_no_suppress_leave_events_allows_dispatch),
+        cmocka_unit_test(test_leave_completion_cancels_inner_handle_before_release),
     };
 
     return cmocka_run_group_tests(tests, group_setup, group_teardown);

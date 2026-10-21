@@ -24,6 +24,7 @@
 #include "pubnub/pubnub_compat.h"
 
 #include "core/runtime/timer_internal.h"
+#include "middleware_internal.h"
 
 #include <stdint.h>
 
@@ -50,10 +51,9 @@ typedef enum pn_retry_slot_state {
      * Response delivered to caller; inner handle still live. Body data in
      * the inner transport's RX buffer remains valid in this state.
      *
-     * Success and HTTP-status terminals are reclaimed by the poll sweep
-     * on the same tick they complete. Transport-error terminals stay DONE
-     * (request and inner handle preserved) until the core aborts the
-     * request through cancel(), which releases the inner handle and
+     * Every terminal (success, HTTP-status and transport-error alike) stays
+     * DONE with its request and inner handle preserved until the core calls
+     * cancel() on the request handle, which releases the inner handle and
      * reclaims the slot. Slots in DONE are not reusable by acquire_slot().
      */
     PN_RETRY_SLOT_DONE
@@ -68,6 +68,11 @@ typedef struct pn_retry_slot {
 
     /** Number of retry attempts made so far (0 = original send). */
     unsigned int attempt;
+
+    /** Non-zero once the origin changed while this request was tracked: the
+     *  request still carries the old host, so a failure of the attempt in
+     *  flight is reported instead of retried. */
+    uint8_t origin_stale;
 
     /** Backoff timer (active only in WAITING state). */
     pn_timer_t backoff;
@@ -108,7 +113,7 @@ typedef struct pn_retry_slot {
  * Embeds pubnub_transport_provider_t as first member for safe
  * cast to/from the transport interface.
  */
-typedef struct pn_middleware_retry {
+struct pn_middleware_retry {
     /** Transport vtable (must be first member). */
     pubnub_transport_provider_t base;
 
@@ -138,7 +143,7 @@ typedef struct pn_middleware_retry {
 
     /** Retry tracking slots (one per possible in-flight request). */
     pn_retry_slot_t slots[PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS];
-} pn_middleware_retry_t;
+};
 
 PUBNUB_STATIC_ASSERT(sizeof(pn_retry_slot_t) <= 512,
                      "retry slot exceeds 512-byte per-slot embedded budget");

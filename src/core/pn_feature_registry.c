@@ -2,6 +2,7 @@
 /* See LICENSE in the root directory of this source tree. */
 
 #include "pn_feature_registry.h"
+#include "pn_lock.h"
 
 #include <string.h>
 
@@ -25,7 +26,11 @@ void pn_feature_register(pn_feature_registry_t*  reg,
 
     reg->slots[feature].state   = state;
     reg->slots[feature].cleanup = cleanup;
-    reg->active_mask |= (uint32_t)1U << (unsigned)feature;
+    /* Features are pre-registered at init; skip the redundant store so a
+     * lock-free pubnub_has_feature() reader never races a lazy re-register. */
+    if (0 == (reg->active_mask & ((uint32_t)1U << (unsigned)feature))) {
+        reg->active_mask |= (uint32_t)1U << (unsigned)feature;
+    }
 }
 
 int pn_feature_registry_has(const pn_feature_registry_t* reg, pubnub_feature_t feature)
@@ -61,21 +66,33 @@ void pn_feature_registry_set_tick(pn_feature_registry_t* reg,
     reg->slots[feature].tick = tick;
 }
 
-int pn_feature_registry_tick_all(pn_feature_registry_t* reg)
+int pn_feature_registry_tick_all(pn_feature_registry_t*      reg,
+                                 pubnub_platform_provider_t* platform,
+                                 pubnub_lock_t*              lock)
 {
-    if (NULL == reg || 0 == reg->active_mask) {
+    if (NULL == reg) {
         return 0;
     }
 
-    int any_active = 0;
-    for (unsigned i = 0; i < PUBNUB_FEATURE_COUNT; i++) {
-        if (0 == (reg->active_mask & ((uint32_t)1U << i))) {
-            continue;
+    int      any_active = 0;
+    unsigned next       = 0;
+    while (next < PUBNUB_FEATURE_COUNT) {
+        pn_feature_tick_fn_t tick  = NULL;
+        void*                state = NULL;
+
+        /* One bounded scan to the next tickable slot per critical section. */
+        pn_ctx_lock(platform, lock);
+        while (next < PUBNUB_FEATURE_COUNT && NULL == tick) {
+            if (0 != (reg->active_mask & ((uint32_t)1U << next))
+                && NULL != reg->slots[next].tick && NULL != reg->slots[next].state) {
+                tick  = reg->slots[next].tick;
+                state = reg->slots[next].state;
+            }
+            next++;
         }
-        if (NULL == reg->slots[i].tick || NULL == reg->slots[i].state) {
-            continue;
-        }
-        if (reg->slots[i].tick(reg->slots[i].state)) {
+        pn_ctx_unlock(platform, lock);
+
+        if (NULL != tick && tick(state)) {
             any_active = 1;
         }
     }

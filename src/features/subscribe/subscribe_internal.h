@@ -58,7 +58,11 @@ typedef enum pn_subscribe_ee_event_type {
     /** User explicitly reconnects from a stopped/failed state. */
     PN_SUB_EVENT_RECONNECT,
     /** All channels/groups removed — terminate. */
-    PN_SUB_EVENT_UNSUBSCRIBE_ALL
+    PN_SUB_EVENT_UNSUBSCRIBE_ALL,
+    /** The active handshake or receive failed because it was built for a
+     *  previous service origin; re-issue it against the current one. Moves
+     *  the engine only while a request is active and emits no status. */
+    PN_SUB_EVENT_ORIGIN_CHANGED
 } pn_subscribe_ee_event_type_t;
 
 /** @brief Side-effects produced by a state transition. */
@@ -136,7 +140,9 @@ typedef struct pn_subscribe_ee_transition_result {
  * @c generation is meaningful for SUBSCRIPTION_CHANGED and
  * SUBSCRIPTION_RESTORED events: it carries the subscription mutation
  * counter at the time the event was enqueued so the EE can discard
- * stale events superseded by a later mutation.
+ * stale events superseded by a later mutation. For ORIGIN_CHANGED it
+ * carries the dispatch sequence number of the request that failed, so the
+ * EE can discard the event once a newer request has been issued.
  */
 typedef struct pn_subscribe_ee_event {
     pn_subscribe_ee_event_type_t type;

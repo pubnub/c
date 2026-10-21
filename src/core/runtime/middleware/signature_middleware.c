@@ -206,6 +206,10 @@ static pubnub_transport_handle_t* signature_send(pubnub_transport_provider_t* se
     }
     pn_middleware_signature_t* mw = (pn_middleware_signature_t*)self;
     if (NULL == mw->next) {
+        PUBNUB_LOG_TEXT(
+            mw->logger,
+            PUBNUB_LOG_LEVEL_ERROR,
+            "signature middleware: no next transport layer, request not sent");
         response->completion = PUBNUB_HTTP_ERROR;
         return NULL;
     }
@@ -226,12 +230,24 @@ static pubnub_transport_handle_t* signature_send(pubnub_transport_provider_t* se
                       && NULL != mw->allocator && NULL != mw->platform;
 
     if (can_sign) {
-        if (PUBNUB_OK != add_timestamp_query_param(mw, request)) {
+        pubnub_res_t sign_rc = add_timestamp_query_param(mw, request);
+        if (PUBNUB_OK != sign_rc) {
+            PUBNUB_LOG(
+                mw->logger,
+                PUBNUB_LOG_LEVEL_ERROR,
+                "signature middleware: failed to add timestamp query parameter "
+                "(rc=%u)",
+                (unsigned)sign_rc);
             response->completion = PUBNUB_HTTP_ERROR;
             return NULL;
         }
         sort_query_params(request);
-        if (PUBNUB_OK != sign_and_append(mw, request)) {
+        sign_rc = sign_and_append(mw, request);
+        if (PUBNUB_OK != sign_rc) {
+            PUBNUB_LOG(mw->logger,
+                       PUBNUB_LOG_LEVEL_ERROR,
+                       "signature middleware: request signing failed (rc=%u)",
+                       (unsigned)sign_rc);
             response->completion = PUBNUB_HTTP_ERROR;
             return NULL;
         }

@@ -140,14 +140,18 @@ typedef struct pn_socket_platform_ops {
                           const pn_sockaddr_t*                 addr);
 
     /**
-     * @brief Check if a non-blocking connect completed.
+     * @brief Check whether a non-blocking connect has completed.
      *
-     * Call after poll indicates the socket is writable.
+     * A zero pending-error value alone does not prove the socket is
+     * connected, so implementations also confirm the peer is established.
      *
      * @param self Platform ops instance.
      * @param sock Socket handle.
-     * @return 1 if connected, 0 if still in-progress, <-1 on error (negated
-     * error code).
+     * @retval 1 Connection established. The caller stops probing the socket
+     *           after the first 1; the result of further calls on the same
+     *           socket is platform-defined.
+     * @retval 0 Connection attempt still in progress.
+     * @retval <0 Connect failed; negated platform error code.
      */
     int (*socket_check_connect)(const struct pn_socket_platform_ops* self,
                                 pn_socket_t                          sock);

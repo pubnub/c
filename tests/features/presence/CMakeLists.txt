@@ -74,3 +74,14 @@ pubnub_add_unit_test(
     LIBS pubnub
 )
 target_include_directories(test_feature_presence_cleanup_units PRIVATE "${CMAKE_SOURCE_DIR}/src")
+
+# Lazy presence-manager registration vs. concurrent lookups from other threads.
+if(PUBNUB_CFG_THREAD_SAFETY)
+    find_package(Threads REQUIRED)
+    pubnub_add_unit_test(
+        test_feature_presence_thread_units
+        SOURCES presence_thread_units.c
+        LIBS pubnub Threads::Threads
+    )
+    target_include_directories(test_feature_presence_thread_units PRIVATE "${CMAKE_SOURCE_DIR}/src")
+endif()

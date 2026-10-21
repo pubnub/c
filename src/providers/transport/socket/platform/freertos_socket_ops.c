@@ -47,6 +47,18 @@ struct pn_lwip_poll_internal {
 PUBNUB_STATIC_ASSERT(sizeof(struct pn_lwip_poll_internal) <= PN_POLL_SET_PLATFORM_SIZE,
                      "pn_lwip_poll_internal exceeds PN_POLL_SET_PLATFORM_SIZE");
 
+/* lwIP socket fds are allocated from a fixed pool starting at
+ * LWIP_SOCKET_OFFSET, so the highest fd is offset + count - 1. It must fit
+ * within FD_SETSIZE so FD_SET never writes out of bounds. */
+#ifndef LWIP_SOCKET_OFFSET
+#define LWIP_SOCKET_OFFSET 0
+#endif
+PUBNUB_STATIC_ASSERT(LWIP_SOCKET_OFFSET + PN_SOCKET_TRANSPORT_MAX_FDS <= FD_SETSIZE,
+                     "lwIP socket offset + in-flight request count exceeds "
+                     "FD_SETSIZE; increase FD_SETSIZE, reduce "
+                     "LWIP_SOCKET_OFFSET, or reduce "
+                     "PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS");
+
 /** @brief Cast opaque poll_set to internal struct. */
 static inline struct pn_lwip_poll_internal* pn_poll_set_internal(pn_poll_set_t* poll_set)
 {
@@ -200,30 +212,58 @@ static int freertos_socket_connect(const pn_socket_platform_ops_t* self,
 
 /**
  * @brief Check if a non-blocking connect completed.
+ *
+ * On lwIP SO_ERROR reads 0 while the SYN is in flight and getpeername
+ * succeeds in SYN_SENT, so select() write-readiness is the completion signal.
+ * SO_ERROR is read-and-clear, so it is consumed only after select() fires.
  */
 static int freertos_socket_check_connect(const pn_socket_platform_ops_t* self,
                                          pn_socket_t                     sock)
 {
     (void)self;
 
-    const int fd      = (int)sock;
-    int       err     = 0;
-    socklen_t len     = sizeof(err);
-    const int gso_ret = lwip_getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len);
+    const int      fd  = (int)sock;
+    int            err = 0;
+    socklen_t      len = sizeof(err);
+    fd_set         writefds;
+    fd_set         exceptfds;
+    struct timeval tv         = {0, 0};
+    int            select_ret = 0;
+    int            gso_ret    = 0;
 
+    if (0 > fd || FD_SETSIZE <= fd) {
+        return -EBADF;
+    }
+
+    FD_ZERO(&writefds);
+    FD_ZERO(&exceptfds);
+    FD_SET(fd, &writefds);
+    FD_SET(fd, &exceptfds);
+
+    select_ret = lwip_select(fd + 1, NULL, &writefds, &exceptfds, &tv);
+    if (0 > select_ret) {
+        return -errno;
+    }
+
+    if (0 == select_ret) {
+        return 0;
+    }
+
+    gso_ret = lwip_getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len);
     if (0 != gso_ret) {
         return -errno;
     }
 
-    if (0 == err) {
-        return 1;
+    if (0 != err) {
+        return -err;
     }
 
-    if (EINPROGRESS == err) {
-        return 0;
+    /* The error event is raised but SO_ERROR was already consumed. */
+    if (FD_ISSET(fd, &exceptfds)) {
+        return -EIO;
     }
 
-    return -err;
+    return 1;
 }
 
 /**
@@ -606,21 +646,6 @@ static int freertos_poll_wait(const pn_socket_platform_ops_t* self,
         tv.tv_usec = (timeout_ms % 1000) * 1000;
         tv_ptr     = &tv;
     }
-
-    /* lwIP socket fds are allocated from a fixed pool bounded by
-     * MEMP_NUM_NETCONN, starting at LWIP_SOCKET_OFFSET (typically 0
-     * but configurable). The highest fd value is therefore
-     * LWIP_SOCKET_OFFSET + count - 1. Verify that the offset plus
-     * our in-flight count fits within FD_SETSIZE so FD_SET never
-     * writes out of bounds. */
-#ifndef LWIP_SOCKET_OFFSET
-#define LWIP_SOCKET_OFFSET 0
-#endif
-    PUBNUB_STATIC_ASSERT(LWIP_SOCKET_OFFSET + PN_SOCKET_TRANSPORT_MAX_FDS <= FD_SETSIZE,
-                         "lwIP socket offset + in-flight request count exceeds "
-                         "FD_SETSIZE — increase FD_SETSIZE, reduce "
-                         "LWIP_SOCKET_OFFSET, or reduce "
-                         "PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS");
 
     select_ret = lwip_select(max_fd + 1, &readfds, &writefds, &exceptfds, tv_ptr);
 

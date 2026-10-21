@@ -89,6 +89,16 @@ static int  tracking_cryptor_init(pubnub_crypto_provider_t*     self,
 static void tracking_cryptor_deinit_count(pubnub_crypto_provider_t* self);
 #endif
 
+/* Counting allocator init/deinit (unwind assertions). */
+static int  s_alloc_init_count;
+static int  s_alloc_deinit_count;
+static int  mock_alloc_init(pubnub_allocator_provider_t* self,
+                            pubnub_platform_provider_t*  platform);
+static void mock_alloc_deinit(pubnub_allocator_provider_t* self,
+                              pubnub_platform_provider_t*  platform);
+static void expect_provider_missing_balanced(pubnub_context_t* ctx,
+                                             pubnub_config_t*  cfg);
+
 /* Failing allocator for OOM tests. */
 static void* failing_alloc(pubnub_allocator_provider_t* self,
                            size_t                       size,
@@ -584,6 +594,8 @@ static void create_should_deep_copy_user_id(void** state)
     pubnub_destroy(ctx);
 }
 
+#endif /* !PUBNUB_CFG_NO_HEAP */
+
 /* Fill @p buf with @p len printable characters plus a NUL terminator.
  * Caller must size @p buf to at least @p len + 1 bytes. */
 static void fill_user_id(char* buf, size_t len)
@@ -689,6 +701,8 @@ static void init_should_accept_long_user_id(void** state)
     free_test_context(ctx);
 }
 
+#if !PUBNUB_CFG_NO_HEAP
+
 static void create_should_deep_copy_long_user_id(void** state)
 {
     (void)state;
@@ -763,6 +777,22 @@ static void create_should_free_context_when_provider_init_fails(void** state)
 
 /* --- Allocator --------------------------------------------------------- */
 
+/**
+ * Init must fail with PUBNUB_ERR_PROVIDER_MISSING, and the allocator
+ * init()/deinit() pair must each have run exactly once: validation runs
+ * after allocator init, so the pre-init cleanup path owes one deinit.
+ */
+static void expect_provider_missing_balanced(pubnub_context_t* ctx,
+                                             pubnub_config_t*  cfg)
+{
+    const int init_before   = s_alloc_init_count;
+    const int deinit_before = s_alloc_deinit_count;
+
+    assert_int_equal(pubnub_init(ctx, cfg), PUBNUB_ERR_PROVIDER_MISSING);
+    assert_int_equal(1, s_alloc_init_count - init_before);
+    assert_int_equal(1, s_alloc_deinit_count - deinit_before);
+}
+
 static void provider_should_reject_allocator_with_null_alloc(void** state)
 {
     (void)state;
@@ -772,7 +802,7 @@ static void provider_should_reject_allocator_with_null_alloc(void** state)
     pubnub_allocator_provider_t bad = s_mock_allocator;
     bad.alloc                       = NULL;
     cfg.allocator                   = &bad;
-    assert_int_equal(pubnub_init(ctx, &cfg), PUBNUB_ERR_PROVIDER_MISSING);
+    expect_provider_missing_balanced(ctx, &cfg);
 
     free_test_context(ctx);
 }
@@ -786,7 +816,7 @@ static void provider_should_reject_allocator_with_null_free(void** state)
     pubnub_allocator_provider_t bad = s_mock_allocator;
     bad.free                        = NULL;
     cfg.allocator                   = &bad;
-    assert_int_equal(pubnub_init(ctx, &cfg), PUBNUB_ERR_PROVIDER_MISSING);
+    expect_provider_missing_balanced(ctx, &cfg);
 
     free_test_context(ctx);
 }
@@ -800,7 +830,7 @@ static void provider_should_reject_allocator_with_null_buf_acquire(void** state)
     pubnub_allocator_provider_t bad = s_mock_allocator;
     bad.buf_acquire                 = NULL;
     cfg.allocator                   = &bad;
-    assert_int_equal(pubnub_init(ctx, &cfg), PUBNUB_ERR_PROVIDER_MISSING);
+    expect_provider_missing_balanced(ctx, &cfg);
 
     free_test_context(ctx);
 }
@@ -814,7 +844,7 @@ static void provider_should_reject_allocator_with_null_buf_release(void** state)
     pubnub_allocator_provider_t bad = s_mock_allocator;
     bad.buf_release                 = NULL;
     cfg.allocator                   = &bad;
-    assert_int_equal(pubnub_init(ctx, &cfg), PUBNUB_ERR_PROVIDER_MISSING);
+    expect_provider_missing_balanced(ctx, &cfg);
 
     free_test_context(ctx);
 }
@@ -830,7 +860,7 @@ static void provider_should_reject_transport_with_null_send(void** state)
     pubnub_transport_provider_t bad = s_mock_transport;
     bad.send                        = NULL;
     cfg.transport                   = &bad;
-    assert_int_equal(pubnub_init(ctx, &cfg), PUBNUB_ERR_PROVIDER_MISSING);
+    expect_provider_missing_balanced(ctx, &cfg);
 
     free_test_context(ctx);
 }
@@ -844,7 +874,7 @@ static void provider_should_reject_transport_with_null_poll(void** state)
     pubnub_transport_provider_t bad = s_mock_transport;
     bad.poll                        = NULL;
     cfg.transport                   = &bad;
-    assert_int_equal(pubnub_init(ctx, &cfg), PUBNUB_ERR_PROVIDER_MISSING);
+    expect_provider_missing_balanced(ctx, &cfg);
 
     free_test_context(ctx);
 }
@@ -858,7 +888,7 @@ static void provider_should_reject_transport_with_null_cancel(void** state)
     pubnub_transport_provider_t bad = s_mock_transport;
     bad.cancel                      = NULL;
     cfg.transport                   = &bad;
-    assert_int_equal(pubnub_init(ctx, &cfg), PUBNUB_ERR_PROVIDER_MISSING);
+    expect_provider_missing_balanced(ctx, &cfg);
 
     free_test_context(ctx);
 }
@@ -874,7 +904,7 @@ static void provider_should_reject_serialization_with_null_parse(void** state)
     pubnub_serialization_provider_t bad = s_mock_serialization;
     bad.parse                           = NULL;
     cfg.serialization                   = &bad;
-    assert_int_equal(pubnub_init(ctx, &cfg), PUBNUB_ERR_PROVIDER_MISSING);
+    expect_provider_missing_balanced(ctx, &cfg);
 
     free_test_context(ctx);
 }
@@ -888,7 +918,7 @@ static void provider_should_reject_serialization_with_null_serialize(void** stat
     pubnub_serialization_provider_t bad = s_mock_serialization;
     bad.serialize                       = NULL;
     cfg.serialization                   = &bad;
-    assert_int_equal(pubnub_init(ctx, &cfg), PUBNUB_ERR_PROVIDER_MISSING);
+    expect_provider_missing_balanced(ctx, &cfg);
 
     free_test_context(ctx);
 }
@@ -902,7 +932,7 @@ static void provider_should_reject_serialization_with_null_value_destroy(void** 
     pubnub_serialization_provider_t bad = s_mock_serialization;
     bad.value_destroy                   = NULL;
     cfg.serialization                   = &bad;
-    assert_int_equal(pubnub_init(ctx, &cfg), PUBNUB_ERR_PROVIDER_MISSING);
+    expect_provider_missing_balanced(ctx, &cfg);
 
     free_test_context(ctx);
 }
@@ -918,7 +948,7 @@ static void provider_should_reject_platform_with_null_monotonic_ms(void** state)
     pubnub_platform_provider_t bad = s_mock_platform;
     bad.monotonic_ms               = NULL;
     cfg.platform                   = &bad;
-    assert_int_equal(pubnub_init(ctx, &cfg), PUBNUB_ERR_PROVIDER_MISSING);
+    expect_provider_missing_balanced(ctx, &cfg);
 
     free_test_context(ctx);
 }
@@ -932,7 +962,7 @@ static void provider_should_reject_platform_with_null_sleep_ms(void** state)
     pubnub_platform_provider_t bad = s_mock_platform;
     bad.sleep_ms                   = NULL;
     cfg.platform                   = &bad;
-    assert_int_equal(pubnub_init(ctx, &cfg), PUBNUB_ERR_PROVIDER_MISSING);
+    expect_provider_missing_balanced(ctx, &cfg);
 
     free_test_context(ctx);
 }
@@ -946,10 +976,464 @@ static void provider_should_reject_platform_with_null_random_bytes(void** state)
     pubnub_platform_provider_t bad = s_mock_platform;
     bad.random_bytes               = NULL;
     cfg.platform                   = &bad;
-    assert_int_equal(pubnub_init(ctx, &cfg), PUBNUB_ERR_PROVIDER_MISSING);
+    expect_provider_missing_balanced(ctx, &cfg);
 
     free_test_context(ctx);
 }
+
+/* --- Platform optional groups ------------------------------------------ */
+
+#define MOCK_LOCK_SIZE ((size_t)61)
+
+static size_t s_lock_size_ret;
+static int    s_lock_init_ret;
+static int    s_lock_init_count;
+static int    s_lock_destroy_count;
+static int    s_thread_join_count;
+
+static int lock_groups_reset(void** state)
+{
+    (void)state;
+    s_lock_size_ret      = MOCK_LOCK_SIZE;
+    s_lock_init_ret      = 0;
+    s_lock_init_count    = 0;
+    s_lock_destroy_count = 0;
+    s_thread_join_count  = 0;
+    s_alloc_init_count   = 0;
+    s_alloc_deinit_count = 0;
+    return 0;
+}
+
+static size_t mock_lock_size(pubnub_platform_provider_t* self)
+{
+    (void)self;
+    return s_lock_size_ret;
+}
+
+static int mock_lock_init(pubnub_platform_provider_t* self, pubnub_lock_t* lock)
+{
+    (void)self;
+    (void)lock;
+    s_lock_init_count++;
+    return s_lock_init_ret;
+}
+
+static void mock_lock_destroy(pubnub_platform_provider_t* self, pubnub_lock_t* lock)
+{
+    (void)self;
+    (void)lock;
+    s_lock_destroy_count++;
+}
+
+static void mock_lock_acquire(pubnub_platform_provider_t* self, pubnub_lock_t* lock)
+{
+    (void)self;
+    (void)lock;
+}
+
+static void mock_lock_release(pubnub_platform_provider_t* self, pubnub_lock_t* lock)
+{
+    (void)self;
+    (void)lock;
+}
+
+static void* mock_thread_create(pubnub_platform_provider_t*  self,
+                                pubnub_allocator_provider_t* allocator,
+                                void (*fn)(void*),
+                                void* arg)
+{
+    static int handle;
+    (void)self;
+    (void)allocator;
+    (void)fn;
+    (void)arg;
+    return &handle;
+}
+
+static void mock_thread_join(pubnub_platform_provider_t*  self,
+                             pubnub_allocator_provider_t* allocator,
+                             void*                        thread_handle)
+{
+    (void)self;
+    (void)allocator;
+    (void)thread_handle;
+    s_thread_join_count++;
+}
+
+static int mock_thread_is_current(pubnub_platform_provider_t* self, void* handle)
+{
+    (void)self;
+    (void)handle;
+    return 0;
+}
+
+static pubnub_platform_provider_t platform_with_locks(void)
+{
+    pubnub_platform_provider_t p = s_mock_platform;
+    p.lock_size                  = mock_lock_size;
+    p.lock_init                  = mock_lock_init;
+    p.lock_destroy               = mock_lock_destroy;
+    p.lock_acquire               = mock_lock_acquire;
+    p.lock_release               = mock_lock_release;
+    return p;
+}
+
+static pubnub_platform_provider_t platform_with_threads(void)
+{
+    pubnub_platform_provider_t p = s_mock_platform;
+    p.thread_create              = mock_thread_create;
+    p.thread_join                = mock_thread_join;
+    return p;
+}
+
+static pubnub_res_t init_with_platform(pubnub_context_t*           ctx,
+                                       pubnub_platform_provider_t* platform)
+{
+    pubnub_config_t cfg = valid_config();
+    cfg.platform        = platform;
+    return pubnub_init(ctx, &cfg);
+}
+
+static void provider_should_treat_thread_is_current_as_standalone(void** state)
+{
+    (void)state;
+    pubnub_platform_provider_t p   = s_mock_platform;
+    pubnub_context_t*          ctx = alloc_test_context();
+
+    p.thread_is_current = mock_thread_is_current;
+    assert_int_equal(init_with_platform(ctx, &p), PUBNUB_OK);
+
+    pubnub_deinit(ctx);
+    free_test_context(ctx);
+}
+
+#if PUBNUB_CFG_THREAD_SAFETY
+
+static void expect_lock_group_rejected(pubnub_platform_provider_t* p)
+{
+    pubnub_context_t* ctx = alloc_test_context();
+
+    pubnub_config_t cfg = valid_config();
+
+    cfg.platform = p;
+    expect_provider_missing_balanced(ctx, &cfg);
+    assert_null(pn_context_mutex_mem(ctx));
+    assert_int_equal(0, s_lock_init_count);
+
+    free_test_context(ctx);
+}
+
+static void provider_should_reject_lock_group_with_null_lock_size(void** state)
+{
+    (void)state;
+    pubnub_platform_provider_t p = platform_with_locks();
+    p.lock_size                  = NULL;
+    expect_lock_group_rejected(&p);
+}
+
+static void provider_should_reject_lock_group_with_null_lock_init(void** state)
+{
+    (void)state;
+    pubnub_platform_provider_t p = platform_with_locks();
+    p.lock_init                  = NULL;
+    expect_lock_group_rejected(&p);
+}
+
+static void provider_should_reject_lock_group_with_null_lock_destroy(void** state)
+{
+    (void)state;
+    pubnub_platform_provider_t p = platform_with_locks();
+    p.lock_destroy               = NULL;
+    expect_lock_group_rejected(&p);
+}
+
+static void provider_should_reject_lock_group_with_null_lock_acquire(void** state)
+{
+    (void)state;
+    pubnub_platform_provider_t p = platform_with_locks();
+    p.lock_acquire               = NULL;
+    expect_lock_group_rejected(&p);
+}
+
+static void provider_should_reject_lock_group_with_null_lock_release(void** state)
+{
+    (void)state;
+    pubnub_platform_provider_t p = platform_with_locks();
+    p.lock_release               = NULL;
+    expect_lock_group_rejected(&p);
+}
+
+static void provider_should_reject_lock_group_when_lock_size_returns_zero(void** state)
+{
+    (void)state;
+    pubnub_platform_provider_t p = platform_with_locks();
+    s_lock_size_ret              = 0;
+    expect_lock_group_rejected(&p);
+}
+
+#if PUBNUB_LOG_ENABLED(WARNING)
+
+static struct {
+    int                count;
+    pubnub_log_level_t level;
+    char               text[160];
+} s_text_log_cap;
+
+static void text_capture_log(struct pubnub_logger_provider* self,
+                             const pubnub_log_entry_t*      entry)
+{
+    const pubnub_log_entry_text_t* txt;
+    (void)self;
+    if (NULL == entry || PUBNUB_LOG_ENTRY_TEXT != entry->type) {
+        return;
+    }
+    txt = (const pubnub_log_entry_text_t*)entry;
+    s_text_log_cap.count++;
+    s_text_log_cap.level = entry->level;
+    snprintf(s_text_log_cap.text,
+             sizeof(s_text_log_cap.text),
+             "%s",
+             NULL != txt->message ? txt->message : "");
+}
+
+static void provider_should_log_warning_naming_missing_lock_destroy(void** state)
+{
+    (void)state;
+    pubnub_logger_provider_t logger = {.log = text_capture_log, .set_level = NULL};
+    pubnub_platform_provider_t p   = platform_with_locks();
+    pubnub_context_t*          ctx = alloc_test_context();
+    pubnub_config_t            cfg = valid_config();
+
+    memset(&s_text_log_cap, 0, sizeof(s_text_log_cap));
+    p.lock_destroy = NULL;
+    cfg.platform   = &p;
+    cfg.logger     = &logger;
+    expect_provider_missing_balanced(ctx, &cfg);
+
+    assert_int_equal(1, s_text_log_cap.count);
+    assert_int_equal(PUBNUB_LOG_LEVEL_WARNING, s_text_log_cap.level);
+    assert_non_null(strstr(s_text_log_cap.text, "lock_destroy"));
+
+    free_test_context(ctx);
+}
+
+#endif /* PUBNUB_LOG_ENABLED(WARNING) */
+
+static void provider_should_accept_complete_lock_group(void** state)
+{
+    (void)state;
+    pubnub_platform_provider_t p   = platform_with_locks();
+    pubnub_context_t*          ctx = alloc_test_context();
+
+    assert_int_equal(init_with_platform(ctx, &p), PUBNUB_OK);
+    assert_non_null(pn_context_mutex_mem(ctx));
+    assert_int_equal(1, s_lock_init_count);
+    assert_int_equal(0, s_lock_destroy_count);
+
+    pubnub_deinit(ctx);
+    assert_int_equal(1, s_lock_destroy_count);
+    free_test_context(ctx);
+}
+
+static void provider_should_accept_platform_without_lock_group(void** state)
+{
+    (void)state;
+    pubnub_context_t* ctx = alloc_test_context();
+
+    assert_int_equal(init_with_platform(ctx, &s_mock_platform), PUBNUB_OK);
+    assert_null(pn_context_mutex_mem(ctx));
+
+    pubnub_deinit(ctx);
+    free_test_context(ctx);
+}
+
+static void provider_should_fail_init_when_lock_init_fails(void** state)
+{
+    (void)state;
+    pubnub_platform_provider_t p   = platform_with_locks();
+    pubnub_context_t*          ctx = alloc_test_context();
+
+    const int init_before   = s_alloc_init_count;
+    const int deinit_before = s_alloc_deinit_count;
+
+    s_lock_init_ret = -1;
+    assert_int_equal(init_with_platform(ctx, &p), PUBNUB_ERR_NOT_INITIALIZED);
+    assert_null(pn_context_mutex_mem(ctx));
+    assert_int_equal(1, s_lock_init_count);
+    assert_int_equal(0, s_lock_destroy_count);
+    assert_int_equal(1, s_alloc_init_count - init_before);
+    assert_int_equal(1, s_alloc_deinit_count - deinit_before);
+
+    /* Rollback must leave the context re-initializable (and the cmocka
+     * allocator balanced -- the lock buffer is freed on this path). */
+    s_lock_init_ret = 0;
+    assert_int_equal(init_with_platform(ctx, &p), PUBNUB_OK);
+    assert_non_null(pn_context_mutex_mem(ctx));
+
+    pubnub_deinit(ctx);
+    free_test_context(ctx);
+}
+
+static void* lock_size_failing_alloc(pubnub_allocator_provider_t* self,
+                                     size_t                       size,
+                                     size_t                       align)
+{
+    (void)self;
+    (void)align;
+    if (MOCK_LOCK_SIZE == size) {
+        return NULL;
+    }
+    return test_malloc(size);
+}
+
+static void provider_should_fail_init_when_lock_allocation_fails(void** state)
+{
+    (void)state;
+    pubnub_platform_provider_t  p   = platform_with_locks();
+    pubnub_allocator_provider_t oom = s_mock_allocator;
+    pubnub_context_t*           ctx = alloc_test_context();
+    pubnub_config_t             cfg = valid_config();
+
+    oom.alloc     = lock_size_failing_alloc;
+    cfg.allocator = &oom;
+    cfg.platform  = &p;
+    assert_int_equal(pubnub_init(ctx, &cfg), PUBNUB_ERR_NOT_INITIALIZED);
+    assert_null(pn_context_mutex_mem(ctx));
+    assert_int_equal(0, s_lock_init_count);
+
+    free_test_context(ctx);
+}
+
+static void provider_should_reject_thread_group_with_null_thread_join(void** state)
+{
+    (void)state;
+    pubnub_platform_provider_t p   = platform_with_threads();
+    pubnub_context_t*          ctx = alloc_test_context();
+
+    pubnub_config_t cfg = valid_config();
+
+    p.thread_join = NULL;
+    cfg.platform  = &p;
+    expect_provider_missing_balanced(ctx, &cfg);
+
+    free_test_context(ctx);
+}
+
+static void provider_should_reject_thread_group_with_null_thread_create(void** state)
+{
+    (void)state;
+    pubnub_platform_provider_t p   = platform_with_threads();
+    pubnub_context_t*          ctx = alloc_test_context();
+
+    pubnub_config_t cfg = valid_config();
+
+    p.thread_create = NULL;
+    cfg.platform    = &p;
+    expect_provider_missing_balanced(ctx, &cfg);
+
+    free_test_context(ctx);
+}
+
+static void provider_should_accept_complete_thread_group(void** state)
+{
+    (void)state;
+    pubnub_platform_provider_t p   = platform_with_threads();
+    pubnub_context_t*          ctx = alloc_test_context();
+
+    assert_int_equal(init_with_platform(ctx, &p), PUBNUB_OK);
+
+    pubnub_deinit(ctx);
+    free_test_context(ctx);
+}
+
+static void provider_should_accept_platform_without_thread_group(void** state)
+{
+    (void)state;
+    pubnub_context_t* ctx = alloc_test_context();
+
+    assert_int_equal(init_with_platform(ctx, &s_mock_platform), PUBNUB_OK);
+
+    pubnub_deinit(ctx);
+    free_test_context(ctx);
+}
+
+#if !PUBNUB_CFG_NO_HEAP
+
+static void create_should_return_null_for_incomplete_lock_group(void** state)
+{
+    (void)state;
+    pubnub_platform_provider_t p   = platform_with_locks();
+    pubnub_config_t            cfg = valid_config();
+
+    p.lock_release = NULL;
+    cfg.platform   = &p;
+    assert_null(pubnub_create(&cfg));
+}
+
+static void create_should_deep_copy_strings_with_complete_lock_group(void** state)
+{
+    (void)state;
+    static const char          key[]     = "sub-c-test";
+    static const char          user[]    = "test-user";
+    pubnub_platform_provider_t p         = platform_with_locks();
+    pubnub_config_t            cfg       = valid_config();
+    char*                      key_copy  = (char*)test_malloc(sizeof(key));
+    char*                      user_copy = (char*)test_malloc(sizeof(user));
+
+    memcpy(key_copy, key, sizeof(key));
+    memcpy(user_copy, user, sizeof(user));
+    cfg.platform      = &p;
+    cfg.subscribe_key = key_copy;
+    cfg.user_id       = user_copy;
+
+    pubnub_context_t* ctx = pubnub_create(&cfg);
+    assert_non_null(ctx);
+
+    test_free(key_copy);
+    test_free(user_copy);
+
+    assert_non_null(pn_context_mutex_mem(ctx));
+    assert_string_equal(user, pubnub_get_user_id(ctx));
+
+    pubnub_destroy(ctx);
+    assert_int_equal(1, s_lock_destroy_count);
+}
+
+#endif /* !PUBNUB_CFG_NO_HEAP */
+
+#else  /* !PUBNUB_CFG_THREAD_SAFETY */
+
+static void
+provider_should_ignore_incomplete_lock_group_without_thread_safety(void** state)
+{
+    (void)state;
+    pubnub_platform_provider_t p   = platform_with_locks();
+    pubnub_context_t*          ctx = alloc_test_context();
+
+    p.lock_destroy = NULL;
+    assert_int_equal(init_with_platform(ctx, &p), PUBNUB_OK);
+    assert_null(pn_context_mutex_mem(ctx));
+    assert_int_equal(0, s_lock_init_count);
+
+    pubnub_deinit(ctx);
+    free_test_context(ctx);
+}
+
+static void
+provider_should_ignore_incomplete_thread_group_without_thread_safety(void** state)
+{
+    (void)state;
+    pubnub_platform_provider_t p   = platform_with_threads();
+    pubnub_context_t*          ctx = alloc_test_context();
+
+    p.thread_join = NULL;
+    assert_int_equal(init_with_platform(ctx, &p), PUBNUB_OK);
+
+    pubnub_deinit(ctx);
+    free_test_context(ctx);
+}
+
+#endif /* PUBNUB_CFG_THREAD_SAFETY */
 
 /* --- Crypto ------------------------------------------------------------ */
 
@@ -2465,7 +2949,7 @@ static void process_should_call_transport_poll_with_zero_timeout(void** state)
 /* ======================================================================== */
 
 /* The full set of committed pubnub_res_t values, range-coded. Range gaps
- * (e.g. value 5, 35, 47) are intentional growth slack and MUST NOT be
+ * (e.g. value 5, 36, 47) are intentional growth slack and MUST NOT be
  * iterated as if they were valid values -- the old loop test used a
  * dense PUBNUB_ERR__COUNT sentinel which no longer exists. */
 static const pubnub_res_t pn_committed_res_values[] = {PUBNUB_OK,
@@ -2478,6 +2962,7 @@ static const pubnub_res_t pn_committed_res_values[] = {PUBNUB_OK,
                                                        PUBNUB_ERR_OUT_OF_MEMORY,
                                                        PUBNUB_ERR_BUFFER_TOO_SMALL,
                                                        PUBNUB_ERR_QUEUE_FULL,
+                                                       PUBNUB_ERR_LIMIT_REACHED,
                                                        PUBNUB_ERR_TIMEOUT,
                                                        PUBNUB_ERR_TRANSPORT,
                                                        PUBNUB_ERR_SERVER,
@@ -2514,7 +2999,7 @@ static void res_str_should_return_unknown_for_gap_values(void** state)
     const pubnub_res_t gaps[] = {
         (pubnub_res_t)5,  /* gap 3..15 between completion class and arg class */
         (pubnub_res_t)25, /* gap 20..31 inside arg/lifecycle class */
-        (pubnub_res_t)45, /* gap 35..47 inside memory/capacity class */
+        (pubnub_res_t)45, /* gap 36..47 inside memory/capacity class */
         (pubnub_res_t)100, /* gap 98..111 inside payload class */
         (pubnub_res_t)200 /* gap 112..239 between payload and invariant classes */
     };
@@ -2588,7 +3073,24 @@ static void res_str_should_return_correct_strings_for_known_codes(void** state)
     assert_string_equal(pubnub_res_str(PUBNUB_ERR_TIMEOUT), "Operation timed out");
     assert_string_equal(pubnub_res_str(PUBNUB_IN_PROGRESS), "Operation in progress");
 }
+
+static void res_str_should_label_limit_reached_distinct_from_queue_full(void** state)
+{
+    (void)state;
+    assert_string_equal(pubnub_res_str(PUBNUB_ERR_LIMIT_REACHED),
+                        "Compile-time limit reached");
+    assert_string_not_equal(pubnub_res_str(PUBNUB_ERR_LIMIT_REACHED),
+                            pubnub_res_str(PUBNUB_ERR_QUEUE_FULL));
+}
 #endif
+
+static void limit_reached_should_be_in_memory_capacity_class(void** state)
+{
+    (void)state;
+    assert_true(32 <= (int)PUBNUB_ERR_LIMIT_REACHED);
+    assert_true(47 >= (int)PUBNUB_ERR_LIMIT_REACHED);
+    assert_int_equal(35, (int)PUBNUB_ERR_LIMIT_REACHED);
+}
 
 #if !PUBNUB_CFG_RES_STR
 static void res_str_should_return_empty_when_disabled(void** state)
@@ -3541,6 +4043,57 @@ int main(void)
         cmocka_unit_test(provider_should_reject_platform_with_null_monotonic_ms),
         cmocka_unit_test(provider_should_reject_platform_with_null_sleep_ms),
         cmocka_unit_test(provider_should_reject_platform_with_null_random_bytes),
+        /* provider validation — platform optional groups */
+        cmocka_unit_test_setup(provider_should_treat_thread_is_current_as_standalone,
+                               lock_groups_reset),
+#if PUBNUB_CFG_THREAD_SAFETY
+        cmocka_unit_test_setup(provider_should_reject_lock_group_with_null_lock_size,
+                               lock_groups_reset),
+        cmocka_unit_test_setup(provider_should_reject_lock_group_with_null_lock_init,
+                               lock_groups_reset),
+        cmocka_unit_test_setup(provider_should_reject_lock_group_with_null_lock_destroy,
+                               lock_groups_reset),
+        cmocka_unit_test_setup(provider_should_reject_lock_group_with_null_lock_acquire,
+                               lock_groups_reset),
+        cmocka_unit_test_setup(provider_should_reject_lock_group_with_null_lock_release,
+                               lock_groups_reset),
+        cmocka_unit_test_setup(
+            provider_should_reject_lock_group_when_lock_size_returns_zero,
+            lock_groups_reset),
+#if PUBNUB_LOG_ENABLED(WARNING)
+        cmocka_unit_test_setup(provider_should_log_warning_naming_missing_lock_destroy,
+                               lock_groups_reset),
+#endif
+        cmocka_unit_test_setup(provider_should_accept_complete_lock_group,
+                               lock_groups_reset),
+        cmocka_unit_test_setup(provider_should_accept_platform_without_lock_group,
+                               lock_groups_reset),
+        cmocka_unit_test_setup(provider_should_fail_init_when_lock_init_fails,
+                               lock_groups_reset),
+        cmocka_unit_test_setup(provider_should_fail_init_when_lock_allocation_fails,
+                               lock_groups_reset),
+        cmocka_unit_test_setup(provider_should_reject_thread_group_with_null_thread_join,
+                               lock_groups_reset),
+        cmocka_unit_test_setup(provider_should_reject_thread_group_with_null_thread_create,
+                               lock_groups_reset),
+        cmocka_unit_test_setup(provider_should_accept_complete_thread_group,
+                               lock_groups_reset),
+        cmocka_unit_test_setup(provider_should_accept_platform_without_thread_group,
+                               lock_groups_reset),
+#if !PUBNUB_CFG_NO_HEAP
+        cmocka_unit_test_setup(create_should_return_null_for_incomplete_lock_group,
+                               lock_groups_reset),
+        cmocka_unit_test_setup(create_should_deep_copy_strings_with_complete_lock_group,
+                               lock_groups_reset),
+#endif
+#else
+        cmocka_unit_test_setup(
+            provider_should_ignore_incomplete_lock_group_without_thread_safety,
+            lock_groups_reset),
+        cmocka_unit_test_setup(
+            provider_should_ignore_incomplete_thread_group_without_thread_safety,
+            lock_groups_reset),
+#endif
         /* provider validation — optional */
         cmocka_unit_test(provider_should_treat_null_crypto_config_as_disabled),
         cmocka_unit_test(provider_should_allow_null_logger),
@@ -3597,9 +4150,9 @@ int main(void)
         cmocka_unit_test(set_user_id_should_accept_500_char_id),
         cmocka_unit_test(set_user_id_should_accept_1000_char_id),
         cmocka_unit_test(init_should_accept_long_user_id),
-        cmocka_unit_test(create_should_deep_copy_long_user_id),
         cmocka_unit_test(set_auth_token_empty_string_then_clear),
 #if !PUBNUB_CFG_NO_HEAP
+        cmocka_unit_test(create_should_deep_copy_long_user_id),
         cmocka_unit_test(dispatch_through_owned_context_should_reach_transport),
         cmocka_unit_test(set_user_id_should_propagate_on_owned_context),
         cmocka_unit_test(set_auth_token_should_propagate_on_owned_context),
@@ -3646,6 +4199,7 @@ int main(void)
         cmocka_unit_test(process_should_call_transport_poll_with_zero_timeout),
 
         /* pubnub_res_str */
+        cmocka_unit_test(limit_reached_should_be_in_memory_capacity_class),
         cmocka_unit_test(res_str_should_return_non_null_for_all_committed_codes),
         cmocka_unit_test(res_str_should_return_unknown_for_gap_values),
         cmocka_unit_test(res_str_should_return_fallback_for_out_of_range),
@@ -3654,6 +4208,7 @@ int main(void)
 #if PUBNUB_CFG_RES_STR
         cmocka_unit_test(res_str_should_return_label_for_pubnub_ok),
         cmocka_unit_test(res_str_should_return_correct_strings_for_known_codes),
+        cmocka_unit_test(res_str_should_label_limit_reached_distinct_from_queue_full),
 #else
         cmocka_unit_test(res_str_should_return_empty_when_disabled),
 #endif
@@ -3746,6 +4301,23 @@ static void mock_buf_release(pubnub_allocator_provider_t* self, pubnub_buffer_t*
     (void)buf;
 }
 
+static int mock_alloc_init(pubnub_allocator_provider_t* self,
+                           pubnub_platform_provider_t*  platform)
+{
+    (void)self;
+    (void)platform;
+    s_alloc_init_count++;
+    return 0;
+}
+
+static void mock_alloc_deinit(pubnub_allocator_provider_t* self,
+                              pubnub_platform_provider_t*  platform)
+{
+    (void)self;
+    (void)platform;
+    s_alloc_deinit_count++;
+}
+
 static pubnub_allocator_provider_t s_mock_allocator = {
     .alloc       = mock_alloc,
     .realloc     = NULL,
@@ -3753,6 +4325,8 @@ static pubnub_allocator_provider_t s_mock_allocator = {
     .buf_acquire = mock_buf_acquire,
     .buf_release = mock_buf_release,
     .buf_grow    = NULL,
+    .init        = mock_alloc_init,
+    .deinit      = mock_alloc_deinit,
 };
 
 /* --- OOM-after-N counting allocator --------------------------------------
@@ -4113,6 +4687,8 @@ static int reset_tracking(void** state)
     s_transport_deinit_seq = 0;
     s_serial_deinit_seq    = 0;
     s_crypto_deinit_seq    = 0;
+    s_alloc_init_count     = 0;
+    s_alloc_deinit_count   = 0;
 #if PUBNUB_ENABLE_CRYPTO
     s_cryptor_init_count   = 0;
     s_cryptor_deinit_count = 0;

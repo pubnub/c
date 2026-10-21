@@ -2,6 +2,26 @@
 # See LICENSE in the root directory of this source tree.
 
 pubnub_add_unit_test(
+    test_feature_app_context_clear_value_units
+    SOURCES app_context_clear_value_units.c
+    LIBS pubnub
+)
+target_include_directories(
+    test_feature_app_context_clear_value_units
+    PRIVATE "${CMAKE_SOURCE_DIR}/src"
+)
+
+pubnub_add_unit_test(
+    test_feature_app_context_custom_ownership_units
+    SOURCES app_context_custom_ownership_units.c
+    LIBS pubnub
+)
+target_include_directories(
+    test_feature_app_context_custom_ownership_units
+    PRIVATE "${CMAKE_SOURCE_DIR}/src" "${CMAKE_SOURCE_DIR}/tests"
+)
+
+pubnub_add_unit_test(
     test_feature_app_context_wire_common_units
     SOURCES app_context_wire_common_units.c
     LIBS pubnub

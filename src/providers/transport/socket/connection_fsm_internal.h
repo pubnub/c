@@ -6,6 +6,7 @@
 
 #include "http_parser.h"
 #include "providers/transport/socket/platform/pn_socket_types.h"
+#include "providers/transport/socket/proxy/proxy_interface.h"
 #include "pubnub/providers/allocator.h"
 #include "pubnub/providers/transport_types.h"
 
@@ -17,9 +18,6 @@
 extern "C" {
 // clang-format on
 #endif
-
-/** @brief Forward declaration for the owning transport instance. */
-typedef struct pn_socket_transport pn_socket_transport_t;
 
 /**
  * @brief Connection FSM states.
@@ -41,7 +39,12 @@ typedef enum {
     PN_CONN_FAILED,
     PN_CONN_CLOSING,
     PN_CONN_KEEP_ALIVE_IDLE,
-    PN_CONN_CANCELLED
+    PN_CONN_CANCELLED,
+    /**
+     * Connect is complete, but the TLS handshake waits for another slot that
+     * is handshaking with the same host. The socket is not probed here.
+     */
+    PN_CONN_TLS_DEFERRED
 } pn_conn_state_t;
 
 /** @brief Maximum DNS result addresses stored per connection. */
@@ -59,7 +62,12 @@ typedef enum {
 #define PUBNUB_CFG_SOCKET_HEADER_BUF_SIZE 512
 #endif
 
-/** @brief Default connect timeout (TCP + TLS) in milliseconds. */
+/**
+ * @brief Per-attempt connect timeout (TCP and, separately, TLS) in ms.
+ *
+ * Also an upper bound for one attempt on one address. See
+ * PUBNUB_CFG_SOCKET_CONNECT_TIMEOUT_MS.
+ */
 #ifndef PUBNUB_CFG_SOCKET_CONNECT_TIMEOUT_MS
 #define PUBNUB_CFG_SOCKET_CONNECT_TIMEOUT_MS 10000
 #endif
@@ -97,7 +105,7 @@ static inline int pn_is_connection_refused(int err)
  * The transport owns an array of these, sized by
  * PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS.
  */
-typedef struct pn_socket_connection {
+struct pn_socket_connection {
     /** Current FSM state. */
     pn_conn_state_t state;
 
@@ -143,7 +151,7 @@ typedef struct pn_socket_connection {
     /** Incremental HTTP response parser. */
     pn_http_parser_t parser;
 
-    /** Deadline for TCP connect + TLS handshake (monotonic ms). */
+    /** Deadline of the current TCP connect or TLS handshake (monotonic ms). */
     uint64_t connect_deadline_ms;
     /** Deadline for the entire transaction (monotonic ms). */
     uint64_t transaction_deadline_ms;
@@ -234,11 +242,19 @@ typedef struct pn_socket_connection {
      * @brief 1 when proxy tunnel negotiation completed on this socket.
      *
      * Prevents re-negotiation when a deferred TLS handshake re-enters
-     * conn_transition_after_connect via the CONNECTING tick loop.
+     * conn_transition_after_connect via the TLS_DEFERRED tick.
      * Cleared when the socket is destroyed (conn_close_socket) since
      * the tunnel is gone with the socket.
      */
     uint8_t proxy_done;
+
+    /**
+     * @brief Socket readiness the TLS handshake waits for.
+     *
+     * 0 when no handshake is in progress. Otherwise @c PN_POLL_READ or
+     * @c PN_POLL_WRITE, refreshed after each handshake step.
+     */
+    uint8_t tls_want;
 
     /**
      * @brief Heap-allocated redirect target host, or NULL if no redirect.
@@ -261,14 +277,15 @@ typedef struct pn_socket_connection {
      * @brief Monotonically increasing generation counter for ABA safety.
      *
      * Incremented each time the slot is reset (returned to IDLE via
-     * pn_connection_reset). Encoded into the opaque transport handle
-     * returned by socket_send so that socket_cancel can detect stale
-     * handles that reference a recycled connection slot. The 16-bit
-     * counter wraps after 65536 reuse cycles per slot - negligible at
-     * typical request rates.
+     * pn_connection_reset) or its finished request is released while the
+     * connection stays alive (pn_connection_release_request). Encoded into the
+     * transport handle so socket_cancel detects stale handles.
      */
     uint16_t generation;
-} pn_socket_connection_t;
+
+    /** Budget (ms) the current connect or handshake attempt was armed with. */
+    uint32_t connect_budget_ms;
+};
 
 /**
  * @brief Initialize a connection FSM to the idle state.
@@ -350,6 +367,23 @@ pn_conn_state_t pn_connection_tick(pn_socket_connection_t* conn,
  */
 void pn_connection_cancel(pn_socket_connection_t* conn,
                           pn_socket_transport_t*  transport);
+
+/**
+ * @brief Detach a finished request from a keep-alive connection.
+ *
+ * Applies only to a connection in KEEP_ALIVE_IDLE with a live socket. Frees
+ * the per-request buffers and bumps the generation. The socket and TLS session
+ * stay open for the next request. Response data that aliased the buffers is
+ * invalid after this call.
+ *
+ * @param conn      Connection instance.
+ * @param transport Owning transport instance.
+ * @retval 1 The request was detached and the connection stays alive.
+ * @retval 0 The connection is in another state or has no socket; nothing
+ *           was changed and the caller falls back to cancel + reset.
+ */
+int pn_connection_release_request(pn_socket_connection_t* conn,
+                                  pn_socket_transport_t*  transport);
 
 /**
  * @brief Reset a connection to IDLE, closing any open resources.

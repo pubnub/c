@@ -141,6 +141,14 @@ pubnub_res_t pn_request_dispatch(pn_pipeline_t*              pipeline,
         if (PUBNUB_OK == err) {
             err = PUBNUB_ERR_TRANSPORT;
         }
+        PUBNUB_LOG(
+            pipeline->logger,
+            PUBNUB_LOG_LEVEL_ERROR,
+            "pn_request_dispatch: chain rejected request, transport_error=%u "
+            "(%s)%s",
+            (unsigned)err,
+            pubnub_res_str(err),
+            (PUBNUB_OK == req->http_response.transport_error) ? " [defaulted]" : "");
         req->state = PN_REQUEST_IN_FLIGHT;
         PN_REQUEST_ON_FAILURE(req, err);
 
@@ -153,6 +161,22 @@ pubnub_res_t pn_request_dispatch(pn_pipeline_t*              pipeline,
             (pubnub_milliseconds_t)req->http_request.timeout_ms, platform);
     }
     return rc;
+}
+
+void pn_pipeline_cancel_waiting_retries(pn_pipeline_t* pipeline,
+                                        uint16_t       current_generation)
+{
+    unsigned int i;
+
+    if (!PUBNUB_ENABLE_RETRY || NULL == pipeline) {
+        return;
+    }
+    for (i = 0; i < pipeline->owned_count; i++) {
+        if (pn_middleware_retry_destroy == pipeline->owned[i].destroy) {
+            pn_middleware_retry_cancel_waiting(pipeline->owned[i].layer,
+                                               current_generation);
+        }
+    }
 }
 
 /**

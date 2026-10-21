@@ -112,6 +112,8 @@ void* pn_context_feature_state(const pubnub_context_t* ctx,
  * registered (via pn_feature_register at init) — this overwrites
  * the state and cleanup fields.
  *
+ * Caller must hold the context lock.
+ *
  * @param ctx     Context (non-NULL, initialized).
  * @param feature Feature identifier (must be registered).
  * @param state   Per-context state (may be NULL to clear).
@@ -125,10 +127,8 @@ void pn_context_set_feature_state(pubnub_context_t*       ctx,
 /**
  * @brief Register a per-process-tick callback for a feature.
  *
- * Called by features that need periodic processing (e.g., subscribe's
- * event engine). The tick callback is invoked from pubnub_process()
- * OUTSIDE the context lock and should return non-zero when the
- * feature has active work remaining.
+ * The tick runs from pubnub_process() outside the context lock and returns
+ * non-zero while the feature has work left. Caller must hold the context lock.
  *
  * @param ctx     Context (non-NULL, initialized).
  * @param feature Feature identifier (must be registered).
@@ -157,6 +157,64 @@ pubnub_lock_t* pn_context_mutex_mem(const pubnub_context_t* ctx);
  * @return Platform provider pointer (borrowed), or NULL.
  */
 pubnub_platform_provider_t* pn_context_platform(const pubnub_context_t* ctx);
+
+/**
+ * @brief Return the generation counter of the context's service origin.
+ *
+ * Changes on every origin switch. Requests are stamped with it at dispatch.
+ * Takes the context lock; do not call with it held.
+ *
+ * @param ctx Context to query (borrowed).
+ * @return Current origin generation, or 0 when @p ctx is NULL or not
+ *         initialized.
+ */
+uint16_t pn_context_origin_generation(const pubnub_context_t* ctx);
+
+/**
+ * @brief Copy the service origin and its generation under one lock hold.
+ *
+ * Reads the origin and its generation together. Takes the context lock; do
+ * not call with it held.
+ *
+ * @param ctx            Context to query (borrowed).
+ * @param buf            Receives the NUL-terminated origin (non-NULL).
+ * @param buf_len        Capacity of @p buf in bytes.
+ * @param out_generation Receives the origin generation, or NULL to skip.
+ * @return PUBNUB_OK on success, PUBNUB_ERR_BUFFER_TOO_SMALL when @p buf does
+ *         not fit, PUBNUB_ERR_NOT_INITIALIZED for an uninitialized context,
+ *         PUBNUB_ERR_INVALID_ARGUMENT for a NULL or zero-length @p buf.
+ */
+pubnub_res_t pn_context_origin_snapshot(const pubnub_context_t* ctx,
+                                        char*                   buf,
+                                        size_t                  buf_len,
+                                        uint16_t*               out_generation);
+
+/**
+ * @brief Cancel a slot's live transport handle, leaving the slot allocated.
+ *
+ * The slot generation is unchanged. Caller must not hold the context lock and
+ * must run on the thread that owns the transport.
+ *
+ * @param ctx     Context owning the slot (borrowed).
+ * @param slot_id Pool slot id (ids outside the pool are ignored).
+ */
+void pn_context_cancel_slot_transport(pubnub_context_t* ctx, uint16_t slot_id);
+
+/**
+ * @brief Cancel a terminal slot's transport handle, then release the slot.
+ *
+ * Cancels before releasing, because release bumps the generation the
+ * middleware uses to find the handle. Caller must not hold the context lock
+ * and must run on the thread that owns the transport.
+ *
+ * @param ctx        Context owning the slot (borrowed).
+ * @param slot_id    Pool slot id (ids outside the pool are ignored).
+ * @param generation Generation the caller observed, or PN_GENERATION_ANY to
+ *                   skip the check.
+ */
+void pn_context_release_terminal_slot(pubnub_context_t* ctx,
+                                      uint16_t          slot_id,
+                                      uint16_t          generation);
 
 /**
  * @brief Retrieve the logger provider for a context.
@@ -280,16 +338,110 @@ pubnub_transport_provider_t* pn_context_transport(const pubnub_context_t* ctx);
 pn_pending_queue_t* pn_context_pending_queue(pubnub_context_t* ctx);
 
 /**
- * @brief Return the context's pending-slot map, or NULL.
- *
- * The map has PUBNUB_CFG_MAX_PENDING_REQUESTS entries. Each entry
- * holds either PUBNUB_SLOT_ID_INVALID (not yet promoted) or the
- * real slot_id that the pending entry was promoted into.
- *
- * @param ctx Context to query (borrowed).
- * @return Map array pointer (borrowed), or NULL if ctx is NULL.
+ * @brief Kind of target a pending-range future id resolves to.
  */
-uint16_t* pn_context_pending_slot_map(pubnub_context_t* ctx);
+typedef enum pn_pending_ref_kind {
+    /** The id names a pool slot (direct id, or a pending id whose request
+     *  was promoted and is still alive): real_slot / real_generation hold
+     *  the slot and the generation it was acquired with. */
+    PN_PENDING_REF_REAL = 0,
+    /** The request is still waiting in the pending queue: entry points at
+     *  it and logical is its position relative to head. */
+    PN_PENDING_REF_QUEUED,
+    /** The queued request was cancelled and its id has not been retired. */
+    PN_PENDING_REF_CANCELLED,
+    /** The queued request was removed by this call; the extracted cancel
+     *  data must be run by the caller after releasing the pool lock. */
+    PN_PENDING_REF_REMOVED,
+    /** The id does not name a live request: never issued, already released,
+     *  or its pool slot has been recycled for another request. */
+    PN_PENDING_REF_STALE
+} pn_pending_ref_kind_t;
+
+/**
+ * @brief Result of resolving a pending-range future id.
+ */
+typedef struct pn_pending_ref {
+    /** What the id resolved to. */
+    pn_pending_ref_kind_t kind;
+    /** Pool slot of the request (PN_PENDING_REF_REAL only). */
+    uint16_t real_slot;
+    /** Generation the pool slot was acquired with (REAL only). */
+    uint16_t real_generation;
+    /** Position relative to head (QUEUED only). */
+    uint16_t logical;
+    /** Queued entry (QUEUED only); valid until the pool lock is released. */
+    pn_pending_entry_t* entry;
+} pn_pending_ref_t;
+
+/**
+ * @brief Resolve a future id to its pool slot or pending-queue entry.
+ *
+ * Ids below the pool capacity name a pool slot. Larger ids are pending-range
+ * ids, checked against the map epoch and, once promoted, the slot generation.
+ * A recycled entry yields PN_PENDING_REF_STALE.
+ *
+ * Caller must hold the context lock (the request-pool lock).
+ *
+ * @param ctx        Context (borrowed, non-NULL).
+ * @param slot_id    Future slot id (direct or pending-range).
+ * @param generation Future generation (slot generation for direct ids, map
+ *                   epoch for pending-range ids).
+ * @return Resolution; kind is never PN_PENDING_REF_REMOVED.
+ */
+pn_pending_ref_t pn_context_pending_resolve_locked(pubnub_context_t* ctx,
+                                                   uint16_t          slot_id,
+                                                   uint16_t generation);
+
+/**
+ * @brief Resolve a future id and cancel it when it is still queued.
+ *
+ * Resolves like pn_context_pending_resolve_locked(). A queued request is
+ * removed and its cleanup and callback data are copied to @p out_data. Run
+ * that data with pn_pending_cancel_data_run() after releasing the lock.
+ *
+ * A non-zero @p retire gives the id up. Zero keeps a cancelled marker. A
+ * promoted request is returned as PN_PENDING_REF_REAL.
+ *
+ * Caller must hold the context lock (the request-pool lock).
+ *
+ * @param ctx        Context (borrowed, non-NULL).
+ * @param slot_id    Future slot id (direct or pending-range).
+ * @param generation Future generation (see pn_context_pending_resolve_locked).
+ * @param retire     Non-zero to give up the pending id.
+ * @param out_data   Receives the extracted cancel data when kind is
+ *                   PN_PENDING_REF_REMOVED (non-NULL).
+ * @return Resolution; PN_PENDING_REF_REMOVED when this call cancelled the
+ *         queued request.
+ */
+pn_pending_ref_t pn_context_pending_cancel_locked(pubnub_context_t* ctx,
+                                                  uint16_t          slot_id,
+                                                  uint16_t          generation,
+                                                  int               retire,
+                                                  pn_pending_cancel_data_t* out_data);
+
+/**
+ * @brief Cancel a feature-held future id, or follow it to its pool slot.
+ *
+ * Takes the pool lock itself and runs the cleanup (and the async callback
+ * when @p run_async_cb is non-zero) after releasing it. Caller must not hold
+ * the context lock. The pending id is retired in every case.
+ *
+ * - PN_PENDING_REF_REMOVED: the queued request was removed.
+ * - PN_PENDING_REF_REAL: the request is a pool slot. The caller cancels or
+ *   releases @c real_slot / @c real_generation.
+ * - PN_PENDING_REF_CANCELLED / PN_PENDING_REF_STALE: nothing to do.
+ *
+ * @param ctx          Context (borrowed).
+ * @param slot_id      Future slot id (direct or pending-range).
+ * @param generation   Future generation.
+ * @param run_async_cb Non-zero to fire the entry's async callback.
+ * @return Resolution as described above.
+ */
+pn_pending_ref_t pn_context_pending_cancel_or_resolve(pubnub_context_t* ctx,
+                                                      uint16_t          slot_id,
+                                                      uint16_t generation,
+                                                      int      run_async_cb);
 
 /**
  * @brief Return the pool capacity for pending-range checks.
@@ -498,7 +650,9 @@ pubnub_json_value_t* pn_json_array_cursor_get(pubnub_serialization_provider_t* s
  * Zero-initializes @p entry via compound-literal assignment, then
  * populates all fields required for a feature dispatch: feature
  * identity, state ownership, HTTP method, host (scratch-copied), TLS
- * flag, and resolved timeout.
+ * flag, and resolved timeout. The host comes from a locked snapshot of
+ * the origin, so a concurrent `pubnub_set_origin()` never yields a torn
+ * host. Takes the context lock; do NOT call with it held.
  *
  * @param entry       Entry to initialize (non-NULL, written from scratch).
  * @param feature_id  Feature capability identifier.
@@ -506,9 +660,9 @@ pubnub_json_value_t* pn_json_array_cursor_get(pubnub_serialization_provider_t* s
  * @param cleanup     Cleanup callback for @p state (may be NULL).
  * @param validator   Response body validator (may be NULL).
  * @param method      HTTP method for this request.
- * @param cfg         Context configuration (non-NULL).
+ * @param ctx         Initialized context (non-NULL).
  * @param timeout_ms  Per-request timeout override; 0 uses
- *                    cfg->transaction_timeout_ms.
+ *                    the configured transaction timeout.
  * @return PUBNUB_OK on success, or PUBNUB_ERR_BUFFER_TOO_SMALL when
  *         the host string does not fit in the scratch buffer.
  */
@@ -518,10 +672,21 @@ pn_pending_entry_init(pn_pending_entry_t* entry,
                       void*               state,
                       void (*cleanup)(void*, pubnub_allocator_provider_t*),
                       pubnub_res_t (*validator)(const uint8_t*, size_t, int),
-                      pubnub_http_method_t   method,
-                      const pubnub_config_t* cfg,
-                      uint32_t               timeout_ms)
+                      pubnub_http_method_t method,
+                      pubnub_context_t*    ctx,
+                      uint32_t             timeout_ms)
 {
+    const pubnub_config_t* cfg = pn_context_config(ctx);
+    char                   host[PUBNUB_CFG_MAX_HOSTNAME_LEN];
+    pubnub_res_t           rc;
+
+    if (NULL == cfg) {
+        return PUBNUB_ERR_NOT_INITIALIZED;
+    }
+    rc = pn_context_origin_snapshot(ctx, host, sizeof(host), NULL);
+    if (PUBNUB_OK != rc) {
+        return rc;
+    }
     *entry                       = (pn_pending_entry_t){0};
     entry->feature_id            = feature_id;
     entry->feature_state         = state;
@@ -531,7 +696,7 @@ pn_pending_entry_init(pn_pending_entry_t* entry,
     entry->http_request.secure   = PUBNUB_ENABLE_SECURE_TRANSPORT;
     entry->http_request.timeout_ms =
         (0 != timeout_ms) ? timeout_ms : cfg->transaction_timeout_ms;
-    return pn_request_set_host(&entry->http_request, cfg->origin);
+    return pn_request_set_host(&entry->http_request, host);
 }
 
 /**
@@ -648,6 +813,31 @@ void pn_context_wake_bg_thread(pubnub_context_t* ctx);
  * @param ctx Context (borrowed, may be NULL).
  */
 void pn_context_wake(pubnub_context_t* ctx);
+
+/**
+ * @brief Claim exclusive transport ownership for a direct call from a
+ *        non-tick thread.
+ *
+ * Refused when a background thread owns the transport or another thread is
+ * inside it. Without a background thread, a tick that starts meanwhile
+ * returns PUBNUB_IN_PROGRESS. Always succeeds when PUBNUB_CFG_THREAD_SAFETY
+ * is 0.
+ *
+ * @param ctx Initialized context (non-NULL).
+ * @retval 0 The claim was refused; do not call into the transport.
+ * @retval non-zero Ownership was taken; pair with
+ *         pn_context_transport_unclaim_locked() on every path.
+ * @note caller must hold ctx lock
+ */
+int pn_context_transport_claim_locked(pubnub_context_t* ctx);
+
+/**
+ * @brief Drop a claim taken by pn_context_transport_claim_locked().
+ *
+ * @param ctx Initialized context (non-NULL).
+ * @note caller must hold ctx lock
+ */
+void pn_context_transport_unclaim_locked(pubnub_context_t* ctx);
 
 /**
  * @brief Run one processing tick: poll transport, drain completions,

@@ -121,13 +121,21 @@ pubnub_future_t pubnub_set_channel_metadata(pubnub_context_t* ctx,
     pubnub_serialization_provider_t* serial   = NULL;
     pubnub_buffer_t                  body_buf = {0};
     char*                            encoded  = NULL;
+    pubnub_json_value_t*             pending  = NULL;
     pubnub_res_t                     rc;
 
-    if (NULL == opts || NULL == opts->channel || '\0' == opts->channel[0]) {
+    if (NULL == opts) {
         return pn_failed_future(PUBNUB_ERR_INVALID_ARGUMENT);
     }
 
-    if (NULL != opts->custom && NULL != opts->custom_value) {
+    /* The SDK owns custom_value on every return path; the body builder
+     * takes it over, so it is only discarded here before that point. */
+    pending = opts->custom_value;
+    serial  = pn_context_serialization(ctx);
+
+    if (NULL == opts->channel || '\0' == opts->channel[0]
+        || (NULL != opts->custom && NULL != opts->custom_value)) {
+        pn_app_context_discard_custom(serial, pending);
         return pn_failed_future(PUBNUB_ERR_INVALID_ARGUMENT);
     }
 
@@ -140,11 +148,11 @@ pubnub_future_t pubnub_set_channel_metadata(pubnub_context_t* ctx,
                             opts->timeout_ms,
                             &prep);
     if (PUBNUB_OK != rc) {
+        pn_app_context_discard_custom(serial, pending);
         return pn_failed_future(rc);
     }
     state = (pn_app_context_state_t*)prep.state;
 
-    serial = pn_context_serialization(ctx);
     if (NULL == serial || NULL == serial->serialize) {
         rc = PUBNUB_ERR_PROVIDER_MISSING;
         goto cleanup;
@@ -157,7 +165,8 @@ pubnub_future_t pubnub_set_channel_metadata(pubnub_context_t* ctx,
     }
     state->owned_body_buf = body_buf;
 
-    rc = pn_channel_metadata_build_body(
+    pending = NULL;
+    rc      = pn_channel_metadata_build_body(
         serial, prep.allocator, opts, &state->owned_body_buf);
     if (PUBNUB_OK != rc) {
         goto cleanup;
@@ -195,6 +204,7 @@ pubnub_future_t pubnub_set_channel_metadata(pubnub_context_t* ctx,
 cleanup:
     pn_feature_prep_release(ctx, &prep);
     PN_LOG_ERROR_ENTRY(ctx, (int)rc, pubnub_res_str(rc), NULL);
+    pn_app_context_discard_custom(serial, pending);
     return pn_failed_future(rc);
 }
 

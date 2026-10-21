@@ -76,7 +76,8 @@ typedef struct pn_pending_entry {
     /** User data for async_cb. */
     void* async_cb_user_data;
 
-    /** Physical index in the pending_slot_map (set by enqueue caller). */
+    /** Index of this request's entry in the context's pending-slot map
+     *  (set by the enqueue caller). */
     uint16_t map_index;
 
     /** 1 if this entry is occupied, 0 if free. */
@@ -125,7 +126,10 @@ typedef struct pn_pending_queue {
     /** Index of the next free slot (where to enqueue). */
     uint16_t tail;
 
-    /** Number of occupied entries. */
+    /** Ring span from head to tail (cancelled holes inside the span
+     *  included). Every queue operation leaves the oldest and newest
+     *  positions of a non-empty span occupied, so zero means no live
+     *  entries. */
     uint16_t count;
 
     /** Allocator used for the entries array (borrowed). */
@@ -175,18 +179,34 @@ pubnub_res_t pn_pending_queue_enqueue(pn_pending_queue_t*       queue,
  *
  * @param queue     Queue to dequeue from.
  * @param out_entry Receives the dequeued entry on success.
- * @return PUBNUB_OK on success, PUBNUB_ERR_INVALID_ARGUMENT when empty.
+ * @return PUBNUB_OK on success, PUBNUB_IN_PROGRESS when no live entry is
+ *         queued, or PUBNUB_ERR_INVALID_ARGUMENT for NULL arguments.
  */
 pubnub_res_t pn_pending_queue_dequeue(pn_pending_queue_t* queue,
                                       pn_pending_entry_t* out_entry);
 
 /**
- * @brief Return the number of entries currently in the queue.
+ * @brief Return the ring span currently used by the queue.
+ *
+ * The span runs from head to tail and counts cancelled entries that still
+ * sit between two live ones; enqueue and the full check use the same
+ * measure. It is zero exactly when no live entry is queued.
  *
  * @param queue Queue to query.
- * @return Number of occupied entries.
+ * @return Ring span in entries, or 0 when @p queue is NULL.
  */
 uint16_t pn_pending_queue_count(const pn_pending_queue_t* queue);
+
+/**
+ * @brief Step head past cancelled holes at the oldest end of the span.
+ *
+ * Restores the occupied-head invariant after anything that advanced head
+ * (dequeue, or a caller that consumed the head entry itself). Each skipped
+ * hole shrinks the span by one; bounded by the queue capacity.
+ *
+ * @param queue Queue to adjust (no-op if NULL or uninitialized).
+ */
+void pn_pending_queue_trim_head(pn_pending_queue_t* queue);
 
 /**
  * @brief Check whether the queue is full.
@@ -246,17 +266,41 @@ void pn_pending_cancel_data_run(pn_pending_cancel_data_t* data);
  * @p out_data (if non-NULL) so the caller can invoke them after
  * releasing the lock. The entry is zeroed and marked unoccupied.
  *
+ * The ring span shrinks when the cancelled entry was the oldest or newest
+ * one (head or tail moves past it, together with any holes that become
+ * exposed). A mid-ring entry leaves a hole that stays inside the span until
+ * head or tail passes it, so the queue can report full slightly early but
+ * never overwrites a live entry. Only live entries inside the span can be
+ * cancelled; @p index is relative to head and counts holes.
+ *
  * If @p out_data is NULL, feature_state_cleanup is called inline
  * (legacy behavior for paths that cannot reconstruct the future).
  *
  * @param queue    Queue to modify.
  * @param index    Logical index from head (0 = oldest).
  * @param out_data Receives extracted callback data (nullable).
- * @return PUBNUB_OK on success, error if out of bounds.
+ * @return PUBNUB_OK on success, PUBNUB_ERR_INVALID_ARGUMENT when @p index
+ *         is outside the span or addresses an already cancelled hole.
  */
 pubnub_res_t pn_pending_queue_cancel_at(pn_pending_queue_t*       queue,
                                         uint16_t                  index,
                                         pn_pending_cancel_data_t* out_data);
+
+/**
+ * @brief Locate the queued entry that carries @p map_index.
+ *
+ * Walks the ring span from head, so the cost is bounded by the queue
+ * capacity. Cancelled holes never match.
+ *
+ * @param queue       Queue to search.
+ * @param map_index   Pending-slot-map index stored in the entry at enqueue.
+ * @param out_logical Receives the position relative to head (0 = oldest),
+ *                    suitable for pn_pending_queue_cancel_at().
+ * @return PUBNUB_OK when found, PUBNUB_ERR_INVALID_ARGUMENT otherwise.
+ */
+pubnub_res_t pn_pending_queue_find(const pn_pending_queue_t* queue,
+                                   uint16_t                  map_index,
+                                   uint16_t*                 out_logical);
 
 /**
  * @brief Relocate scratch-referencing pointers after a struct copy.

@@ -139,7 +139,9 @@ struct pn_request {
     /** HTTP response descriptor; populated by transport on completion. */
     pubnub_http_response_t http_response;
 
-    /** Transport handle; valid only in IN_FLIGHT state, NULL otherwise. */
+    /** Transport handle, set on send. Kept past a successful terminal
+     *  transition because response->body aliases its rx buffer. Cleared under
+     *  the context lock by the transport owner just before it cancels. */
     pubnub_transport_handle_t* transport_handle;
 
     /** SDK-level deadline timer; started on dispatch, checked each tick.
@@ -214,6 +216,10 @@ struct pn_request {
      *  Left 0 for subscribe long-polls, which parse via their own slab. */
     uint8_t preparse_on_complete;
 
+    /** Context origin generation captured at dispatch. The retry middleware
+     *  compares it with the current generation to detect origin changes. */
+    uint16_t origin_generation;
+
     /** Cached service-error classification (cast to pn_service_error_kind_t).
      */
     uint8_t svc_error_kind;
@@ -229,7 +235,12 @@ struct pn_request {
      *  One-way latch: 0 -> 1, reset to 0 only by pn_request_reset. */
     PUBNUB_ATOMIC_UINT8 ready;
 
-    /** 1 when release was requested from inside the on_complete callback. */
+    /** 1 when the future was released while the transport could not be
+     *  entered from the releasing thread: from inside the on_complete
+     *  callback, while in flight, or on a terminal slot while another thread
+     *  owns the transport (background thread running, or a tick inside
+     *  poll). The owning thread cancels the handle and reclaims the slot in
+     *  pn_process_tick. Read and written under the context lock only. */
     uint8_t release_deferred;
 
     /** Public async callback registered via pubnub_async(). Fires
@@ -344,7 +355,9 @@ pubnub_res_t pn_request_on_success(pn_request_t* req, pubnub_res_t status);
  * @brief Transition IN_FLIGHT -> COMPLETING (if callback set) or FAILED.
  *
  * Does NOT invoke the callback; use @ref pn_request_deliver_notification.
- * Caller must cancel the transport handle and timeout timer.
+ * Leaves @c transport_handle set: the transport owner cancels it on future
+ * release or context teardown, keeping a readable HTTP error body valid
+ * until then. Callers that cancel the handle themselves clear it first.
  *
  * @param req         Request to transition (must be IN_FLIGHT).
  * @param status      SDK error code (e.g. PUBNUB_ERR_TIMEOUT).
@@ -415,6 +428,13 @@ void pn_request_deliver_notification(pn_request_t* req);
  */
 pubnub_json_value_t* pn_request_get_parsed_body(pn_request_t* req,
                                                 pubnub_serialization_provider_t* serial);
+
+/**
+ * @brief Destroy the slot's cached parse tree and clear the cache.
+ *
+ * @param req Slot whose parse cache is released (borrowed, may be NULL).
+ */
+void pn_request_release_parsed_body(pn_request_t* req);
 
 /**
  * @brief Resolve the slot behind @p future when result data is stable.

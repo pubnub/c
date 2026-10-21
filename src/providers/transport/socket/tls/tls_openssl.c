@@ -9,7 +9,15 @@
 #include "pubnub/providers/provider_deps.h"
 #include "core/pn_string.h"
 
+/* winsock2.h must precede the OpenSSL headers, which pull in windows.h. */
+#ifdef _WIN32
+#include <winsock2.h>
+#else
+#include <errno.h>
+#endif
+
 #include <openssl/bio.h>
+#include <openssl/crypto.h>
 #include <openssl/err.h>
 #include <openssl/pem.h>
 #include <openssl/ssl.h>
@@ -61,8 +69,9 @@ struct pn_openssl_ctx {
  * connection hostname used as the cache key.
  */
 struct pn_openssl_session {
-    SSL*          ssl;          /**< OpenSSL session handle. */
-    unsigned long last_error;   /**< Last ERR_get_error() value. */
+    SSL*                      ssl;        /**< OpenSSL session handle. */
+    unsigned long             last_error; /**< Last ERR_get_error() value. */
+    pubnub_logger_provider_t* logger;     /**< Borrowed; may be NULL. */
 #if PUBNUB_CFG_TLS_SESSION_CACHE_SIZE > 0
     struct pn_openssl_ctx* ctx; /**< Owning context (for cache access). */
     char    hostname[PUBNUB_CFG_MAX_HOSTNAME_LEN + 1]; /**< Connection host. */
@@ -214,6 +223,10 @@ static void pn_tls_ssl_session_cache_invalidate(struct pn_openssl_ctx* ctx,
 }
 #endif /* PUBNUB_CFG_TLS_SESSION_CACHE_SIZE > 0 */
 
+#ifndef _WIN32
+static BIO_METHOD* pn_tls_openssl_nosigpipe_method(void);
+#endif
+
 /**
  * @brief Create a TLS context with OpenSSL.
  *
@@ -235,6 +248,14 @@ static void* pn_tls_openssl_ctx_create(const pn_tls_config_t*             cfg,
     if (NULL == cfg) {
         return NULL;
     }
+
+#ifndef _WIN32
+    /* Create the shared socket BIO method now so an allocation failure
+     * surfaces at setup rather than on the first connection. */
+    if (NULL == pn_tls_openssl_nosigpipe_method()) {
+        return NULL;
+    }
+#endif
 
     SSL_CTX* ctx = SSL_CTX_new(TLS_client_method());
     if (NULL == ctx) {
@@ -371,9 +392,12 @@ static void pn_tls_openssl_ctx_destroy(void* ctx)
 #define MSG_NOSIGNAL 0
 #endif
 
-/* Process-lifetime custom BIO_METHOD; created once on first use. Standard
- * OpenSSL practice for a derived socket method — intentionally never freed. */
+/* Process-lifetime custom BIO_METHOD; created once on first use through
+ * CRYPTO_THREAD_run_once, which publishes it with full memory barriers.
+ * Standard OpenSSL practice for a derived socket method — intentionally never
+ * freed. */
 static BIO_METHOD* s_nosigpipe_bio_method = NULL;
+static CRYPTO_ONCE s_nosigpipe_once       = CRYPTO_ONCE_STATIC_INIT;
 
 /**
  * @brief Read the socket fd stored on a custom nosigpipe BIO.
@@ -529,37 +553,133 @@ static int pn_tls_openssl_bio_destroy(BIO* bio)
 }
 
 /**
+ * @brief One-time initializer for the SIGPIPE-safe socket BIO method.
+ *
+ * Runs at most once per process under CRYPTO_THREAD_run_once. The method is
+ * fully configured before the once-barrier publishes it, so no thread can
+ * observe a half-initialised method. A failed allocation leaves the method
+ * NULL for the rest of the process.
+ */
+static void pn_tls_openssl_nosigpipe_method_init(void)
+{
+    BIO_METHOD* m = BIO_meth_new(BIO_get_new_index() | BIO_TYPE_SOURCE_SINK,
+                                 "pubnub nosigpipe socket");
+    if (NULL == m) {
+        return;
+    }
+    BIO_meth_set_write(m, pn_tls_openssl_bio_write);
+    BIO_meth_set_read(m, pn_tls_openssl_bio_read);
+    BIO_meth_set_ctrl(m, pn_tls_openssl_bio_ctrl);
+    BIO_meth_set_create(m, pn_tls_openssl_bio_create);
+    BIO_meth_set_destroy(m, pn_tls_openssl_bio_destroy);
+    s_nosigpipe_bio_method = m;
+}
+
+/**
  * @brief Get (lazily creating) the SIGPIPE-safe socket BIO method.
  *
  * A self-contained source/sink BIO method whose write path uses send() with
  * MSG_NOSIGNAL. It is not derived from BIO_s_socket() because the method
  * getters needed to borrow the stock read/ctrl were deprecated in OpenSSL
- * 3.5; the fd-binding subset is reimplemented here instead. Concurrent
- * first-use from multiple poll threads (one per context) is benign: the
- * pointer store is pointer-aligned and effectively atomic, and the worst
- * case is a one-time unreachable BIO_METHOD leak if two threads race on
- * first init.
+ * 3.5; the fd-binding subset is reimplemented here instead. Poll threads (one
+ * per context) may call this concurrently: creation is serialised by
+ * CRYPTO_THREAD_run_once, which also orders the method's initialisation
+ * before every caller's read of the shared pointer, including on weakly
+ * ordered CPUs.
  *
  * @return Shared BIO_METHOD, or NULL on allocation failure.
  */
 static BIO_METHOD* pn_tls_openssl_nosigpipe_method(void)
 {
-    if (NULL == s_nosigpipe_bio_method) {
-        BIO_METHOD* m = BIO_meth_new(BIO_get_new_index() | BIO_TYPE_SOURCE_SINK,
-                                     "pubnub nosigpipe socket");
-        if (NULL == m) {
-            return NULL;
-        }
-        BIO_meth_set_write(m, pn_tls_openssl_bio_write);
-        BIO_meth_set_read(m, pn_tls_openssl_bio_read);
-        BIO_meth_set_ctrl(m, pn_tls_openssl_bio_ctrl);
-        BIO_meth_set_create(m, pn_tls_openssl_bio_create);
-        BIO_meth_set_destroy(m, pn_tls_openssl_bio_destroy);
-        s_nosigpipe_bio_method = m;
+    if (!CRYPTO_THREAD_run_once(&s_nosigpipe_once,
+                                pn_tls_openssl_nosigpipe_method_init)) {
+        return NULL;
     }
     return s_nosigpipe_bio_method;
 }
 #endif /* !_WIN32 */
+
+/**
+ * @brief Reset the calling thread's last OS socket error to zero.
+ */
+static void pn_tls_openssl_sys_error_clear(void)
+{
+#ifdef _WIN32
+    WSASetLastError(0);
+#else
+    errno = 0;
+#endif
+}
+
+/**
+ * @brief Read the calling thread's last OS socket error.
+ *
+ * @return errno on POSIX, WSAGetLastError() on Windows.
+ */
+static int pn_tls_openssl_sys_error_get(void)
+{
+#ifdef _WIN32
+    return WSAGetLastError();
+#else
+    return errno;
+#endif
+}
+
+/**
+ * @brief Log a fatal send/recv failure with the SSL error class and OS error.
+ *
+ * @param sess    Session whose last_error holds the queued OpenSSL error.
+ * @param op      Operation label ("send" or "recv").
+ * @param ssl_err SSL_get_error() classification.
+ * @param rc      Return value of SSL_write()/SSL_read().
+ * @param sys_err OS error captured right after the call. Best effort: the
+ *                value may be overwritten between the failing syscall inside
+ *                the BIO and the read here, so treat it as a hint.
+ */
+static void pn_tls_openssl_log_io_failure(const struct pn_openssl_session* sess,
+                                          const char*                      op,
+                                          int ssl_err,
+                                          int rc,
+                                          int sys_err)
+{
+#if PUBNUB_CFG_MAX_LOG_MESSAGE_SIZE > 0
+    if (PUBNUB_LOG_LEVEL_ENABLED(PUBNUB_LOG_LEVEL_WARNING)
+        && NULL != sess->logger && NULL != sess->logger->log) {
+        char ebuf[120];
+
+        if (0 != sess->last_error) {
+            ERR_error_string_n(sess->last_error, ebuf, sizeof(ebuf));
+        } else {
+            pn_strlcpy(ebuf, "(none)", sizeof(ebuf));
+        }
+        if (SSL_ERROR_SYSCALL == ssl_err && -1 == rc) {
+            PUBNUB_LOG(
+                sess->logger,
+                PUBNUB_LOG_LEVEL_WARNING,
+                "TLS %s failed: ssl_error=%d rc=%d sys_err=%d openssl=%s",
+                op,
+                ssl_err,
+                rc,
+                sys_err,
+                ebuf);
+        } else {
+            PUBNUB_LOG(sess->logger,
+                       PUBNUB_LOG_LEVEL_WARNING,
+                       "TLS %s failed: ssl_error=%d rc=%d openssl=%s",
+                       op,
+                       ssl_err,
+                       rc,
+                       ebuf);
+        }
+    }
+#else
+    (void)sess;
+    (void)op;
+    (void)ssl_err;
+    (void)rc;
+    (void)sys_err;
+#endif
+}
 
 /**
  * @brief Create an OpenSSL TLS session for a connected socket.
@@ -639,6 +759,7 @@ static int pn_tls_openssl_session_create(void**      out_session,
 
     sess->ssl        = ssl;
     sess->last_error = 0;
+    sess->logger     = pctx->logger;
 #if PUBNUB_CFG_TLS_SESSION_CACHE_SIZE > 0
     sess->ctx              = pctx;
     sess->resume_attempted = 0;
@@ -689,20 +810,37 @@ static int pn_tls_openssl_handshake(void* session)
 
     struct pn_openssl_session* sess = (struct pn_openssl_session*)session;
     int                        rc;
+    int                        sys_err;
+    int                        err;
+    int                        resume_attempted = 0;
+#if PUBNUB_CFG_TLS_SESSION_CACHE_SIZE > 0
+    resume_attempted = (int)sess->resume_attempted;
+#endif
     /* OpenSSL requires an empty thread error queue before the operation so
      * SSL_get_error() classifies the result from this call alone; a stale
      * entry left by a prior session would be misread as SSL_ERROR_SSL. */
     ERR_clear_error();
+    pn_tls_openssl_sys_error_clear();
     rc = SSL_connect(sess->ssl);
+    /* Best effort: the value can be overwritten between the syscall inside
+     * the BIO and this read, so it is a diagnostic hint, not a guarantee. */
+    sys_err = pn_tls_openssl_sys_error_get();
     if (1 == rc) {
+        if (PUBNUB_CFG_MAX_LOG_MESSAGE_SIZE > 0) {
+            const char* version = SSL_get_version(sess->ssl);
+            const char* cipher  = SSL_get_cipher_name(sess->ssl);
+            PUBNUB_LOG(sess->logger,
+                       PUBNUB_LOG_LEVEL_DEBUG,
+                       "TLS handshake OK: version=%s cipher=%s resumed=%d "
+                       "attempted=%d",
+                       (NULL != version) ? version : "?",
+                       (NULL != cipher) ? cipher : "?",
+                       (int)SSL_session_reused(sess->ssl),
+                       resume_attempted);
+            (void)version;
+            (void)cipher;
+        }
 #if PUBNUB_CFG_TLS_SESSION_CACHE_SIZE > 0
-#ifdef PN_DEBUG_SOCKET_OPS
-        PUBNUB_LOG(sess->ctx->logger,
-                   PUBNUB_LOG_LEVEL_DEBUG,
-                   "TLS handshake OK: host=%s resume_attempted=%d",
-                   sess->hostname,
-                   (int)sess->resume_attempted);
-#endif
         if (0 != sess->ctx->session_reuse) {
             SSL_SESSION* new_sess = SSL_get1_session(sess->ssl);
             if (NULL != new_sess) {
@@ -713,7 +851,7 @@ static int pn_tls_openssl_handshake(void* session)
         return PN_TLS_OK;
     }
 
-    int err = SSL_get_error(sess->ssl, rc);
+    err = SSL_get_error(sess->ssl, rc);
     if (SSL_ERROR_WANT_READ == err) {
         return PN_TLS_WANT_READ;
     }
@@ -728,6 +866,45 @@ static int pn_tls_openssl_handshake(void* session)
     }
 #endif
     sess->last_error = ERR_get_error();
+    if (PUBNUB_CFG_MAX_LOG_MESSAGE_SIZE > 0
+        && PUBNUB_LOG_LEVEL_ENABLED(PUBNUB_LOG_LEVEL_ERROR)
+        && NULL != sess->logger && NULL != sess->logger->log) {
+        char        ebuf[120];
+        const char* state = SSL_state_string_long(sess->ssl);
+
+        if (0 != sess->last_error) {
+            ERR_error_string_n(sess->last_error, ebuf, sizeof(ebuf));
+        } else {
+            pn_strlcpy(ebuf, "(none)", sizeof(ebuf));
+        }
+        /* Variable-length openssl text stays last so truncation drops it
+         * first. sys_err is meaningful only for a failed syscall. */
+        if (SSL_ERROR_SYSCALL == err && -1 == rc) {
+            PUBNUB_LOG(sess->logger,
+                       PUBNUB_LOG_LEVEL_ERROR,
+                       "TLS handshake failed: ssl_error=%d rc=%d sys_err=%d "
+                       "state=%s resume=%d openssl=%s",
+                       err,
+                       rc,
+                       sys_err,
+                       (NULL != state) ? state : "?",
+                       resume_attempted,
+                       ebuf);
+        } else {
+            PUBNUB_LOG(sess->logger,
+                       PUBNUB_LOG_LEVEL_ERROR,
+                       "TLS handshake failed: ssl_error=%d rc=%d state=%s "
+                       "resume=%d openssl=%s",
+                       err,
+                       rc,
+                       (NULL != state) ? state : "?",
+                       resume_attempted,
+                       ebuf);
+        }
+        (void)state;
+    }
+    (void)sys_err;
+    (void)resume_attempted;
     return -1;
 }
 
@@ -748,10 +925,13 @@ static int pn_tls_openssl_send(void* session, const void* buf, size_t len)
 
     struct pn_openssl_session* sess = (struct pn_openssl_session*)session;
     int                        rc;
+    int                        sys_err;
     /* Clear the thread error queue so SSL_get_error() reflects only this
      * write; a stale entry would be misread as SSL_ERROR_SSL. */
     ERR_clear_error();
-    rc = SSL_write(sess->ssl, buf, (int)len);
+    pn_tls_openssl_sys_error_clear();
+    rc      = SSL_write(sess->ssl, buf, (int)len);
+    sys_err = pn_tls_openssl_sys_error_get();
     if (0 < rc) {
         return rc;
     }
@@ -765,6 +945,7 @@ static int pn_tls_openssl_send(void* session, const void* buf, size_t len)
     }
 
     sess->last_error = ERR_get_error();
+    pn_tls_openssl_log_io_failure(sess, "send", err, rc, sys_err);
     return -2;
 }
 
@@ -785,11 +966,14 @@ static int pn_tls_openssl_recv(void* session, void* buf, size_t len)
 
     struct pn_openssl_session* sess = (struct pn_openssl_session*)session;
     int                        rc;
+    int                        sys_err;
     /* Clear the thread error queue so SSL_get_error() reflects only this
      * read. Without this a benign would-block read is misclassified as
      * SSL_ERROR_SSL when a prior session left a stale entry queued. */
     ERR_clear_error();
-    rc = SSL_read(sess->ssl, buf, (int)len);
+    pn_tls_openssl_sys_error_clear();
+    rc      = SSL_read(sess->ssl, buf, (int)len);
+    sys_err = pn_tls_openssl_sys_error_get();
     if (0 < rc) {
         return rc;
     }
@@ -803,6 +987,7 @@ static int pn_tls_openssl_recv(void* session, void* buf, size_t len)
     }
 
     sess->last_error = ERR_get_error();
+    pn_tls_openssl_log_io_failure(sess, "recv", err, rc, sys_err);
     return -2;
 }
 

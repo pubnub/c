@@ -51,10 +51,61 @@
  * fallbacks so recv_cb can report resets/failures without the transitive
  * include, mirroring the MBEDTLS_ERR_ENTROPY_SOURCE_FAILED pattern above. */
 #ifndef MBEDTLS_ERR_NET_CONN_RESET
-#define MBEDTLS_ERR_NET_CONN_RESET -0x0050
+#define MBEDTLS_ERR_NET_CONN_RESET (-0x0050)
 #endif
 #ifndef MBEDTLS_ERR_NET_RECV_FAILED
-#define MBEDTLS_ERR_NET_RECV_FAILED -0x004C
+#define MBEDTLS_ERR_NET_RECV_FAILED (-0x004C)
+#endif
+#ifndef MBEDTLS_ERR_NET_SEND_FAILED
+#define MBEDTLS_ERR_NET_SEND_FAILED (-0x004E)
+#endif
+
+/* Error constants used by session_error_str. Each has its own fallback so the
+ * table builds against every mbedTLS line, including configurations that
+ * drop headers (for example NET_C off on ESP-IDF). X509_ALLOC_FAILED is left
+ * out on purpose: mbedTLS 4.x aliases it to the same PSA value as
+ * SSL_ALLOC_FAILED, which would produce duplicate case labels. */
+#ifndef MBEDTLS_ERR_X509_CERT_VERIFY_FAILED
+#define MBEDTLS_ERR_X509_CERT_VERIFY_FAILED (-0x2700)
+#endif
+#ifndef MBEDTLS_ERR_X509_BAD_INPUT_DATA
+#define MBEDTLS_ERR_X509_BAD_INPUT_DATA (-0x2800)
+#endif
+#ifndef MBEDTLS_ERR_SSL_FATAL_ALERT_MESSAGE
+#define MBEDTLS_ERR_SSL_FATAL_ALERT_MESSAGE (-0x7780)
+#endif
+#ifndef MBEDTLS_ERR_SSL_UNEXPECTED_MESSAGE
+#define MBEDTLS_ERR_SSL_UNEXPECTED_MESSAGE (-0x7700)
+#endif
+#ifndef MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY
+#define MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY (-0x7880)
+#endif
+#ifndef MBEDTLS_ERR_SSL_CONN_EOF
+#define MBEDTLS_ERR_SSL_CONN_EOF (-0x7280)
+#endif
+#ifndef MBEDTLS_ERR_SSL_TIMEOUT
+#define MBEDTLS_ERR_SSL_TIMEOUT (-0x6800)
+#endif
+#ifndef MBEDTLS_ERR_SSL_EARLY_MESSAGE
+#define MBEDTLS_ERR_SSL_EARLY_MESSAGE (-0x6480)
+#endif
+#ifndef MBEDTLS_ERR_SSL_INVALID_RECORD
+#define MBEDTLS_ERR_SSL_INVALID_RECORD (-0x7200)
+#endif
+#ifndef MBEDTLS_ERR_SSL_INVALID_MAC
+#define MBEDTLS_ERR_SSL_INVALID_MAC (-0x7180)
+#endif
+#ifndef MBEDTLS_ERR_SSL_NO_CLIENT_CERTIFICATE
+#define MBEDTLS_ERR_SSL_NO_CLIENT_CERTIFICATE (-0x7480)
+#endif
+#ifndef MBEDTLS_ERR_SSL_BAD_CERTIFICATE
+#define MBEDTLS_ERR_SSL_BAD_CERTIFICATE (-0x7A00)
+#endif
+#ifndef MBEDTLS_ERR_SSL_BAD_INPUT_DATA
+#define MBEDTLS_ERR_SSL_BAD_INPUT_DATA (-0x7100)
+#endif
+#ifndef MBEDTLS_ERR_SSL_ALLOC_FAILED
+#define MBEDTLS_ERR_SSL_ALLOC_FAILED (-0x7F00)
 #endif
 
 /* config.h defines this inside the socket-transport guard; keep a safe
@@ -349,6 +400,64 @@ static int pn_psa_rng(void* ctx, unsigned char* buf, size_t len)
 }
 #endif
 
+static const char* pn_tls_mbedtls_session_error_str(int code);
+
+#if PUBNUB_CFG_MAX_LOG_MESSAGE_SIZE > 0
+/**
+ * @brief Render a short readable description of an mbedTLS return code.
+ *
+ * mbedtls_strerror() exists only when the mbedTLS configuration enables
+ * MBEDTLS_ERROR_C (some distributions, such as Nordic nrf_security, omit the
+ * error module and linking would fail). Without it the SDK's own symbolic
+ * name is used, or a fixed placeholder for codes outside that table.
+ *
+ * @param rc     mbedTLS return code.
+ * @param buf    Output buffer.
+ * @param buflen Output buffer size in bytes (must be non-zero).
+ */
+static void pn_tls_mbedtls_error_text(int rc, char* buf, size_t buflen)
+{
+#if defined(MBEDTLS_ERROR_C)
+    mbedtls_strerror(rc, buf, buflen);
+#else
+    const char* name = pn_tls_mbedtls_session_error_str(rc);
+
+    (void)pn_snprintf(buf, buflen, "%s", (NULL != name) ? name : "no text");
+#endif
+}
+#endif
+
+/**
+ * @brief Log an mbedTLS failure code with its readable text.
+ *
+ * The error-string lookup runs only when the message is emitted, so builds
+ * without log formatting drop the mbedTLS string tables.
+ *
+ * @param logger Logger to write to (may be NULL).
+ * @param level  Severity of the entry.
+ * @param what   Static operation label.
+ * @param rc     mbedTLS return code.
+ */
+static void pn_tls_mbedtls_log_rc(pubnub_logger_provider_t* logger,
+                                  pubnub_log_level_t        level,
+                                  const char*               what,
+                                  int                       rc)
+{
+#if PUBNUB_CFG_MAX_LOG_MESSAGE_SIZE > 0
+    if (PUBNUB_LOG_LEVEL_ENABLED(level) && NULL != logger && NULL != logger->log) {
+        char errbuf[64];
+
+        pn_tls_mbedtls_error_text(rc, errbuf, sizeof(errbuf));
+        PUBNUB_LOG(logger, level, "%s: rc=%d (%s)", what, rc, errbuf);
+    }
+#else
+    (void)logger;
+    (void)level;
+    (void)what;
+    (void)rc;
+#endif
+}
+
 /**
  * @brief Custom send callback for mbedTLS (non-blocking).
  *
@@ -376,7 +485,7 @@ static int pn_mbedtls_send_cb(void* ctx, const unsigned char* buf, size_t len)
                PUBNUB_LOG_LEVEL_WARNING,
                "TLS send_cb: socket_send error rc=%d",
                rc);
-    return -0x004E; /* MBEDTLS_ERR_NET_SEND_FAILED */
+    return MBEDTLS_ERR_NET_SEND_FAILED;
 }
 
 /**
@@ -677,13 +786,8 @@ static int pn_tls_mbedtls_session_create(void**      out_session,
     /* Attach config. */
     int setup_rc = mbedtls_ssl_setup(&sess->ssl, &mctx->conf);
     if (0 != setup_rc) {
-        char errbuf[64];
-        mbedtls_strerror(setup_rc, errbuf, sizeof(errbuf));
-        PUBNUB_LOG(mctx->logger,
-                   PUBNUB_LOG_LEVEL_ERROR,
-                   "TLS ssl_setup error: rc=%d (%s)",
-                   setup_rc,
-                   errbuf);
+        pn_tls_mbedtls_log_rc(
+            mctx->logger, PUBNUB_LOG_LEVEL_ERROR, "TLS ssl_setup error", setup_rc);
         sess->last_error = setup_rc;
         mbedtls_ssl_free(&sess->ssl);
         PN_FREE(mctx->allocator, sess);
@@ -693,13 +797,8 @@ static int pn_tls_mbedtls_session_create(void**      out_session,
     /* Set SNI hostname. */
     int sni_rc = mbedtls_ssl_set_hostname(&sess->ssl, hostname);
     if (0 != sni_rc) {
-        char errbuf[64];
-        mbedtls_strerror(sni_rc, errbuf, sizeof(errbuf));
-        PUBNUB_LOG(mctx->logger,
-                   PUBNUB_LOG_LEVEL_ERROR,
-                   "TLS set_hostname error: rc=%d (%s)",
-                   sni_rc,
-                   errbuf);
+        pn_tls_mbedtls_log_rc(
+            mctx->logger, PUBNUB_LOG_LEVEL_ERROR, "TLS set_hostname error", sni_rc);
         sess->last_error = sni_rc;
         mbedtls_ssl_free(&sess->ssl);
         PN_FREE(mctx->allocator, sess);
@@ -744,6 +843,50 @@ static int pn_tls_mbedtls_session_create(void**      out_session,
     return 0;
 }
 
+/**
+ * @brief Log a fatal handshake failure.
+ *
+ * Verification flags are logged as bare hex to avoid linking string tables.
+ *
+ * @param sess   Session that failed.
+ * @param rc     Handshake return code.
+ * @param resume 1 when a cached session was offered for this attempt.
+ */
+static void pn_tls_mbedtls_log_handshake_failure(const struct pn_mbedtls_session* sess,
+                                                 int rc,
+                                                 int resume)
+{
+#if PUBNUB_CFG_MAX_LOG_MESSAGE_SIZE > 0
+    if (PUBNUB_LOG_LEVEL_ENABLED(PUBNUB_LOG_LEVEL_WARNING)
+        && NULL != sess->logger && NULL != sess->logger->log) {
+        char errbuf[64];
+
+        pn_tls_mbedtls_error_text(rc, errbuf, sizeof(errbuf));
+        if (MBEDTLS_ERR_X509_CERT_VERIFY_FAILED == rc) {
+            PUBNUB_LOG(
+                sess->logger,
+                PUBNUB_LOG_LEVEL_WARNING,
+                "TLS handshake error: rc=%d verify_flags=0x%x resume=%d (%s)",
+                rc,
+                (unsigned)mbedtls_ssl_get_verify_result(&sess->ssl),
+                resume,
+                errbuf);
+        } else {
+            PUBNUB_LOG(sess->logger,
+                       PUBNUB_LOG_LEVEL_WARNING,
+                       "TLS handshake error: rc=%d resume=%d (%s)",
+                       rc,
+                       resume,
+                       errbuf);
+        }
+    }
+#else
+    (void)sess;
+    (void)rc;
+    (void)resume;
+#endif
+}
+
 /** @brief Drive TLS handshake (non-blocking).
  *
  * Call repeatedly until PN_TLS_OK. Returns PN_TLS_WANT_READ or
@@ -762,23 +905,26 @@ static int pn_tls_mbedtls_handshake(void* session)
         return -1;
     }
 
-    struct pn_mbedtls_session* sess = (struct pn_mbedtls_session*)session;
-    int                        rc   = mbedtls_ssl_handshake(&sess->ssl);
-    if (0 == rc) {
+    struct pn_mbedtls_session* sess   = (struct pn_mbedtls_session*)session;
+    int                        rc     = mbedtls_ssl_handshake(&sess->ssl);
+    int                        resume = 0;
+
 #if PUBNUB_CFG_TLS_SESSION_CACHE_SIZE > 0
-#ifdef PN_DEBUG_SOCKET_OPS
-        if (NULL != sess->mctx) {
-            PUBNUB_LOG(sess->mctx->logger,
-                       PUBNUB_LOG_LEVEL_DEBUG,
-                       "TLS handshake OK: host=%s resume_attempted=%d",
-                       sess->host,
-                       (int)sess->resume_attempted);
-        }
+    resume = (int)sess->resume_attempted;
 #endif
+    if (0 == rc) {
+        PUBNUB_LOG(sess->logger,
+                   PUBNUB_LOG_LEVEL_DEBUG,
+                   "TLS handshake OK: version=%s cipher=%s resume_attempted=%d",
+                   mbedtls_ssl_get_version(&sess->ssl),
+                   mbedtls_ssl_get_ciphersuite(&sess->ssl),
+                   resume);
+#if PUBNUB_CFG_TLS_SESSION_CACHE_SIZE > 0
         if (NULL != sess->mctx && 0 != sess->mctx->session_reuse) {
             pn_tls_mbedtls_cache_store(sess->mctx, sess->host, &sess->ssl);
         }
 #endif
+        (void)resume;
         return PN_TLS_OK;
     }
 
@@ -796,15 +942,7 @@ static int pn_tls_mbedtls_handshake(void* session)
     }
 #endif
 
-    {
-        char errbuf[64];
-        mbedtls_strerror(rc, errbuf, sizeof(errbuf));
-        PUBNUB_LOG(sess->logger,
-                   PUBNUB_LOG_LEVEL_WARNING,
-                   "TLS handshake error: rc=%d (%s)",
-                   rc,
-                   errbuf);
-    }
+    pn_tls_mbedtls_log_handshake_failure(sess, rc, resume);
     sess->last_error = rc;
     return -1;
 }
@@ -838,15 +976,8 @@ static int pn_tls_mbedtls_send(void* session, const void* buf, size_t len)
     }
 
     sess->last_error = rc;
-    {
-        char errbuf[64];
-        mbedtls_strerror(rc, errbuf, sizeof(errbuf));
-        PUBNUB_LOG(sess->logger,
-                   PUBNUB_LOG_LEVEL_WARNING,
-                   "TLS send error: rc=%d (%s)",
-                   rc,
-                   errbuf);
-    }
+    pn_tls_mbedtls_log_rc(
+        sess->logger, PUBNUB_LOG_LEVEL_WARNING, "TLS send error", rc);
     return -2;
 }
 
@@ -879,15 +1010,8 @@ static int pn_tls_mbedtls_recv(void* session, void* buf, size_t len)
     }
 
     sess->last_error = rc;
-    {
-        char errbuf[64];
-        mbedtls_strerror(rc, errbuf, sizeof(errbuf));
-        PUBNUB_LOG(sess->logger,
-                   PUBNUB_LOG_LEVEL_WARNING,
-                   "TLS recv error: rc=%d (%s)",
-                   rc,
-                   errbuf);
-    }
+    pn_tls_mbedtls_log_rc(
+        sess->logger, PUBNUB_LOG_LEVEL_WARNING, "TLS recv error", rc);
     return -2;
 }
 
@@ -924,21 +1048,34 @@ static int pn_tls_mbedtls_get_session_error(void* session)
     return ((struct pn_mbedtls_session*)session)->last_error;
 }
 
+/**
+ * @brief Map an mbedTLS error code to its symbolic name.
+ *
+ * @param code Code returned by get_session_error.
+ * @return Static name without the MBEDTLS_ERR_ prefix, or NULL when the code
+ *         is not in the table.
+ */
 static const char* pn_tls_mbedtls_session_error_str(int code)
 {
     switch (code) {
-    case -0x7780: return "SSL_ALLOC_FAILED";
-    case -0x7700: return "SSL_BAD_INPUT_DATA";
-    case -0x6800: return "SSL_INVALID_RECORD";
-    case -0x6480: return "SSL_CONN_EOF";
-    case -0x6200: return "SSL_NO_CLIENT_CERTIFICATE";
-    case -0x7F00: return "SSL_FATAL_ALERT_MESSAGE";
-    case -0x2700: return "X509_CERT_VERIFY_FAILED";
-    case -0x2780: return "X509_CERT_NOT_YET_VALID";
-    case -0x2800: return "X509_CERT_EXPIRED";
-    case -0x2900: return "X509_CERT_UNKNOWN";
-    case -0x3000: return "X509_BAD_INPUT_DATA";
-    case -0x0050: return "SSL_PEER_CLOSE_NOTIFY";
+    case MBEDTLS_ERR_X509_CERT_VERIFY_FAILED: return "X509_CERT_VERIFY_FAILED";
+    case MBEDTLS_ERR_X509_BAD_INPUT_DATA: return "X509_BAD_INPUT_DATA";
+    case MBEDTLS_ERR_SSL_FATAL_ALERT_MESSAGE: return "SSL_FATAL_ALERT_MESSAGE";
+    case MBEDTLS_ERR_SSL_UNEXPECTED_MESSAGE: return "SSL_UNEXPECTED_MESSAGE";
+    case MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY: return "SSL_PEER_CLOSE_NOTIFY";
+    case MBEDTLS_ERR_SSL_CONN_EOF: return "SSL_CONN_EOF";
+    case MBEDTLS_ERR_SSL_TIMEOUT: return "SSL_TIMEOUT";
+    case MBEDTLS_ERR_SSL_EARLY_MESSAGE: return "SSL_EARLY_MESSAGE";
+    case MBEDTLS_ERR_SSL_INVALID_RECORD: return "SSL_INVALID_RECORD";
+    case MBEDTLS_ERR_SSL_INVALID_MAC: return "SSL_INVALID_MAC";
+    case MBEDTLS_ERR_SSL_NO_CLIENT_CERTIFICATE:
+        return "SSL_NO_CLIENT_CERTIFICATE";
+    case MBEDTLS_ERR_SSL_BAD_CERTIFICATE: return "SSL_BAD_CERTIFICATE";
+    case MBEDTLS_ERR_SSL_BAD_INPUT_DATA: return "SSL_BAD_INPUT_DATA";
+    case MBEDTLS_ERR_SSL_ALLOC_FAILED: return "SSL_ALLOC_FAILED";
+    case MBEDTLS_ERR_NET_CONN_RESET: return "NET_CONN_RESET";
+    case MBEDTLS_ERR_NET_SEND_FAILED: return "NET_SEND_FAILED";
+    case MBEDTLS_ERR_NET_RECV_FAILED: return "NET_RECV_FAILED";
     default: return NULL;
     }
 }

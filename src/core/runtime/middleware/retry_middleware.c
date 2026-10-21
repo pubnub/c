@@ -14,7 +14,6 @@
 #include "middleware_internal.h"
 #include "retry_middleware_internal.h"
 
-#include "core/pn_format.h"
 #include "core/runtime/request_internal.h"
 
 #include "pubnub/config.h"
@@ -316,9 +315,8 @@ static pn_retry_slot_t* find_slot_by_request(pn_middleware_retry_t* mw,
  * @brief Copy terminal response from internal buffer to caller's response.
  *
  * Transitions to DONE (not IDLE) because the inner transport handle is
- * still live — caller_response->body aliases the inner RX buffer. The
- * poll sweep reclaims success/HTTP-status terminals; transport-error
- * terminals stay DONE until the core aborts the request through cancel().
+ * still live — caller_response->body aliases the inner RX buffer. Every
+ * terminal stays DONE until the core calls cancel() on the request handle.
  *
  * @param slot Retry slot; must be non-NULL. Sets slot->state to DONE
  *             after copying the response.
@@ -352,17 +350,14 @@ static void redispatch_slot(pn_middleware_retry_t* mw, pn_retry_slot_t* slot)
 {
     pubnub_transport_handle_t* handle;
 
-    if (NULL != mw->logger && NULL != mw->logger->log) {
-        pubnub_log_entry_text_t log_e = {0};
-        char                    buf[48];
-        log_e.base.type  = PUBNUB_LOG_ENTRY_TEXT;
-        log_e.base.level = PUBNUB_LOG_LEVEL_DEBUG;
-        log_e.base.file  = __FILE__;
-        log_e.base.line  = __LINE__;
-        pn_snprintf(buf, sizeof(buf), "Retry fired: attempt=%u", slot->attempt);
-        log_e.message = buf;
-        mw->logger->log(mw->logger, (const pubnub_log_entry_t*)&log_e);
-    }
+    PUBNUB_LOG(
+        mw->logger,
+        PUBNUB_LOG_LEVEL_DEBUG,
+        "Retry fired: retry_slot=%u req_slot=%u gen=%u attempt=%u",
+        (unsigned)(slot - mw->slots),
+        (unsigned)PN_CONTAINER_OF(slot->request, pn_request_t, http_request)->slot_id,
+        (unsigned)slot->request_generation,
+        slot->attempt);
 
     /* Release the prior attempt's transport resources. The completion
      * data has already been consumed by handle_completion(). */
@@ -378,15 +373,21 @@ static void redispatch_slot(pn_middleware_retry_t* mw, pn_retry_slot_t* slot)
     /* Clear internal response for the new attempt. */
     memset(&slot->internal_response, 0, sizeof(slot->internal_response));
 
-    /* Resume the core deadline before redispatch. */
-    slot->request->deadline_suspended = 0;
-
     handle = mw->next->send(mw->next, slot->request, &slot->internal_response);
 
     if (NULL == handle) {
         /* Inner chain rejected immediately — report transport error
          * so the core routes this to FAILED instead of hanging on
          * PENDING indefinitely. */
+        PUBNUB_LOG(
+            mw->logger,
+            PUBNUB_LOG_LEVEL_ERROR,
+            "Retry redispatch rejected by inner chain, reporting "
+            "transport error: retry_slot=%u req_slot=%u gen=%u attempt=%u",
+            (unsigned)(slot - mw->slots),
+            (unsigned)PN_CONTAINER_OF(slot->request, pn_request_t, http_request)->slot_id,
+            (unsigned)slot->request_generation,
+            slot->attempt);
         slot->internal_response.completion      = PUBNUB_HTTP_ERROR;
         slot->internal_response.transport_error = PUBNUB_ERR_TRANSPORT;
         finalize_slot(slot);
@@ -395,6 +396,15 @@ static void redispatch_slot(pn_middleware_retry_t* mw, pn_retry_slot_t* slot)
 
     slot->inner_handle = handle;
     slot->state        = PN_RETRY_SLOT_IN_FLIGHT;
+
+    /* Each attempt gets a fresh timeout; the suspension is lifted only after
+     * send so a stale pre-backoff timer cannot race a rejected redispatch. */
+    slot->request->deadline_suspended = 0;
+    if (0 != slot->request->timeout_ms) {
+        PN_CONTAINER_OF(slot->request, pn_request_t, http_request)->deadline =
+            pn_timer_start((pubnub_milliseconds_t)slot->request->timeout_ms,
+                           mw->platform);
+    }
 }
 
 /**
@@ -444,21 +454,16 @@ static void schedule_retry(pn_middleware_retry_t* mw, pn_retry_slot_t* slot)
      * its own per-attempt timeout on redispatch. */
     slot->request->deadline_suspended = 1;
 
-    if (NULL != mw->logger && NULL != mw->logger->log) {
-        pubnub_log_entry_text_t log_e = {0};
-        char                    buf[64];
-        log_e.base.type  = PUBNUB_LOG_ENTRY_TEXT;
-        log_e.base.level = PUBNUB_LOG_LEVEL_DEBUG;
-        log_e.base.file  = __FILE__;
-        log_e.base.line  = __LINE__;
-        pn_snprintf(buf,
-                    sizeof(buf),
-                    "Retry scheduled: attempt=%u delay_ms=%llu",
-                    slot->attempt,
-                    (unsigned long long)delay);
-        log_e.message = buf;
-        mw->logger->log(mw->logger, (const pubnub_log_entry_t*)&log_e);
-    }
+    PUBNUB_LOG(
+        mw->logger,
+        PUBNUB_LOG_LEVEL_DEBUG,
+        "Retry scheduled: retry_slot=%u req_slot=%u gen=%u attempt=%u "
+        "delay_ms=%llu",
+        (unsigned)(slot - mw->slots),
+        (unsigned)PN_CONTAINER_OF(slot->request, pn_request_t, http_request)->slot_id,
+        (unsigned)slot->request_generation,
+        slot->attempt,
+        (unsigned long long)delay);
 }
 
 /**
@@ -476,7 +481,7 @@ static void schedule_retry(pn_middleware_retry_t* mw, pn_retry_slot_t* slot)
  */
 static void handle_completion(pn_middleware_retry_t* mw, pn_retry_slot_t* slot)
 {
-    if (!is_retriable(&slot->internal_response)) {
+    if (0 != slot->origin_stale || !is_retriable(&slot->internal_response)) {
         finalize_slot(slot);
         return;
     }
@@ -715,6 +720,53 @@ static void retry_cancel(pubnub_transport_provider_t* self,
     slot->inner_handle    = NULL;
     slot->caller_response = NULL;
     slot->request         = NULL;
+}
+
+void pn_middleware_retry_cancel_waiting(pubnub_transport_provider_t* mw_base,
+                                        uint16_t current_generation)
+{
+    pn_middleware_retry_t* mw = (pn_middleware_retry_t*)mw_base;
+    unsigned int           i;
+
+    if (NULL == mw) {
+        return;
+    }
+
+    for (i = 0; i < PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS; i++) {
+        pn_retry_slot_t* slot = &mw->slots[i];
+
+        if (PN_RETRY_SLOT_IN_FLIGHT != slot->state
+            && PN_RETRY_SLOT_WAITING != slot->state) {
+            continue;
+        }
+        if (PN_CONTAINER_OF(slot->request, pn_request_t, http_request)->origin_generation
+            == current_generation) {
+            continue;
+        }
+        if (PN_RETRY_SLOT_IN_FLIGHT == slot->state) {
+            slot->origin_stale = 1;
+            continue;
+        }
+
+        PUBNUB_LOG(
+            mw->logger,
+            PUBNUB_LOG_LEVEL_DEBUG,
+            "Retry dropped on origin change: retry_slot=%u req_slot=%u "
+            "gen=%u attempt=%u",
+            (unsigned)i,
+            (unsigned)PN_CONTAINER_OF(slot->request, pn_request_t, http_request)->slot_id,
+            (unsigned)slot->request_generation,
+            slot->attempt);
+
+        /* The previous attempt's body belongs to the inner handle that stays
+         * live until the core cancels; the terminal reported here carries no
+         * HTTP framing, so it must not alias that body. */
+        memset(&slot->internal_response, 0, sizeof(slot->internal_response));
+        slot->internal_response.completion      = PUBNUB_HTTP_ERROR;
+        slot->internal_response.transport_error = PUBNUB_ERR_TRANSPORT;
+        slot->request->deadline_suspended       = 0;
+        finalize_slot(slot);
+    }
 }
 
 /**

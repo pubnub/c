@@ -12,6 +12,8 @@ config PUBNUB
 
 if PUBNUB
 
+comment "Connect/close churn: set CONFIG_NET_MAX_CONTEXTS (~20) and CONFIG_NET_MAX_CONN (~24)"
+
 config PUBNUB_CFG_ARENA_POOL_SIZE
     int "Arena pool size (bytes)"
     default 40960

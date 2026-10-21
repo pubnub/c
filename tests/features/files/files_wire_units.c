@@ -763,6 +763,208 @@ static void generate_url_body_freed_by_state_cleanup_on_error_path(void** state)
     assert_int_equal(t.outstanding, 0);
 }
 
+/* Allocator that fails the Nth allocation (1-based); 0 never fails. */
+typedef struct failing_allocator {
+    tracking_allocator_t base; /* MUST be first */
+    int                  calls;
+    int                  fail_at;
+} failing_allocator_t;
+
+static void* failing_alloc(pubnub_allocator_provider_t* self, size_t size, size_t align)
+{
+    failing_allocator_t* f = (failing_allocator_t*)(void*)self;
+
+    if (0 != f->fail_at && ++f->calls == f->fail_at) {
+        return NULL;
+    }
+    return tracking_alloc(self, size, align);
+}
+
+static void failing_allocator_init(failing_allocator_t* f, int fail_at)
+{
+    memset(f, 0, sizeof(*f));
+    tracking_allocator_init(&f->base);
+    f->base.base.alloc = failing_alloc;
+    f->fail_at         = fail_at;
+}
+
+static const char k_gen_ok[] =
+    "{\"status\":200,\"data\":{\"id\":\"file-id-1\",\"name\":\"a.txt\"},"
+    "\"file_upload_request\":{\"url\":\"https://bucket.s3.amazonaws.com/\","
+    "\"form_fields\":[{\"key\":\"key\",\"value\":\"abc\"},"
+    "{\"key\":\"Policy\",\"value\":\"xyz\"}]}}";
+
+static pubnub_json_value_t* parse_tree(pubnub_serialization_provider_t* serial,
+                                       const char*                      json)
+{
+    pubnub_json_value_t* tree =
+        serial->parse(serial, (const uint8_t*)json, strlen(json));
+
+    assert_non_null(tree);
+    return tree;
+}
+
+static void assert_state_empty(const pn_file_send_state_t* st)
+{
+    assert_null(st->file_id);
+    assert_null(st->file_name);
+    assert_null(st->upload_url);
+    assert_null(st->form_fields);
+    assert_int_equal(0, st->form_field_count);
+    assert_null(st->generate_url_tree);
+}
+
+static void assert_borrowed_tree_alive(pubnub_serialization_provider_t* serial,
+                                       const pubnub_json_value_t*       tree)
+{
+    assert_non_null(serial->object_get(tree, "status", 6));
+}
+
+static void generate_url_tree_fills_state_and_borrows(void** state)
+{
+    (void)state;
+    pubnub_serialization_provider_t* serial = pn_serialization_default();
+    failing_allocator_t              fa;
+    pn_file_send_state_t             st;
+    pubnub_json_value_t*             tree = parse_tree(serial, k_gen_ok);
+
+    failing_allocator_init(&fa, 0);
+    memset(&st, 0, sizeof(st));
+    st.allocator = &fa.base.base;
+
+    assert_int_equal(PUBNUB_OK, pn_file_parse_generate_url_tree(serial, tree, &st));
+    assert_string_equal("file-id-1", st.file_id);
+    assert_string_equal("a.txt", st.file_name);
+    assert_string_equal("https://bucket.s3.amazonaws.com/", st.upload_url);
+    assert_int_equal(2, st.form_field_count);
+    assert_memory_equal("key", st.form_fields[0].key.ptr, 3);
+    assert_memory_equal("xyz", st.form_fields[1].value.ptr, 3);
+    assert_null(st.generate_url_tree);
+    assert_borrowed_tree_alive(serial, tree);
+
+    fa.base.base.free(&fa.base.base, st.file_id);
+    fa.base.base.free(&fa.base.base, st.file_name);
+    fa.base.base.free(&fa.base.base, st.upload_url);
+    fa.base.base.free(&fa.base.base, st.form_fields);
+    assert_int_equal(0, fa.base.outstanding);
+    serial->value_destroy(serial, tree);
+}
+
+static void generate_url_tree_rejects_bad_shapes_without_side_effects(void** state)
+{
+    (void)state;
+    static const char* const bodies[] = {
+        "{\"status\":200}",
+        "{\"status\":200,\"data\":{\"name\":\"a\"},"
+        "\"file_upload_request\":{\"url\":\"https://h/\",\"form_fields\":[]}}",
+        "{\"status\":200,\"data\":{\"id\":\"i\"},"
+        "\"file_upload_request\":{\"url\":\"https://h/\",\"form_fields\":[]}}",
+        "{\"status\":200,\"data\":{\"id\":\"i\",\"name\":\"a\"},"
+        "\"file_upload_request\":{\"url\":\"https://h/\"}}",
+        "{\"status\":200,\"data\":{\"id\":\"i\",\"name\":\"a\"},"
+        "\"file_upload_request\":{\"form_fields\":[]}}",
+        "[1,2,3]",
+    };
+    pubnub_serialization_provider_t* serial = pn_serialization_default();
+    size_t                           i;
+
+    for (i = 0; i < sizeof(bodies) / sizeof(bodies[0]); ++i) {
+        failing_allocator_t  fa;
+        pn_file_send_state_t st;
+        pubnub_json_value_t* tree = parse_tree(serial, bodies[i]);
+
+        failing_allocator_init(&fa, 0);
+        memset(&st, 0, sizeof(st));
+        st.allocator = &fa.base.base;
+
+        assert_int_equal(PUBNUB_ERR_SERIALIZATION,
+                         pn_file_parse_generate_url_tree(serial, tree, &st));
+        assert_state_empty(&st);
+        assert_int_equal(0, fa.base.outstanding);
+        serial->value_destroy(serial, tree);
+    }
+}
+
+static void generate_url_tree_oom_releases_everything_and_keeps_tree(void** state)
+{
+    (void)state;
+    pubnub_serialization_provider_t* serial = pn_serialization_default();
+    int                              fail_at;
+
+    /* 1 = form_fields array, 2 = file_id, 3 = file_name, 4 = upload_url. */
+    for (fail_at = 1; fail_at <= 4; ++fail_at) {
+        failing_allocator_t  fa;
+        pn_file_send_state_t st;
+        pubnub_json_value_t* tree = parse_tree(serial, k_gen_ok);
+
+        failing_allocator_init(&fa, fail_at);
+        memset(&st, 0, sizeof(st));
+        st.allocator = &fa.base.base;
+
+        assert_int_equal(PUBNUB_ERR_OUT_OF_MEMORY,
+                         pn_file_parse_generate_url_tree(serial, tree, &st));
+        assert_state_empty(&st);
+        assert_int_equal(0, fa.base.outstanding);
+        assert_borrowed_tree_alive(serial, tree);
+        serial->value_destroy(serial, tree);
+    }
+}
+
+static void generate_url_tree_rejects_null_inputs(void** state)
+{
+    (void)state;
+    pubnub_serialization_provider_t* serial = pn_serialization_default();
+    pn_file_send_state_t             st;
+    pubnub_json_value_t*             tree = parse_tree(serial, k_gen_ok);
+
+    memset(&st, 0, sizeof(st));
+    assert_int_equal(PUBNUB_ERR_INVALID_ARGUMENT,
+                     pn_file_parse_generate_url_tree(NULL, tree, &st));
+    assert_int_equal(PUBNUB_ERR_INVALID_ARGUMENT,
+                     pn_file_parse_generate_url_tree(serial, NULL, &st));
+    assert_int_equal(PUBNUB_ERR_INVALID_ARGUMENT,
+                     pn_file_parse_generate_url_tree(serial, tree, NULL));
+    serial->value_destroy(serial, tree);
+}
+
+static void generate_url_tree_results_survive_body_clobber(void** state)
+{
+    (void)state;
+    pubnub_serialization_provider_t* serial = pn_serialization_default();
+    failing_allocator_t              fa;
+    pn_file_send_state_t             st;
+    char                             body[sizeof(k_gen_ok)];
+    pubnub_json_value_t*             tree;
+
+    memcpy(body, k_gen_ok, sizeof(body));
+    tree = parse_tree(serial, body);
+    failing_allocator_init(&fa, 0);
+    memset(&st, 0, sizeof(st));
+    st.allocator = &fa.base.base;
+
+    assert_int_equal(PUBNUB_OK, pn_file_parse_generate_url_tree(serial, tree, &st));
+
+    /* The transport may reuse its rx buffer once the response is handled;
+     * the extracted values must not alias it (copy-on-parse contract). */
+    memset(body, 'X', sizeof(body) - 1);
+
+    assert_string_equal("file-id-1", st.file_id);
+    assert_string_equal("a.txt", st.file_name);
+    assert_string_equal("https://bucket.s3.amazonaws.com/", st.upload_url);
+    assert_int_equal(2, st.form_field_count);
+    assert_int_equal(3, st.form_fields[0].key.len);
+    assert_memory_equal("key", st.form_fields[0].key.ptr, 3);
+    assert_memory_equal("abc", st.form_fields[0].value.ptr, 3);
+    assert_memory_equal("Policy", st.form_fields[1].key.ptr, 6);
+    assert_memory_equal("xyz", st.form_fields[1].value.ptr, 3);
+
+    fa.base.base.free(&fa.base.base, st.file_id);
+    fa.base.base.free(&fa.base.base, st.file_name);
+    fa.base.base.free(&fa.base.base, st.upload_url);
+    fa.base.base.free(&fa.base.base, st.form_fields);
+    serial->value_destroy(serial, tree);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -797,6 +999,11 @@ int main(void)
 #endif
         cmocka_unit_test(upload_request_does_not_set_timeout),
         cmocka_unit_test(generate_url_body_freed_by_state_cleanup_on_error_path),
+        cmocka_unit_test(generate_url_tree_fills_state_and_borrows),
+        cmocka_unit_test(generate_url_tree_rejects_bad_shapes_without_side_effects),
+        cmocka_unit_test(generate_url_tree_oom_releases_everything_and_keeps_tree),
+        cmocka_unit_test(generate_url_tree_rejects_null_inputs),
+        cmocka_unit_test(generate_url_tree_results_survive_body_clobber),
     };
 
     return cmocka_run_group_tests(tests, NULL, NULL);

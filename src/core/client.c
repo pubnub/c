@@ -27,8 +27,52 @@
  *  called on uninitialized caller-provided memory. */
 #define PN_INIT_MAGIC 0x504E4F4BU /* ASCII 'PNOK' */
 
+#if PUBNUB_LOG_ENABLED(WARNING)
+/** Evaluates to 1 (and logs a warning) when a provider entry is missing. */
+#define PN_PROVIDER_ENTRY_CHECK(logger, present, msg) \
+    ((present) ? 0 : (pn_provider_missing_log((logger), (msg)), 1))
+#else
+#define PN_PROVIDER_ENTRY_CHECK(logger, present, msg) \
+    ((void)(logger), (present) ? 0 : 1)
+#endif
+
 /* Forward declaration (defined after pn_process_tick). */
 void pn_context_wake_bg_thread(pubnub_context_t* ctx);
+
+/** @brief Pending-slot-map entry that is unused. */
+#define PN_PENDING_MAP_FREE ((uint16_t)UINT16_MAX)
+
+/** @brief Pending-slot-map entry whose queued request was cancelled. */
+#define PN_PENDING_MAP_CANCELLED ((uint16_t)(UINT16_MAX - 1U))
+
+/** @brief Pending-slot-map entry whose request waits in the pending queue. */
+#define PN_PENDING_MAP_QUEUED ((uint16_t)(UINT16_MAX - 2U))
+
+/** @brief Returned by pn_pending_map_claim() when every map entry is owned. */
+#define PN_PENDING_MAP_NONE ((uint16_t)UINT16_MAX)
+
+/** @brief Number of pending-slot-map entries (queue length plus pool capacity). */
+#define PN_PENDING_MAP_SIZE \
+    (PUBNUB_CFG_MAX_PENDING_REQUESTS + PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS)
+
+PUBNUB_STATIC_ASSERT(PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS + PN_PENDING_MAP_SIZE
+                         < (UINT16_MAX - 2U),
+                     "pool + pending map must not reach sentinel values");
+
+/**
+ * @brief Identity record behind one pending-range future id.
+ *
+ * The epoch changes on every claim, so an old copy of the id never matches a
+ * recycled entry.
+ */
+typedef struct pn_pending_map_entry {
+    /** Pool slot after promotion, or one of the PN_PENDING_MAP_* markers. */
+    uint16_t real_slot;
+    /** Generation of real_slot at promotion. */
+    uint16_t slot_generation;
+    /** Epoch of the current owner. */
+    uint16_t epoch;
+} pn_pending_map_entry_t;
 
 struct pubnub_context {
     pubnub_config_t config;
@@ -63,6 +107,12 @@ struct pubnub_context {
      *  points here after init — no dynamic allocation needed. */
     char origin_buf[PUBNUB_CFG_MAX_HOSTNAME_LEN];
 
+    /** Bumped under the context lock on each origin change. */
+    uint16_t origin_generation;
+
+    /** Last origin_generation the tick acted on. */
+    uint16_t origin_generation_seen;
+
     /** Set by `pubnub_create()`; owns deep-copied config strings. */
     uint8_t owns_config;
 
@@ -94,16 +144,10 @@ struct pubnub_context {
     pn_pending_queue_t pending_queue;
 
     /**
-     * Mapping from pending-queue logical indices to promoted real slot IDs.
-     *
-     * When a feature enqueues into the pending queue (because the pool
-     * is full), it gets a future with slot_id = pool.capacity + pending_idx.
-     * This array maps pending_idx -> real_slot_id after promotion. Before
-     * promotion the entry is PUBNUB_SLOT_ID_INVALID (not yet promoted).
-     *
-     * Sized to PUBNUB_CFG_MAX_PENDING_REQUESTS; allocated alongside the queue.
+     * Identity records for pending-range future ids. Sized to
+     * PN_PENDING_MAP_SIZE and guarded by the context lock.
      */
-    uint16_t* pending_slot_map;
+    pn_pending_map_entry_t* pending_slot_map;
 
     /**
      * Per-context lock (owned, may be NULL).
@@ -128,28 +172,18 @@ struct pubnub_context {
     void* bg_thread_handle;
 
     /**
-     * Flag controlling the background thread loop. Set to 1 when the
-     * thread is started; cleared to 0 by pubnub_deinit before joining.
-     *
-     * volatile is sufficient for a single-byte stop flag on all
-     * SDK-supported architectures (ARM, x86, RISC-V). _Atomic is
-     * formally more correct under C11 but adds header dependencies
-     * and is unavailable on C99 targets. The bg thread blocks in
-     * transport->poll() which provides the scheduling boundary;
-     * the thread_join after clearing the flag ensures visibility.
+     * Background loop flag. Cleared by pubnub_deinit before joining. Read
+     * without the context lock, so it is atomic.
      */
-    volatile uint8_t bg_running;
+    PUBNUB_ATOMIC_UINT8 bg_running;
 
     /** Set when the context owns the transport allocation (defaulted). */
     uint8_t transport_owned;
 
     /**
-     * Guards against concurrent transport->poll() calls. Set to 1
-     * under the context lock before entering poll(), cleared to 0
-     * after poll() returns. When a second pn_process_tick() sees
-     * this flag set, it returns PUBNUB_IN_PROGRESS immediately.
-     * Only meaningful when PUBNUB_CFG_THREAD_SAFETY is 1; the
-     * check compiles out otherwise via runtime-constant guard.
+     * Set while a thread is inside the transport (poll or a claimed cancel).
+     *
+     * @see pn_context_transport_claim_locked().
      */
     uint8_t poll_active;
 
@@ -182,6 +216,14 @@ PUBNUB_STATIC_ASSERT(PUBNUB_CFG_MAX_HOSTNAME_LEN >= 16
                          && PUBNUB_CFG_MAX_HOSTNAME_LEN <= 512,
                      "PUBNUB_CFG_MAX_HOSTNAME_LEN must be 16..512");
 
+/* pn_process_tick stack arrays are bounded only on no-heap builds; CMake
+ * enforces the same limit at configure time. */
+#if PUBNUB_CFG_NO_HEAP
+PUBNUB_STATIC_ASSERT(
+    PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS <= 16,
+    "Stack array for completing slots assumes <= 16 in-flight");
+#endif
+
 static void pn_context_retry_resolve_defaults(pubnub_config_t* cfg)
 {
 #if PUBNUB_ENABLE_RETRY
@@ -211,59 +253,175 @@ static void pn_context_retry_resolve_defaults(pubnub_config_t* cfg)
 #endif
 }
 
-/** @brief Check that all resolved providers have their mandatory vtable
- * entries. */
-static int pn_providers_vtable_valid(const pubnub_context_t* ctx)
+#if PUBNUB_LOG_ENABLED(WARNING)
+/** @brief Log a missing-provider-entry warning (usable inside expressions). */
+static void pn_provider_missing_log(pubnub_logger_provider_t* logger, const char* msg)
 {
-    if (!ctx->allocator || !ctx->transport || !ctx->serialization || !ctx->platform) {
-        return 0;
+    PUBNUB_LOG_TEXT(logger, PUBNUB_LOG_LEVEL_WARNING, msg);
+}
+#endif
+
+/** @brief Validate the optional lock group (all-or-none, non-zero size). */
+static pubnub_res_t pn_platform_lock_group_valid(pubnub_logger_provider_t* logger,
+                                                 pubnub_platform_provider_t* platform)
+{
+    if (NULL == platform->lock_size && NULL == platform->lock_init
+        && NULL == platform->lock_destroy && NULL == platform->lock_acquire
+        && NULL == platform->lock_release) {
+        return PUBNUB_OK;
     }
-    if (!ctx->allocator->alloc || !ctx->allocator->free
-        || !ctx->allocator->buf_acquire || !ctx->allocator->buf_release) {
-        return 0;
+    if (PN_PROVIDER_ENTRY_CHECK(
+            logger,
+            NULL != platform->lock_size,
+            "platform lock group incomplete: 'lock_size' is NULL")
+        || PN_PROVIDER_ENTRY_CHECK(
+            logger,
+            NULL != platform->lock_init,
+            "platform lock group incomplete: 'lock_init' is NULL")
+        || PN_PROVIDER_ENTRY_CHECK(
+            logger,
+            NULL != platform->lock_destroy,
+            "platform lock group incomplete: 'lock_destroy' is NULL")
+        || PN_PROVIDER_ENTRY_CHECK(
+            logger,
+            NULL != platform->lock_acquire,
+            "platform lock group incomplete: 'lock_acquire' is NULL")
+        || PN_PROVIDER_ENTRY_CHECK(
+            logger,
+            NULL != platform->lock_release,
+            "platform lock group incomplete: 'lock_release' is NULL")) {
+        return PUBNUB_ERR_PROVIDER_MISSING;
     }
-    if (!ctx->transport->send || !ctx->transport->poll || !ctx->transport->cancel) {
-        return 0;
+    if (0 == platform->lock_size(platform)) {
+        PUBNUB_LOG_TEXT(logger,
+                        PUBNUB_LOG_LEVEL_WARNING,
+                        "platform lock_size() returned 0 with lock group set");
+        return PUBNUB_ERR_PROVIDER_MISSING;
     }
-    if (!ctx->serialization->parse || !ctx->serialization->serialize
-        || !ctx->serialization->value_destroy) {
-        return 0;
+    return PUBNUB_OK;
+}
+
+/** @brief Validate the optional thread group (all-or-none). */
+static pubnub_res_t pn_platform_thread_group_valid(pubnub_logger_provider_t* logger,
+                                                   pubnub_platform_provider_t* platform)
+{
+    if (NULL == platform->thread_create && NULL == platform->thread_join) {
+        return PUBNUB_OK;
     }
-    if (!ctx->platform->monotonic_ms || !ctx->platform->sleep_ms
-        || !ctx->platform->random_bytes || !ctx->platform->wall_clock_ms) {
-        return 0;
+    if (PN_PROVIDER_ENTRY_CHECK(
+            logger,
+            NULL != platform->thread_create,
+            "platform thread group incomplete: 'thread_create' is NULL")
+        || PN_PROVIDER_ENTRY_CHECK(
+            logger,
+            NULL != platform->thread_join,
+            "platform thread group incomplete: 'thread_join' is NULL")) {
+        return PUBNUB_ERR_PROVIDER_MISSING;
     }
-    return 1;
+    return PUBNUB_OK;
 }
 
 /**
- * @brief Resolve `NULL` provider pointers to compiled-in defaults and
- *        call `init()` on per-context providers.
+ * @brief Check that all resolved providers have their mandatory vtable
+ *        entries and that the optional platform groups are complete.
  *
- * @return `PUBNUB_OK` on success.
+ * The optional lock and thread groups are enforced only when
+ * `PUBNUB_CFG_THREAD_SAFETY` is 1. Each failure is logged at WARNING level.
+ *
+ * @return `PUBNUB_OK`, or `PUBNUB_ERR_PROVIDER_MISSING` on any violation.
  */
-static pubnub_res_t pn_context_providers_resolve_and_init(pubnub_context_t* ctx)
+static pubnub_res_t pn_providers_vtable_valid(const pubnub_context_t* ctx)
 {
-    int transport_defaulted = 0;
-    int allocator_inited    = 0;
+    pubnub_logger_provider_t* logger = ctx->logger;
+    pubnub_res_t              rc     = PUBNUB_OK;
 
-    ctx->allocator = ctx->config.allocator;
-    if (!ctx->allocator) {
-        ctx->allocator = pn_allocator_default();
-    }
-    if (NULL == ctx->allocator) {
+    if (NULL == ctx->allocator || NULL == ctx->transport
+        || NULL == ctx->serialization || NULL == ctx->platform) {
+        PUBNUB_LOG_TEXT(logger,
+                        PUBNUB_LOG_LEVEL_WARNING,
+                        "mandatory providers could not be resolved");
         return PUBNUB_ERR_PROVIDER_MISSING;
     }
 
-    /* Initialize the logger manager and register providers. */
+    if (PN_PROVIDER_ENTRY_CHECK(logger,
+                                NULL != ctx->allocator->alloc,
+                                "allocator provider: mandatory 'alloc' is NULL")
+        || PN_PROVIDER_ENTRY_CHECK(
+            logger, NULL != ctx->allocator->free, "allocator provider: mandatory 'free' is NULL")
+        || PN_PROVIDER_ENTRY_CHECK(
+            logger,
+            NULL != ctx->allocator->buf_acquire,
+            "allocator provider: mandatory 'buf_acquire' is NULL")
+        || PN_PROVIDER_ENTRY_CHECK(
+            logger,
+            NULL != ctx->allocator->buf_release,
+            "allocator provider: mandatory 'buf_release' is NULL")) {
+        return PUBNUB_ERR_PROVIDER_MISSING;
+    }
+    if (PN_PROVIDER_ENTRY_CHECK(logger,
+                                NULL != ctx->transport->send,
+                                "transport provider: mandatory 'send' is NULL")
+        || PN_PROVIDER_ENTRY_CHECK(
+            logger, NULL != ctx->transport->poll, "transport provider: mandatory 'poll' is NULL")
+        || PN_PROVIDER_ENTRY_CHECK(
+            logger,
+            NULL != ctx->transport->cancel,
+            "transport provider: mandatory 'cancel' is NULL")) {
+        return PUBNUB_ERR_PROVIDER_MISSING;
+    }
+    if (PN_PROVIDER_ENTRY_CHECK(
+            logger,
+            NULL != ctx->serialization->parse,
+            "serialization provider: mandatory 'parse' is NULL")
+        || PN_PROVIDER_ENTRY_CHECK(
+            logger,
+            NULL != ctx->serialization->serialize,
+            "serialization provider: mandatory 'serialize' is NULL")
+        || PN_PROVIDER_ENTRY_CHECK(
+            logger,
+            NULL != ctx->serialization->value_destroy,
+            "serialization provider: mandatory 'value_destroy' is NULL")) {
+        return PUBNUB_ERR_PROVIDER_MISSING;
+    }
+    if (PN_PROVIDER_ENTRY_CHECK(
+            logger,
+            NULL != ctx->platform->monotonic_ms,
+            "platform provider: mandatory 'monotonic_ms' is NULL")
+        || PN_PROVIDER_ENTRY_CHECK(
+            logger,
+            NULL != ctx->platform->sleep_ms,
+            "platform provider: mandatory 'sleep_ms' is NULL")
+        || PN_PROVIDER_ENTRY_CHECK(
+            logger,
+            NULL != ctx->platform->random_bytes,
+            "platform provider: mandatory 'random_bytes' is NULL")
+        || PN_PROVIDER_ENTRY_CHECK(
+            logger,
+            NULL != ctx->platform->wall_clock_ms,
+            "platform provider: mandatory 'wall_clock_ms' is NULL")) {
+        return PUBNUB_ERR_PROVIDER_MISSING;
+    }
+
+    if (PUBNUB_CFG_THREAD_SAFETY) {
+        rc = pn_platform_lock_group_valid(logger, ctx->platform);
+        if (PUBNUB_OK == rc) {
+            rc = pn_platform_thread_group_valid(logger, ctx->platform);
+        }
+    }
+    return rc;
+}
+
+/** @brief Initialize the logger manager and register default/user loggers. */
+static void pn_context_logger_setup(pubnub_context_t* ctx)
+{
+    pubnub_logger_provider_t* default_logger = NULL;
+
     pn_logger_manager_init(&ctx->logger_manager);
 
     /* Built-in default logger (slot 0) — may be NULL in stub builds. */
-    {
-        pubnub_logger_provider_t* default_logger = pn_logger_default();
-        if (NULL != default_logger) {
-            (void)pn_logger_manager_add(&ctx->logger_manager, default_logger);
-        }
+    default_logger = pn_logger_default();
+    if (NULL != default_logger) {
+        (void)pn_logger_manager_add(&ctx->logger_manager, default_logger);
     }
 
     /* User-provided logger from config (adds alongside, not replaces). */
@@ -273,46 +431,52 @@ static pubnub_res_t pn_context_providers_resolve_and_init(pubnub_context_t* ctx)
 
     /* ctx->logger always points to the embedded manager. */
     ctx->logger = &ctx->logger_manager.base;
+}
 
+/**
+ * @brief Resolve the platform provider and run the allocator `init()` hook.
+ *
+ * @param[out] allocator_inited Set to 1 when the allocator `init()` ran.
+ */
+static pubnub_res_t pn_context_platform_and_allocator_init(pubnub_context_t* ctx,
+                                                           int* allocator_inited)
+{
     ctx->platform = ctx->config.platform;
     if (!ctx->platform) {
         ctx->platform = pn_platform_default();
     }
     if (NULL == ctx->platform) {
+        PUBNUB_LOG_TEXT(ctx->logger,
+                        PUBNUB_LOG_LEVEL_WARNING,
+                        "platform provider could not be resolved");
         return PUBNUB_ERR_PROVIDER_MISSING;
     }
 
     if (NULL != ctx->allocator->init) {
         const int arc = ctx->allocator->init(ctx->allocator, ctx->platform);
         if (0 != arc) {
+            PUBNUB_LOG_TEXT(ctx->logger,
+                            PUBNUB_LOG_LEVEL_WARNING,
+                            "allocator provider init failed");
             return PUBNUB_ERR_INTERNAL;
         }
-        allocator_inited = 1;
+        *allocator_inited = 1;
     }
+    return PUBNUB_OK;
+}
 
-    ctx->transport = ctx->config.transport;
-    if (!ctx->transport) {
-        ctx->transport      = pn_transport_default(ctx->allocator);
-        transport_defaulted = 1;
+/** @brief Run the allocator `deinit()` hook when its `init()` had run. */
+static void pn_context_allocator_release(pubnub_context_t* ctx, int allocator_inited)
+{
+    if (allocator_inited && NULL != ctx->allocator
+        && NULL != ctx->allocator->deinit) {
+        ctx->allocator->deinit(ctx->allocator, ctx->platform);
     }
+}
 
-    ctx->serialization = ctx->config.serialization;
-    if (!ctx->serialization) {
-        ctx->serialization = pn_serialization_default();
-    }
-
-    ctx->crypto_module = ctx->config.crypto_module;
-
-    if (!pn_providers_vtable_valid(ctx)) {
-        goto cleanup_pre_init;
-    }
-
-    /* Wire platform into the logger manager now that it is validated
-     * non-NULL with mandatory vtable entries present. Earlier logging
-     * (during allocator->init) operates without timestamps; wiring
-     * here closes the NULL-dereference window on targets without MMU. */
-    pn_logger_manager_wire(&ctx->logger_manager, ctx->platform);
-
+/** @brief Populate the dependency bundle handed to provider `init()` hooks. */
+static void pn_context_deps_fill(pubnub_context_t* ctx)
+{
     ctx->deps.allocator = ctx->allocator;
     ctx->deps.logger    = ctx->logger;
     ctx->deps.platform  = ctx->platform;
@@ -322,44 +486,64 @@ static pubnub_res_t pn_context_providers_resolve_and_init(pubnub_context_t* ctx)
         ctx->config.tcp_keepalive.enabled ? &ctx->config.tcp_keepalive : NULL;
     ctx->deps.dns_primary   = ctx->dns_primary;
     ctx->deps.dns_secondary = ctx->dns_secondary;
+}
 
+/**
+ * @brief Roll back after a vtable validation failure, before any provider
+ *        `init()` has run.
+ */
+static void pn_context_providers_rollback_pre_init(pubnub_context_t* ctx,
+                                                   int transport_defaulted,
+                                                   int allocator_inited)
+{
+    if (transport_defaulted && NULL != ctx->transport && NULL != ctx->allocator
+        && NULL != ctx->allocator->free) {
+        PN_FREE(ctx->allocator, ctx->transport);
+        ctx->transport = NULL;
+    }
+    pn_context_allocator_release(ctx, allocator_inited);
+}
+
+/**
+ * @brief Run transport, serialization and crypto `init()` hooks, unwinding
+ *        already-initialized providers (and the allocator) on failure.
+ */
+static pubnub_res_t pn_context_providers_init(pubnub_context_t* ctx,
+                                              int transport_defaulted,
+                                              int allocator_inited)
+{
     if (ctx->transport->init
         && 0 != ctx->transport->init(ctx->transport, &ctx->deps)) {
+        PUBNUB_LOG_TEXT(ctx->logger,
+                        PUBNUB_LOG_LEVEL_WARNING,
+                        "transport provider init failed");
         if (transport_defaulted) {
             PN_FREE(ctx->allocator, ctx->transport);
             ctx->transport = NULL;
         }
-        if (allocator_inited && NULL != ctx->allocator->deinit) {
-            ctx->allocator->deinit(ctx->allocator, ctx->platform);
-        }
+        pn_context_allocator_release(ctx, allocator_inited);
         return PUBNUB_ERR_INTERNAL;
     }
     ctx->transport_owned = (uint8_t)transport_defaulted;
 
     if (ctx->serialization->init
         && 0 != ctx->serialization->init(ctx->serialization, &ctx->deps)) {
+        PUBNUB_LOG_TEXT(ctx->logger,
+                        PUBNUB_LOG_LEVEL_WARNING,
+                        "serialization provider init failed");
         goto cleanup_transport;
     }
 
 #if PUBNUB_ENABLE_CRYPTO
     if (NULL != ctx->crypto_module
         && 0 != pn_crypto_module_providers_init(ctx->crypto_module, &ctx->deps)) {
+        PUBNUB_LOG_TEXT(
+            ctx->logger, PUBNUB_LOG_LEVEL_WARNING, "crypto module init failed");
         goto cleanup_serialization;
     }
 #endif
 
     return PUBNUB_OK;
-
-cleanup_pre_init:
-    if (transport_defaulted && NULL != ctx->transport && NULL != ctx->allocator
-        && NULL != ctx->allocator->free) {
-        PN_FREE(ctx->allocator, ctx->transport);
-        ctx->transport = NULL;
-    }
-    if (allocator_inited && NULL != ctx->allocator->deinit) {
-        ctx->allocator->deinit(ctx->allocator, ctx->platform);
-    }
-    return PUBNUB_ERR_PROVIDER_MISSING;
 
 #if PUBNUB_ENABLE_CRYPTO
 cleanup_serialization:
@@ -376,11 +560,67 @@ cleanup_transport:
         PN_FREE(ctx->allocator, ctx->transport);
     }
     ctx->transport = NULL;
-    if (allocator_inited && NULL != ctx->allocator->deinit) {
-        ctx->allocator->deinit(ctx->allocator, ctx->platform);
-    }
+    pn_context_allocator_release(ctx, allocator_inited);
 
     return PUBNUB_ERR_INTERNAL;
+}
+
+/**
+ * @brief Resolve `NULL` provider pointers to compiled-in defaults and
+ *        call `init()` on per-context providers.
+ *
+ * @return `PUBNUB_OK` on success.
+ */
+static pubnub_res_t pn_context_providers_resolve_and_init(pubnub_context_t* ctx)
+{
+    pubnub_res_t rc                  = PUBNUB_OK;
+    int          transport_defaulted = 0;
+    int          allocator_inited    = 0;
+
+    ctx->allocator = ctx->config.allocator;
+    if (!ctx->allocator) {
+        ctx->allocator = pn_allocator_default();
+    }
+    if (NULL == ctx->allocator) {
+        return PUBNUB_ERR_PROVIDER_MISSING;
+    }
+
+    pn_context_logger_setup(ctx);
+
+    rc = pn_context_platform_and_allocator_init(ctx, &allocator_inited);
+    if (PUBNUB_OK != rc) {
+        return rc;
+    }
+
+    ctx->transport = ctx->config.transport;
+    if (!ctx->transport) {
+        ctx->transport      = pn_transport_default(ctx->allocator);
+        transport_defaulted = 1;
+    }
+
+    ctx->serialization = ctx->config.serialization;
+    if (!ctx->serialization) {
+        ctx->serialization = pn_serialization_default();
+    }
+
+    ctx->crypto_module = ctx->config.crypto_module;
+
+    rc = pn_providers_vtable_valid(ctx);
+    if (PUBNUB_OK != rc) {
+        pn_context_providers_rollback_pre_init(
+            ctx, transport_defaulted, allocator_inited);
+        return rc;
+    }
+
+    /* Wire platform into the logger manager now that it is validated
+     * non-NULL with mandatory vtable entries present. Earlier logging
+     * (during allocator->init) operates without timestamps; wiring
+     * here closes the NULL-dereference window on targets without MMU. */
+    pn_logger_manager_wire(&ctx->logger_manager, ctx->platform);
+
+    pn_context_deps_fill(ctx);
+
+    return pn_context_providers_init(ctx, transport_defaulted, allocator_inited);
 }
 
 /** @brief Deinit per-context providers in reverse init order. */
@@ -534,30 +774,30 @@ static pubnub_res_t pn_context_init_common(pubnub_context_t*      ctx,
         ctx->logger->set_level(ctx->logger, ctx->log_level);
     }
 
-    /* Allocate and initialize the per-context lock when thread safety
-     * is enabled and the platform supplies lock primitives. Lock init
-     * failure is fatal — running thread-safe code without a working
-     * mutex is undefined behavior. */
+    /* Provider validation guarantees the lock group is complete and
+     * lock_size() is non-zero whenever lock_size is set. */
     ctx->lock = NULL;
-    if (PUBNUB_CFG_THREAD_SAFETY && NULL != ctx->platform
-        && NULL != ctx->platform->lock_size && NULL != ctx->platform->lock_init) {
-        const size_t msz = ctx->platform->lock_size(ctx->platform);
-        if (msz > 0) {
-            pubnub_lock_t* lk =
-                (pubnub_lock_t*)PN_ALLOC(ctx->allocator, msz, sizeof(void*));
-            if (NULL == lk) {
-                pn_context_providers_deinit(ctx);
-                return PUBNUB_ERR_NOT_INITIALIZED;
-            }
-            int mrc = ctx->platform->lock_init(ctx->platform, lk);
-            if (0 != mrc) {
-                PN_FREE(ctx->allocator, lk);
-                pn_context_providers_deinit(ctx);
-                return PUBNUB_ERR_NOT_INITIALIZED;
-            }
-            ctx->lock = lk;
-            pn_logger_manager_wire_lock(&ctx->logger_manager, ctx->lock);
+    if (PUBNUB_CFG_THREAD_SAFETY && NULL != ctx->platform->lock_size) {
+        const size_t   msz = ctx->platform->lock_size(ctx->platform);
+        pubnub_lock_t* lk =
+            (pubnub_lock_t*)PN_ALLOC(ctx->allocator, msz, sizeof(void*));
+        if (NULL == lk) {
+            PUBNUB_LOG_TEXT(ctx->logger,
+                            PUBNUB_LOG_LEVEL_WARNING,
+                            "platform lock allocation failed");
+            pn_context_providers_deinit(ctx);
+            return PUBNUB_ERR_NOT_INITIALIZED;
         }
+        if (0 != ctx->platform->lock_init(ctx->platform, lk)) {
+            PUBNUB_LOG_TEXT(ctx->logger,
+                            PUBNUB_LOG_LEVEL_WARNING,
+                            "platform lock_init() returned non-zero");
+            PN_FREE(ctx->allocator, lk);
+            pn_context_providers_deinit(ctx);
+            return PUBNUB_ERR_NOT_INITIALIZED;
+        }
+        ctx->lock = lk;
+        pn_logger_manager_wire_lock(&ctx->logger_manager, ctx->lock);
     }
 
     /* Allocate the request slot pool through the resolved allocator. */
@@ -579,10 +819,10 @@ static pubnub_res_t pn_context_init_common(pubnub_context_t*      ctx,
         goto cleanup_pool;
     }
 
-    /* Allocate the pending-slot map: one uint16 per pending entry. */
-    ctx->pending_slot_map = (uint16_t*)PN_ALLOC(
+    /* Pending-slot map. */
+    ctx->pending_slot_map = (pn_pending_map_entry_t*)PN_ALLOC(
         ctx->allocator,
-        (size_t)PUBNUB_CFG_MAX_PENDING_REQUESTS * sizeof(uint16_t),
+        (size_t)PN_PENDING_MAP_SIZE * sizeof(pn_pending_map_entry_t),
         sizeof(uint16_t));
     if (NULL == ctx->pending_slot_map) {
         rc = PUBNUB_ERR_OUT_OF_MEMORY;
@@ -590,8 +830,10 @@ static pubnub_res_t pn_context_init_common(pubnub_context_t*      ctx,
     }
     {
         uint16_t i;
-        for (i = 0; i < (uint16_t)PUBNUB_CFG_MAX_PENDING_REQUESTS; i++) {
-            ctx->pending_slot_map[i] = PUBNUB_SLOT_ID_INVALID;
+        for (i = 0; i < (uint16_t)PN_PENDING_MAP_SIZE; i++) {
+            ctx->pending_slot_map[i].real_slot       = PN_PENDING_MAP_FREE;
+            ctx->pending_slot_map[i].slot_generation = 0;
+            ctx->pending_slot_map[i].epoch           = 0;
         }
     }
 
@@ -704,7 +946,7 @@ static void pn_context_join_bg_thread(pubnub_context_t* ctx)
         return;
     }
 
-    ctx->bg_running = 0;
+    PUBNUB_ATOMIC_STORE_U8(&ctx->bg_running, 0);
     pn_context_wake_bg_thread(ctx);
 
     if (NULL != ctx->platform->thread_is_current
@@ -1091,26 +1333,29 @@ void pubnub_deinit(pubnub_context_t* ctx)
     while (pn_pending_queue_count(&ctx->pending_queue) > 0) {
         pn_pending_entry_t* head_entry =
             &ctx->pending_queue.entries[ctx->pending_queue.head];
-        if (!head_entry->occupied) {
-            /* Entry was already cancelled (e.g. pubnub_future_release
-             * on a pending-range future). cancel_at zeroed the entry
-             * and already decremented count. Advance head only. */
-            ctx->pending_queue.head = (uint16_t)((ctx->pending_queue.head + 1)
-                                                 % ctx->pending_queue.capacity);
-            continue;
-        }
         pn_pending_cancel_data_t cancel_data = {0};
         uint16_t                 map_idx     = head_entry->map_index;
         cancel_data.async_cb_future.ctx      = ctx;
         cancel_data.async_cb_future.slot_id =
             (uint16_t)(ctx->pool.capacity + map_idx);
         cancel_data.async_cb_future.status = PUBNUB_IN_PROGRESS;
-        (void)pn_pending_queue_cancel_at(&ctx->pending_queue, 0, &cancel_data);
-        /* cancel_at zeroed the entry and decremented count but did
-         * NOT advance head (by design — mid-queue cancel must not
-         * perturb head). Advance head for sequential drain. */
-        ctx->pending_queue.head = (uint16_t)((ctx->pending_queue.head + 1)
-                                             % ctx->pending_queue.capacity);
+        if (NULL != ctx->pending_slot_map
+            && map_idx < (uint16_t)PN_PENDING_MAP_SIZE) {
+            cancel_data.async_cb_future.generation =
+                ctx->pending_slot_map[map_idx].epoch;
+        }
+        if (PUBNUB_OK
+            != pn_pending_queue_cancel_at(&ctx->pending_queue, 0, &cancel_data)) {
+            /* Unreachable while the head is occupied. Stepping over the hole
+             * still guarantees progress. */
+            const uint16_t before = ctx->pending_queue.count;
+
+            pn_pending_queue_trim_head(&ctx->pending_queue);
+            if (before == ctx->pending_queue.count) {
+                break;
+            }
+            continue;
+        }
         pn_pending_cancel_data_run(&cancel_data);
     }
     pn_pending_queue_deinit(&ctx->pending_queue);
@@ -1190,44 +1435,35 @@ pn_request_pool_t* pn_context_request_pool(pubnub_context_t* ctx)
 
 pn_request_t* pn_ready_slot_for_future(pubnub_future_t future)
 {
+    pn_request_pool_t* pool;
+    pn_pending_ref_t   ref;
+    pn_request_t*      slot;
+
     if (NULL == future.ctx) {
         return NULL;
     }
-
-    /* Resolve pending-range futures via the map. */
-    const uint16_t capacity = pn_context_pool_capacity(future.ctx);
-    uint16_t       real_slot_id;
-
-    if (0 != capacity && future.slot_id >= capacity) {
-        const uint16_t  pending_idx = (uint16_t)(future.slot_id - capacity);
-        const uint16_t* map         = pn_context_pending_slot_map(future.ctx);
-        if (NULL == map) {
-            return NULL;
-        }
-        real_slot_id = map[pending_idx];
-        if (PUBNUB_SLOT_ID_INVALID == real_slot_id) {
-            return NULL;
-        }
-    } else {
-        real_slot_id = future.slot_id;
-    }
-
-    pn_request_pool_t* pool = pn_context_request_pool(future.ctx);
+    pool = pn_context_request_pool(future.ctx);
     if (NULL == pool) {
         return NULL;
     }
-    pn_request_t* slot = pn_request_pool_get(pool, real_slot_id);
-    if (NULL == slot) {
+
+    if (future.slot_id < pool->capacity) {
+        ref.kind            = PN_PENDING_REF_REAL;
+        ref.real_slot       = future.slot_id;
+        ref.real_generation = future.generation;
+    } else {
+        pn_request_pool_lock(pool);
+        ref = pn_context_pending_resolve_locked(
+            future.ctx, future.slot_id, future.generation);
+        pn_request_pool_unlock(pool);
+    }
+    if (PN_PENDING_REF_REAL != ref.kind) {
         return NULL;
     }
-    /* Stale-future guard for direct-slot futures only.
-     * Pending-range futures always carry generation=0 and use
-     * map-entry invalidation (PUBNUB_SLOT_ID_INVALID) for ABA
-     * protection instead of the generation counter. */
-    if (0 == capacity || future.slot_id < capacity) {
-        if (future.generation != slot->generation) {
-            return NULL;
-        }
+
+    slot = pn_request_pool_get(pool, ref.real_slot);
+    if (NULL == slot || ref.real_generation != slot->generation) {
+        return NULL;
     }
     if (!pn_request_is_ready(slot)) {
         return NULL;
@@ -1287,6 +1523,98 @@ pubnub_platform_provider_t* pn_context_platform(const pubnub_context_t* ctx)
         return NULL;
     }
     return ctx->platform;
+}
+
+pubnub_res_t pn_context_origin_snapshot(const pubnub_context_t* ctx,
+                                        char*                   buf,
+                                        size_t                  buf_len,
+                                        uint16_t*               out_generation)
+{
+    size_t len;
+
+    if (NULL == buf || 0 == buf_len) {
+        return PUBNUB_ERR_INVALID_ARGUMENT;
+    }
+    buf[0] = '\0';
+    if (NULL != out_generation) {
+        *out_generation = 0;
+    }
+    if (NULL == ctx || PN_INIT_MAGIC != ctx->initialized) {
+        return PUBNUB_ERR_NOT_INITIALIZED;
+    }
+
+    pn_ctx_lock(ctx->platform, ctx->lock);
+    len = strlen(ctx->origin_buf);
+    if (len < buf_len) {
+        memcpy(buf, ctx->origin_buf, len + 1U);
+        if (NULL != out_generation) {
+            *out_generation = ctx->origin_generation;
+        }
+    }
+    pn_ctx_unlock(ctx->platform, ctx->lock);
+
+    return (len < buf_len) ? PUBNUB_OK : PUBNUB_ERR_BUFFER_TOO_SMALL;
+}
+
+void pn_context_cancel_slot_transport(pubnub_context_t* ctx, uint16_t slot_id)
+{
+    pubnub_transport_handle_t* handle;
+    pn_request_t*              slot;
+
+    if (NULL == ctx || PN_INIT_MAGIC != ctx->initialized
+        || slot_id >= ctx->pool.capacity) {
+        return;
+    }
+    slot = pn_request_pool_get(&ctx->pool, slot_id);
+    if (NULL == slot) {
+        return;
+    }
+
+    pn_request_pool_lock(&ctx->pool);
+    handle                 = slot->transport_handle;
+    slot->transport_handle = NULL;
+    pn_request_pool_unlock(&ctx->pool);
+
+    if (NULL != handle && NULL != ctx->pipeline.chain_head
+        && NULL != ctx->pipeline.chain_head->cancel) {
+        ctx->pipeline.chain_head->cancel(ctx->pipeline.chain_head, handle);
+    }
+}
+
+void pn_context_release_terminal_slot(pubnub_context_t* ctx,
+                                      uint16_t          slot_id,
+                                      uint16_t          generation)
+{
+    pn_request_t* slot;
+
+    if (NULL == ctx || PN_INIT_MAGIC != ctx->initialized
+        || slot_id >= ctx->pool.capacity) {
+        return;
+    }
+    slot = pn_request_pool_get(&ctx->pool, slot_id);
+    if (NULL == slot
+        || (PN_GENERATION_ANY != generation && generation != slot->generation)) {
+        return;
+    }
+
+    pn_context_cancel_slot_transport(ctx, slot_id);
+
+    pn_request_pool_lock(&ctx->pool);
+    pn_request_pool_release(&ctx->pool, slot_id);
+    pn_request_pool_unlock(&ctx->pool);
+}
+
+uint16_t pn_context_origin_generation(const pubnub_context_t* ctx)
+{
+    uint16_t generation;
+
+    if (NULL == ctx || PN_INIT_MAGIC != ctx->initialized) {
+        return 0;
+    }
+    pn_ctx_lock(ctx->platform, ctx->lock);
+    generation = ctx->origin_generation;
+    pn_ctx_unlock(ctx->platform, ctx->lock);
+    return generation;
 }
 
 pubnub_res_t pubnub_logger_add(pubnub_context_t* ctx, pubnub_logger_provider_t* logger)
@@ -1454,20 +1782,139 @@ pn_pending_queue_t* pn_context_pending_queue(pubnub_context_t* ctx)
     return &ctx->pending_queue;
 }
 
-uint16_t* pn_context_pending_slot_map(pubnub_context_t* ctx)
-{
-    if (NULL == ctx || PN_INIT_MAGIC != ctx->initialized) {
-        return NULL;
-    }
-    return ctx->pending_slot_map;
-}
-
 uint16_t pn_context_pool_capacity(const pubnub_context_t* ctx)
 {
     if (NULL == ctx || PN_INIT_MAGIC != ctx->initialized) {
         return 0;
     }
     return ctx->pool.capacity;
+}
+
+/**
+ * @brief Whether a promoted map entry still names the request it was made
+ *        for. Caller holds the pool lock.
+ */
+static int pn_pending_map_entry_alive(pn_request_pool_t*            pool,
+                                      const pn_pending_map_entry_t* entry)
+{
+    const pn_request_t* slot;
+
+    if (entry->real_slot >= pool->capacity) {
+        return 0;
+    }
+    slot = pn_request_pool_get(pool, entry->real_slot);
+    return NULL != slot && !pn_request_is_idle(slot)
+        && slot->generation == entry->slot_generation;
+}
+
+pn_pending_ref_t pn_context_pending_resolve_locked(pubnub_context_t* ctx,
+                                                   uint16_t          slot_id,
+                                                   uint16_t          generation)
+{
+    pn_pending_ref_t              ref = {PN_PENDING_REF_STALE, 0, 0, 0, NULL};
+    const pn_pending_map_entry_t* entry;
+    uint16_t                      idx;
+
+    if (NULL == ctx || PN_INIT_MAGIC != ctx->initialized) {
+        return ref;
+    }
+    if (slot_id < ctx->pool.capacity) {
+        ref.kind            = PN_PENDING_REF_REAL;
+        ref.real_slot       = slot_id;
+        ref.real_generation = generation;
+        return ref;
+    }
+
+    idx = (uint16_t)(slot_id - ctx->pool.capacity);
+    if (idx >= (uint16_t)PN_PENDING_MAP_SIZE || NULL == ctx->pending_slot_map) {
+        return ref;
+    }
+    entry = &ctx->pending_slot_map[idx];
+    if (generation != entry->epoch || PN_PENDING_MAP_FREE == entry->real_slot) {
+        return ref;
+    }
+
+    if (PN_PENDING_MAP_CANCELLED == entry->real_slot) {
+        ref.kind = PN_PENDING_REF_CANCELLED;
+    } else if (PN_PENDING_MAP_QUEUED == entry->real_slot) {
+        pn_pending_queue_t* queue = &ctx->pending_queue;
+
+        if (PUBNUB_OK == pn_pending_queue_find(queue, idx, &ref.logical)) {
+            ref.kind = PN_PENDING_REF_QUEUED;
+            ref.entry =
+                &queue->entries[(queue->head + ref.logical) % queue->capacity];
+        }
+    } else if (pn_pending_map_entry_alive(&ctx->pool, entry)) {
+        ref.kind            = PN_PENDING_REF_REAL;
+        ref.real_slot       = entry->real_slot;
+        ref.real_generation = entry->slot_generation;
+    }
+    return ref;
+}
+
+pn_pending_ref_t pn_context_pending_cancel_locked(pubnub_context_t* ctx,
+                                                  uint16_t          slot_id,
+                                                  uint16_t          generation,
+                                                  int               retire,
+                                                  pn_pending_cancel_data_t* out_data)
+{
+    pn_pending_ref_t ref =
+        pn_context_pending_resolve_locked(ctx, slot_id, generation);
+    pn_pending_map_entry_t* entry = NULL;
+
+    if (PN_PENDING_REF_REAL != ref.kind && PN_PENDING_REF_QUEUED != ref.kind
+        && PN_PENDING_REF_CANCELLED != ref.kind) {
+        return ref;
+    }
+    if (slot_id >= ctx->pool.capacity) {
+        entry = &ctx->pending_slot_map[slot_id - ctx->pool.capacity];
+    }
+
+    if (PN_PENDING_REF_QUEUED == ref.kind) {
+        if (PUBNUB_OK
+            != pn_pending_queue_cancel_at(&ctx->pending_queue, ref.logical, out_data)) {
+            ref.kind  = PN_PENDING_REF_STALE;
+            ref.entry = NULL;
+            return ref;
+        }
+        out_data->async_cb_future.ctx        = ctx;
+        out_data->async_cb_future.slot_id    = slot_id;
+        out_data->async_cb_future.generation = generation;
+        out_data->async_cb_future.status     = PUBNUB_IN_PROGRESS;
+        entry->real_slot = retire ? PN_PENDING_MAP_FREE : PN_PENDING_MAP_CANCELLED;
+        ref.kind  = PN_PENDING_REF_REMOVED;
+        ref.entry = NULL;
+    } else if (retire && NULL != entry) {
+        entry->real_slot = PN_PENDING_MAP_FREE;
+    }
+    return ref;
+}
+
+pn_pending_ref_t pn_context_pending_cancel_or_resolve(pubnub_context_t* ctx,
+                                                      uint16_t          slot_id,
+                                                      uint16_t generation,
+                                                      int      run_async_cb)
+{
+    pn_pending_cancel_data_t cancel_data = {0};
+    pn_pending_ref_t         ref  = {PN_PENDING_REF_STALE, 0, 0, 0, NULL};
+    pn_request_pool_t*       pool = pn_context_request_pool(ctx);
+
+    if (NULL == pool) {
+        return ref;
+    }
+
+    pn_request_pool_lock(pool);
+    ref = pn_context_pending_cancel_locked(ctx, slot_id, generation, 1, &cancel_data);
+    pn_request_pool_unlock(pool);
+
+    if (PN_PENDING_REF_REMOVED == ref.kind) {
+        if (!run_async_cb) {
+            cancel_data.async_cb           = NULL;
+            cancel_data.async_cb_user_data = NULL;
+        }
+        pn_pending_cancel_data_run(&cancel_data);
+    }
+    return ref;
 }
 
 pn_pending_entry_t* pn_prep_acquire(pubnub_context_t* ctx)
@@ -1570,7 +2017,7 @@ pubnub_res_t pn_feature_prepare(pubnub_context_t* ctx,
     memset(prep->state, 0, state_size);
 
     rc = pn_pending_entry_init(
-        prep->entry, feature_id, prep->state, cleanup, validator, method, prep->cfg, timeout_ms);
+        prep->entry, feature_id, prep->state, cleanup, validator, method, ctx, timeout_ms);
     if (PUBNUB_OK != rc) {
         cleanup(prep->state, prep->allocator);
         pn_prep_release(ctx, prep->entry);
@@ -1694,13 +2141,62 @@ static void pn_log_slot_occupancy_locked(pubnub_logger_provider_t* logger,
     }
 }
 
+/**
+ * @brief Claim a pending-slot-map entry for a request about to be queued.
+ *
+ * @param ctx Context (non-NULL).
+ * @return Claimed index, or PN_PENDING_MAP_NONE.
+ */
+static uint16_t pn_pending_map_claim(pubnub_context_t* ctx)
+{
+    pn_pending_map_entry_t* map    = ctx->pending_slot_map;
+    uint16_t                dead   = PN_PENDING_MAP_NONE;
+    uint16_t                marker = PN_PENDING_MAP_NONE;
+    uint16_t                chosen = PN_PENDING_MAP_NONE;
+    uint16_t                i;
+
+    for (i = 0; i < (uint16_t)PN_PENDING_MAP_SIZE; i++) {
+        const uint16_t state = map[i].real_slot;
+
+        if (PN_PENDING_MAP_FREE == state) {
+            chosen = i;
+            break;
+        }
+        if (PN_PENDING_MAP_QUEUED == state) {
+            continue;
+        }
+        if (PN_PENDING_MAP_CANCELLED == state) {
+            if (PN_PENDING_MAP_NONE == marker) {
+                marker = i;
+            }
+        } else if (PN_PENDING_MAP_NONE == dead
+                   && !pn_pending_map_entry_alive(&ctx->pool, &map[i])) {
+            dead = i;
+        }
+    }
+    if (PN_PENDING_MAP_NONE == chosen) {
+        chosen = (PN_PENDING_MAP_NONE != dead) ? dead : marker;
+    }
+    if (PN_PENDING_MAP_NONE == chosen) {
+        return PN_PENDING_MAP_NONE;
+    }
+
+    map[chosen].real_slot       = PN_PENDING_MAP_QUEUED;
+    map[chosen].slot_generation = 0;
+    map[chosen].epoch           = (uint16_t)(map[chosen].epoch + 1U);
+    if (0 == map[chosen].epoch) {
+        map[chosen].epoch = 1;
+    }
+    return chosen;
+}
+
 /** @brief Enqueue entry into the pending queue. Caller holds pool lock. */
 static pubnub_future_t pn_enqueue_pending(pubnub_context_t*   ctx,
                                           pn_request_pool_t*  pool,
                                           pn_pending_queue_t* queue,
                                           pn_pending_entry_t* entry)
 {
-    const uint16_t pending_idx = queue->tail;
+    const uint16_t map_idx = pn_pending_map_claim(ctx);
     pubnub_res_t   rc;
 
     PUBNUB_LOG_TEXT(ctx->logger,
@@ -1708,11 +2204,16 @@ static pubnub_future_t pn_enqueue_pending(pubnub_context_t*   ctx,
                     "dispatch: no idle in-flight slot — queuing in pending");
     pn_log_slot_occupancy_locked(ctx->logger, pool);
 
-    /* Set map_index directly on the entry — the pending queue's
-     * enqueue copies by value (with scratch relocation). */
-    entry->map_index = pending_idx;
-
-    rc = pn_pending_queue_enqueue(queue, entry);
+    if (PN_PENDING_MAP_NONE == map_idx) {
+        rc = PUBNUB_ERR_QUEUE_FULL;
+    } else {
+        /* The queue copies the entry by value. */
+        entry->map_index = map_idx;
+        rc               = pn_pending_queue_enqueue(queue, entry);
+        if (PUBNUB_OK != rc) {
+            ctx->pending_slot_map[map_idx].real_slot = PN_PENDING_MAP_FREE;
+        }
+    }
     if (PUBNUB_OK != rc) {
         PUBNUB_LOG_TEXT(ctx->logger,
                         PUBNUB_LOG_LEVEL_WARNING,
@@ -1752,13 +2253,11 @@ static pubnub_future_t pn_enqueue_pending(pubnub_context_t*   ctx,
                (unsigned)pn_pending_queue_count(queue),
                (unsigned)queue->capacity);
 
-    ctx->pending_slot_map[pending_idx] = PUBNUB_SLOT_ID_INVALID;
-
     {
         pubnub_future_t fut;
         fut.ctx        = ctx;
-        fut.slot_id    = (uint16_t)(pool->capacity + pending_idx);
-        fut.generation = 0;
+        fut.slot_id    = (uint16_t)(pool->capacity + map_idx);
+        fut.generation = ctx->pending_slot_map[map_idx].epoch;
         fut.status     = PUBNUB_IN_PROGRESS;
 
         pn_request_pool_unlock(pool);
@@ -1782,6 +2281,7 @@ static pubnub_future_t pn_dispatch_direct(pubnub_context_t*   ctx,
                (unsigned)fut.slot_id);
 
     pn_slot_populate(slot, entry);
+    slot->origin_generation = ctx->origin_generation;
 
     /* Slot has its own copy now; release the prep-pool entry. */
     pn_prep_release(ctx, entry);
@@ -1858,7 +2358,7 @@ static void pn_process_promote_pending(pn_request_pool_t*  pool,
                                        pn_pending_queue_t* queue,
                                        pubnub_context_t*   ctx)
 {
-    uint16_t* map = ctx->pending_slot_map;
+    pn_pending_map_entry_t* map = ctx->pending_slot_map;
 
     while (pn_pending_queue_count(queue) > 0 && pool->in_use_count < pool->capacity) {
         pn_pending_entry_t* pe;
@@ -1866,15 +2366,7 @@ static void pn_process_promote_pending(pn_request_pool_t*  pool,
         pubnub_res_t        arc;
         pn_request_t*       slot;
 
-        /* Skip cancelled (non-occupied) entries at the head. */
-        while (queue->count > 0 && !queue->entries[queue->head].occupied) {
-            queue->head = (uint16_t)((queue->head + 1) % queue->capacity);
-            queue->count--;
-        }
-        if (0 == queue->count) {
-            break;
-        }
-
+        /* Head is occupied: operations that move head also trim holes behind it. */
         pe = &queue->entries[queue->head];
 
         /* Acquire the known-free slot — guaranteed by loop guard. */
@@ -1905,6 +2397,7 @@ static void pn_process_promote_pending(pn_request_pool_t*  pool,
         slot->response_capture      = pe->response_capture;
         slot->on_complete           = pe->on_complete;
         slot->user_data             = pe->user_data;
+        slot->origin_generation     = ctx->origin_generation;
         slot->async_cb              = pe->async_cb;
         slot->async_cb_user_data    = pe->async_cb_user_data;
 
@@ -1920,17 +2413,17 @@ static void pn_process_promote_pending(pn_request_pool_t*  pool,
                    "request promoted pending->in-flight slot %u",
                    (unsigned)promoted_fut.slot_id);
 
-        /* Update the pending-slot map so futures that reference the
-         * pending-range slot_id can resolve to the real slot. */
-        if (NULL != map
-            && pe->map_index < (uint16_t)PUBNUB_CFG_MAX_PENDING_REQUESTS) {
-            map[pe->map_index] = promoted_fut.slot_id;
+        /* Record the promoted slot so the pending id resolves to this request only. */
+        if (NULL != map && pe->map_index < (uint16_t)PN_PENDING_MAP_SIZE) {
+            map[pe->map_index].real_slot       = promoted_fut.slot_id;
+            map[pe->map_index].slot_generation = promoted_fut.generation;
         }
 
-        /* Consume the head entry: clear and advance. */
+        /* Consume the head entry, then step over any hole now at the head. */
         memset(pe, 0, sizeof(*pe));
         queue->head = (uint16_t)((queue->head + 1) % queue->capacity);
         queue->count--;
+        pn_pending_queue_trim_head(queue);
     }
 }
 
@@ -2103,6 +2596,30 @@ static void pn_process_collect_transport_failures(pn_request_pool_t* pool,
 }
 
 /**
+ * @brief Collect slots whose response completed and needs eager parsing.
+ *
+ * @param pool    Request pool.
+ * @param out_ids Caller array (>= pool capacity) receiving slot indices.
+ * @return Number of indices written to @p out_ids.
+ * @note caller must hold ctx lock
+ */
+static uint16_t pn_process_collect_preparse(const pn_request_pool_t* pool,
+                                            uint16_t*                out_ids)
+{
+    uint16_t count = 0;
+    uint16_t i;
+
+    for (i = 0; i < pool->capacity; i++) {
+        const pn_request_t* slot = &pool->slots[i];
+        if (PN_REQUEST_IN_FLIGHT == slot->state && slot->preparse_on_complete
+            && PUBNUB_HTTP_COMPLETE == slot->http_response.completion) {
+            out_ids[count++] = i;
+        }
+    }
+    return count;
+}
+
+/**
  * @brief Eagerly parse completed response bodies before completions are routed.
  *
  * Runs on the poll-owning thread OUTSIDE the context lock, after transport
@@ -2129,19 +2646,17 @@ static void pn_process_collect_transport_failures(pn_request_pool_t* pool,
  * @param serial Serialization provider used to parse; when NULL the bodies
  *               are marked attempted (yielding a NULL tree) and only
  *               response_capture runs.
+ * @param ids    Slot indices from pn_process_collect_preparse().
+ * @param count  Number of entries in @p ids.
  */
 static void pn_process_preparse_completions(pn_request_pool_t* pool,
-                                            pubnub_serialization_provider_t* serial)
+                                            pubnub_serialization_provider_t* serial,
+                                            const uint16_t* ids,
+                                            uint16_t        count)
 {
     uint16_t i;
-    for (i = 0; i < pool->capacity; i++) {
-        pn_request_t* slot = &pool->slots[i];
-        if (PN_REQUEST_IN_FLIGHT != slot->state || !slot->preparse_on_complete) {
-            continue;
-        }
-        if (PUBNUB_HTTP_COMPLETE != slot->http_response.completion) {
-            continue;
-        }
+    for (i = 0; i < count; i++) {
+        pn_request_t* slot = &pool->slots[ids[i]];
         /* Copy raw response bytes directly into fixed feature-owned state
          * (e.g. the time feature's char[21] timetoken buffer) before the
          * rx buffer can be reclaimed. Runs before on_complete to survive
@@ -2250,6 +2765,29 @@ static int pn_process_pool_has_active_slots(const pn_request_pool_t* pool)
 }
 
 /**
+ * @brief Drop retries built for a previous origin.
+ *
+ * Runs on the transport-owning thread without the context lock.
+ *
+ * @param ctx Initialized context (non-NULL).
+ */
+static void pn_process_service_origin_change(pubnub_context_t* ctx)
+{
+    uint16_t generation;
+    int      changed;
+
+    pn_ctx_lock(ctx->platform, ctx->lock);
+    generation                  = ctx->origin_generation;
+    changed                     = (generation != ctx->origin_generation_seen);
+    ctx->origin_generation_seen = generation;
+    pn_ctx_unlock(ctx->platform, ctx->lock);
+
+    if (changed) {
+        pn_pipeline_cancel_waiting_retries(&ctx->pipeline, generation);
+    }
+}
+
+/**
  * @brief Deliver completion notifications for the collected COMPLETING slots.
  *
  * Runs outside the context lock: each notification invokes the user callback.
@@ -2271,22 +2809,33 @@ static void pn_process_tick_deliver_notifications(pubnub_context_t* ctx,
     }
 }
 
+/** @brief Whether @p id appears in the first @p count entries. */
+static int pn_ids_contain(const uint16_t* ids, uint16_t count, uint16_t id)
+{
+    uint16_t k;
+
+    for (k = 0; k < count; k++) {
+        if (ids[k] == id) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /**
- * @brief Collect slots whose future release was deferred into the tick.
+ * @brief Collect slots whose release was deferred into the tick.
  *
- * Handles both COMPLETING slots (release requested from inside the callback)
- * and terminal slots that bypassed COMPLETING (on_complete == NULL path).
- * For each drained slot the live transport handle is snapshotted and cleared
- * so the caller can cancel it OUTSIDE the lock (the transport cancel frees
- * the rx buffer that response->body aliased and may call the allocator or
- * fire callbacks). The slot is NOT released here — the caller releases it
- * after cancelling the snapshotted handle.
+ * Snapshots and clears each slot's transport handle so the caller can cancel
+ * it outside the lock. The slot is not released here.
  *
  * @param ctx              Initialized context (non-NULL).
  * @param completing       Indices of slots in the COMPLETING state.
  * @param completing_count Number of valid entries in @p completing.
  * @param out_ids          Caller array (>= pool capacity) receiving the slot
  *                         ids to release.
+ * @param out_gens         Caller array (>= pool capacity) receiving the slot
+ *                         generation at collection time, so the caller
+ *                         reclaims only that request.
  * @param out_handles      Caller array (>= pool capacity) receiving the
  *                         snapshotted transport handle for each id (may be
  *                         NULL per entry when the slot held no handle).
@@ -2297,19 +2846,17 @@ static uint16_t pn_process_tick_collect_deferred(pubnub_context_t* ctx,
                                                  const uint16_t*   completing,
                                                  uint16_t  completing_count,
                                                  uint16_t* out_ids,
+                                                 uint16_t* out_gens,
                                                  pubnub_transport_handle_t** out_handles)
 {
     uint16_t count = 0;
+    uint16_t first_count;
     uint16_t i;
     for (i = 0; i < completing_count; i++) {
         pn_request_t* slot = pn_request_pool_get(&ctx->pool, completing[i]);
         if (NULL != slot && slot->release_deferred) {
-            PUBNUB_LOG(ctx->logger,
-                       PUBNUB_LOG_LEVEL_TRACE,
-                       "slot %u deferred-release fired",
-                       (unsigned)completing[i]);
-            slot->release_deferred = 0;
             out_ids[count]         = completing[i];
+            out_gens[count]        = slot->generation;
             out_handles[count]     = slot->transport_handle;
             slot->transport_handle = NULL;
             count++;
@@ -2317,15 +2864,18 @@ static uint16_t pn_process_tick_collect_deferred(pubnub_context_t* ctx,
     }
 
     /* Also collect any COMPLETE/FAILED slots whose release was deferred
-     * but that bypassed COMPLETING (on_complete==NULL path). */
+     * but that bypassed COMPLETING (on_complete==NULL path). The flag stays
+     * set until the slot is reclaimed so a second release of the same
+     * future in the cancel window does not reclaim the slot early. */
+    first_count = count;
     for (i = 0; i < ctx->pool.capacity; i++) {
         pn_request_t* slot = pn_request_pool_get(&ctx->pool, i);
-        if (NULL != slot && pn_request_is_terminal(slot) && slot->release_deferred) {
-            PUBNUB_LOG_TEXT(ctx->logger,
-                            PUBNUB_LOG_LEVEL_TRACE,
-                            "deferred release (terminal, no callback)");
-            slot->release_deferred = 0;
+
+        /* Slots collected by the first loop still have the flag set. */
+        if (NULL != slot && pn_request_is_terminal(slot) && slot->release_deferred
+            && !pn_ids_contain(out_ids, first_count, i)) {
             out_ids[count]         = i;
+            out_gens[count]        = slot->generation;
             out_handles[count]     = slot->transport_handle;
             slot->transport_handle = NULL;
             count++;
@@ -2348,10 +2898,6 @@ static uint16_t pn_process_tick_collect_deferred(pubnub_context_t* ctx,
  */
 pubnub_res_t pn_process_tick(pubnub_context_t* ctx, unsigned int poll_timeout_ms)
 {
-    PUBNUB_STATIC_ASSERT(
-        PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS <= 16,
-        "Stack array for completing slots assumes <= 16 in-flight");
-
     uint16_t     completing[PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS];
     uint16_t     completing_count = 0;
     uint16_t     expired_ids[PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS];
@@ -2364,7 +2910,10 @@ pubnub_res_t pn_process_tick(pubnub_context_t* ctx, unsigned int poll_timeout_ms
     uint16_t     cancel_ids[PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS];
     uint16_t     cancel_gens[PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS];
     uint16_t     cancel_count = 0;
+    uint16_t     preparse_ids[PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS];
+    uint16_t     preparse_count = 0;
     uint16_t     release_ids[PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS];
+    uint16_t     release_gens[PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS];
     pubnub_transport_handle_t* release_handles[PUBNUB_CFG_MAX_IN_FLIGHT_REQUESTS];
     uint16_t release_count = 0;
     uint16_t i;
@@ -2374,7 +2923,8 @@ pubnub_res_t pn_process_tick(pubnub_context_t* ctx, unsigned int poll_timeout_ms
 
     pn_ctx_lock(ctx->platform, ctx->lock);
 
-    /* Bail if another thread is already inside transport->poll(). */
+    /* Bail if another thread owns the transport (inside poll() or running a
+     * direct release-time cancel). */
     if (PUBNUB_CFG_THREAD_SAFETY && ctx->poll_active) {
         pn_ctx_unlock(ctx->platform, ctx->lock);
         return PUBNUB_IN_PROGRESS;
@@ -2404,6 +2954,9 @@ pubnub_res_t pn_process_tick(pubnub_context_t* ctx, unsigned int poll_timeout_ms
     pn_process_collect_cancel_requested(
         &ctx->pool, cancel_ids, cancel_gens, &cancel_count);
     pn_ctx_unlock(ctx->platform, ctx->lock);
+
+    /* Drops retries that still hold the old host. */
+    pn_process_service_origin_change(ctx);
 
     /* Abort expired slots outside the lock. pn_request_abort handles
      * transport cancel, state transition, and callback delivery. The
@@ -2437,7 +2990,12 @@ pubnub_res_t pn_process_tick(pubnub_context_t* ctx, unsigned int poll_timeout_ms
      * unbounded parse out of the critical section and out of the race with
      * a lock-free pubnub_await reader, and copies the body out of the
      * transport rx buffer before the second dispatch pass can reclaim it. */
-    pn_process_preparse_completions(&ctx->pool, pn_context_serialization(ctx));
+    pn_ctx_lock(ctx->platform, ctx->lock);
+    preparse_count = pn_process_collect_preparse(&ctx->pool, preparse_ids);
+    pn_ctx_unlock(ctx->platform, ctx->lock);
+
+    pn_process_preparse_completions(
+        &ctx->pool, pn_context_serialization(ctx), preparse_ids, preparse_count);
 
     pn_ctx_lock(ctx->platform, ctx->lock);
     pn_process_route_completions(&ctx->pool);
@@ -2452,7 +3010,7 @@ pubnub_res_t pn_process_tick(pubnub_context_t* ctx, unsigned int poll_timeout_ms
      * the lock without releasing the slots yet. */
     pn_ctx_lock(ctx->platform, ctx->lock);
     release_count = pn_process_tick_collect_deferred(
-        ctx, completing, completing_count, release_ids, release_handles);
+        ctx, completing, completing_count, release_ids, release_gens, release_handles);
     pn_ctx_unlock(ctx->platform, ctx->lock);
 
     /* Cancel the snapshotted handles OUTSIDE the lock. A successfully
@@ -2470,7 +3028,11 @@ pubnub_res_t pn_process_tick(pubnub_context_t* ctx, unsigned int poll_timeout_ms
 
     pn_ctx_lock(ctx->platform, ctx->lock);
     for (i = 0; i < release_count; i++) {
-        pn_request_pool_release(&ctx->pool, release_ids[i]);
+        const pn_request_t* done = pn_request_pool_get(&ctx->pool, release_ids[i]);
+
+        if (NULL != done && release_gens[i] == done->generation) {
+            pn_request_pool_release(&ctx->pool, release_ids[i]);
+        }
     }
 
     /* Promote pending queue entries into freed slots. Must happen
@@ -2490,7 +3052,8 @@ pubnub_res_t pn_process_tick(pubnub_context_t* ctx, unsigned int poll_timeout_ms
      * slice outside the lock. Subscribe and presence hook in here to
      * drain event queues, fire timers, and dispatch effects without
      * core knowing feature internals. */
-    features_active = pn_feature_registry_tick_all(&ctx->features);
+    features_active =
+        pn_feature_registry_tick_all(&ctx->features, ctx->platform, ctx->lock);
 
     return (active || pending_active || features_active) ? PUBNUB_IN_PROGRESS
                                                          : PUBNUB_OK;
@@ -2502,7 +3065,7 @@ static void pn_bg_thread_fn(void* arg)
     pubnub_context_t*           ctx      = (pubnub_context_t*)arg;
     pubnub_platform_provider_t* platform = ctx->platform;
 
-    while (ctx->bg_running) {
+    while (0 != PUBNUB_ATOMIC_LOAD_U8(&ctx->bg_running)) {
         pubnub_res_t rc = pn_process_tick(ctx, PUBNUB_CFG_MAX_POLL_MS);
         if (PUBNUB_IN_PROGRESS == rc && NULL != platform
             && NULL != platform->sleep_ms) {
@@ -2535,11 +3098,11 @@ static pubnub_res_t pn_bg_thread_start(pubnub_context_t* ctx)
         return PUBNUB_OK;
     }
 
-    ctx->bg_running = 1;
-    void* handle    = ctx->platform->thread_create(
+    PUBNUB_ATOMIC_STORE_U8(&ctx->bg_running, 1);
+    void* handle = ctx->platform->thread_create(
         ctx->platform, ctx->allocator, pn_bg_thread_fn, ctx);
     if (NULL == handle) {
-        ctx->bg_running = 0;
+        PUBNUB_ATOMIC_STORE_U8(&ctx->bg_running, 0);
         pn_ctx_unlock(ctx->platform, ctx->lock);
         return PUBNUB_ERR_INTERNAL;
     }
@@ -2563,6 +3126,25 @@ void pn_context_wake_bg_thread(pubnub_context_t* ctx)
     }
     /* No wake() on transport: bg thread discovers new work at next
        PUBNUB_CFG_MAX_POLL_MS timeout boundary. */
+}
+
+int pn_context_transport_claim_locked(pubnub_context_t* ctx)
+{
+    if (!PUBNUB_CFG_THREAD_SAFETY) {
+        return 1;
+    }
+    if (NULL != ctx->bg_thread_handle || 0 != ctx->poll_active) {
+        return 0;
+    }
+    ctx->poll_active = 1;
+    return 1;
+}
+
+void pn_context_transport_unclaim_locked(pubnub_context_t* ctx)
+{
+    if (PUBNUB_CFG_THREAD_SAFETY) {
+        ctx->poll_active = 0;
+    }
 }
 
 void pn_context_wake(pubnub_context_t* ctx)
@@ -2663,6 +3245,8 @@ pubnub_res_t pubnub_set_user_id(pubnub_context_t* ctx, const char* user_id)
 
 pubnub_res_t pubnub_set_origin(pubnub_context_t* ctx, const char* origin)
 {
+    int changed;
+
     if (NULL == ctx || PN_INIT_MAGIC != ctx->initialized) {
         return PUBNUB_ERR_NOT_INITIALIZED;
     }
@@ -2676,8 +3260,17 @@ pubnub_res_t pubnub_set_origin(pubnub_context_t* ctx, const char* origin)
         return PUBNUB_ERR_INVALID_ARGUMENT;
     }
     pn_ctx_lock(ctx->platform, ctx->lock);
-    pn_strlcpy(ctx->origin_buf, origin, sizeof(ctx->origin_buf));
+    changed = (0 != strcmp(ctx->origin_buf, origin));
+    if (changed) {
+        pn_strlcpy(ctx->origin_buf, origin, sizeof(ctx->origin_buf));
+        ctx->origin_generation++;
+    }
     pn_ctx_unlock(ctx->platform, ctx->lock);
+
+    /* The tick acts on the change, so only flag it here. */
+    if (changed) {
+        pn_context_wake(ctx);
+    }
     return PUBNUB_OK;
 }
 
