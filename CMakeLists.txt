@@ -9,7 +9,7 @@ if(ESP_PLATFORM)
     return()
 endif()
 
-project(pubnub VERSION 1.0.0 LANGUAGES C)
+project(pubnub VERSION 1.1.0 LANGUAGES C)
 
 # SDK root paths — stable across standalone and subproject (Zephyr, ESP-IDF) builds.
 # All SDK-internal CMakeLists must use PN_SDK_SOURCE_ROOT / PN_SDK_BINARY_ROOT

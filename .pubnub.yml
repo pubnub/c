@@ -1,8 +1,39 @@
 name: c
 schema: 1
-version: "1.0.0"
+version: "1.1.0"
 scm: github.com/pubnub/c
 changelog:
+  - date: 2026-10-21
+    version: 1.1.0
+    changes:
+      - type: feature
+        text: "Pass `PUBNUB_CLEAR_VALUE` to a string or custom field to clear it. The SDK sends JSON null, so the stored value is gone."
+      - type: feature
+        text: "Tokens can now grant read access to all channel or UUID metadata at once, using `channels_category_permissions` and `uuids_category_permissions`."
+      - type: feature
+        text: "Context init now fails early if a provider is only half set up, for example a lock without its full set of functions, and logs why."
+      - type: feature
+        text: "Presence can be turned on per subscription, and wildcards match on their own. Handles are shared with sets, and listeners only get events while their subscription or set is active."
+      - type: bug
+        text: "Windows reported pending connects as ready, so TLS started too early and failed. TLS now waits until the connection is really up."
+      - type: bug
+        text: "Some setups did not compile or link. Those were builds with logging turned off, Clang in C99 mode, or mbedTLS without `MBEDTLS_ERROR_C`. Strict C99 builds were broken too, and they all build now."
+      - type: improvement
+        text: "The poll thread wakes much faster on Windows, so publish dispatch dropped from 52.6 ms to 0.1 ms. Connections stay open between requests, so 100 publishes need one TLS handshake instead of 100."
+      - type: improvement
+        text: "Real-time events from subscribe REST API response with a type the SDK does not  know are skipped instead of being stored as-is. A debug log records them."
+      - type: improvement
+        text: "Set `PUBNUB_OPENSSL_LIB_DIR` to point at a custom OpenSSL layout on MSVC. POSIX feature-test macros now apply only to non-Windows hosts, and no-heap builds reject more than 16 in-flight requests."
+      - type: improvement
+        text: "The ESP32 example pins led_strip to 3.0.0. The nRF7002 example documents the net context limits it needs."
+      - type: improvement
+        text: "New CI jobs cover TSan on sockets, the jsmn serializer, C99 syntax and the Windows shared library. Linux socket lanes now fail if pending-connect tests get skipped."
+      - type: improvement
+        text: "Covers what happens to queued and in-flight futures on release, what an origin change does to retries and subscriptions, and the threading rules for transports."
+      - type: improvement
+        text: "Rewrites the README around installation and a quickstart, with a new header image."
+      - type: improvement
+        text: "Adds tests for subscribe, App Context, Files, Access, the pending queue, future release threads, the feature registry and retry context."
   - date: "2026-09-21"
     version: 1.0.0
     changes:
@@ -176,7 +207,7 @@ sdks:
           - distribution-type: source code
             distribution-repository: GitHub release
             package-name: c
-            location: https://github.com/pubnub/c/releases/tag/1.0.0
+            location: https://github.com/pubnub/c/releases/tag/1.1.0
             requires:
               - name: "cJSON"
                 min-version: "1.7.15"
@@ -229,7 +260,7 @@ sdks:
           - distribution-type: source code
             distribution-repository: GitHub release
             package-name: c
-            location: https://github.com/pubnub/c/releases/tag/1.0.0
+            location: https://github.com/pubnub/c/releases/tag/1.1.0
             requires:
               - name: "cJSON"
                 min-version: "1.7.15"
@@ -272,7 +303,7 @@ sdks:
           - distribution-type: source code
             distribution-repository: GitHub release
             package-name: c
-            location: https://github.com/pubnub/c/releases/tag/1.0.0
+            location: https://github.com/pubnub/c/releases/tag/1.1.0
             requires:
               - name: "jsmn"
                 min-version: "1.1.0"
@@ -311,7 +342,7 @@ sdks:
           - distribution-type: source code
             distribution-repository: GitHub release
             package-name: c
-            location: https://github.com/pubnub/c/releases/tag/1.0.0
+            location: https://github.com/pubnub/c/releases/tag/1.1.0
             requires:
               - name: "jsmn"
                 min-version: "1.1.0"
