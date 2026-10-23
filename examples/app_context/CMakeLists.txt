@@ -16,6 +16,7 @@
 #   set_members.c                 -- cooperative: set channel members
 #   set_memberships.c -- add and remove a user's channel memberships.
 #   set_uuid_metadata_json_tree.c -- custom_value JSON tree and if_match.
+#   set_uuid_metadata_clear.c -- clear fields with PUBNUB_CLEAR_VALUE.
 
 add_executable(example_app_context_get_uuid_metadata get_uuid_metadata.c)
 target_link_libraries(example_app_context_get_uuid_metadata PRIVATE pubnub)
@@ -142,3 +143,12 @@ set_target_properties(
 )
 pubnub_target_warnings(example_app_context_set_uuid_metadata_json_tree)
 pubnub_target_sanitizers(example_app_context_set_uuid_metadata_json_tree)
+
+add_executable(example_app_context_set_uuid_metadata_clear set_uuid_metadata_clear.c)
+target_link_libraries(example_app_context_set_uuid_metadata_clear PRIVATE pubnub)
+set_target_properties(
+    example_app_context_set_uuid_metadata_clear
+    PROPERTIES C_STANDARD ${PUBNUB_C_STANDARD} C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+)
+pubnub_target_warnings(example_app_context_set_uuid_metadata_clear)
+pubnub_target_sanitizers(example_app_context_set_uuid_metadata_clear)
