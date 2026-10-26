@@ -6,10 +6,15 @@
 #   callback.c -- listener callbacks with publish echo.
 #   entities.c -- entities, subscriptions, subscription sets, and the
 #                 three listener registration levels.
+#   subscription_invalid.c   -- check pubnub_subscription_create for
+#                               PUBNUB_SUBSCRIPTION_INVALID.
+#   subscription_set_limit.c -- handle PUBNUB_ERR_LIMIT_REACHED when
+#                               adding to a subscription set.
 #
-# Both use pubnub_create/pubnub_destroy — not available on no-heap
-# embedded profiles (PUBNUB_CFG_NO_HEAP=1) — so both are gated on heap
-# availability.
+# These example apps use pubnub_create/pubnub_destroy, which are not available
+# on no-heap profiles (PUBNUB_CFG_NO_HEAP=1), so only the example apps are gated
+# on heap availability. Subscribe itself works on embedded devices, including
+# no-heap profiles.
 
 if(NOT PUBNUB_CFG_NO_HEAP)
     add_executable(example_subscribe_callback callback.c)
@@ -29,4 +34,22 @@ if(NOT PUBNUB_CFG_NO_HEAP)
     )
     pubnub_target_warnings(example_subscribe_entities)
     pubnub_target_sanitizers(example_subscribe_entities)
+
+    add_executable(example_subscribe_subscription_invalid subscription_invalid.c)
+    target_link_libraries(example_subscribe_subscription_invalid PRIVATE pubnub)
+    set_target_properties(
+        example_subscribe_subscription_invalid
+        PROPERTIES C_STANDARD ${PUBNUB_C_STANDARD} C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+    )
+    pubnub_target_warnings(example_subscribe_subscription_invalid)
+    pubnub_target_sanitizers(example_subscribe_subscription_invalid)
+
+    add_executable(example_subscribe_subscription_set_limit subscription_set_limit.c)
+    target_link_libraries(example_subscribe_subscription_set_limit PRIVATE pubnub)
+    set_target_properties(
+        example_subscribe_subscription_set_limit
+        PROPERTIES C_STANDARD ${PUBNUB_C_STANDARD} C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+    )
+    pubnub_target_warnings(example_subscribe_subscription_set_limit)
+    pubnub_target_sanitizers(example_subscribe_subscription_set_limit)
 endif()

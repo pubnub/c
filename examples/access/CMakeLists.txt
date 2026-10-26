@@ -4,6 +4,7 @@
 # Examples for the access manager (PAM) feature.
 #
 #   grant_token.c       -- grant with multiple channels + pattern.
+#   grant_token_categories.c -- grant list-all category permissions.
 #   grant_token_async.c -- grant with async callback completion.
 #   revoke_token.c      -- revoke a previously granted token.
 #   parse_token.c       -- local token decode (no network).
@@ -43,3 +44,12 @@ set_target_properties(
 )
 pubnub_target_warnings(example_access_parse_token)
 pubnub_target_sanitizers(example_access_parse_token)
+
+add_executable(example_access_grant_token_categories grant_token_categories.c)
+target_link_libraries(example_access_grant_token_categories PRIVATE pubnub)
+set_target_properties(
+    example_access_grant_token_categories
+    PROPERTIES C_STANDARD ${PUBNUB_C_STANDARD} C_STANDARD_REQUIRED ON C_EXTENSIONS OFF
+)
+pubnub_target_warnings(example_access_grant_token_categories)
+pubnub_target_sanitizers(example_access_grant_token_categories)
