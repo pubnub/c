@@ -11,9 +11,10 @@
 #   subscription_set_limit.c -- handle PUBNUB_ERR_LIMIT_REACHED when
 #                               adding to a subscription set.
 #
-# All of them use pubnub_create/pubnub_destroy — not available on no-heap
-# embedded profiles (PUBNUB_CFG_NO_HEAP=1) — so all are gated on heap
-# availability.
+# These example apps use pubnub_create/pubnub_destroy, which are not available
+# on no-heap profiles (PUBNUB_CFG_NO_HEAP=1), so only the example apps are gated
+# on heap availability. Subscribe itself works on embedded devices, including
+# no-heap profiles.
 
 if(NOT PUBNUB_CFG_NO_HEAP)
     add_executable(example_subscribe_callback callback.c)

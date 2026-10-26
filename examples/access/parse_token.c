@@ -21,7 +21,7 @@
 #include <stdio.h>
 // snippet.hide
 
-static void print_token_categories(const pubnub_parsed_token_t* result);
+static void print_token_category_permissions(const pubnub_parsed_token_t* result);
 // snippet.show
 
 int main(void)
@@ -94,7 +94,7 @@ int main(void)
     }
     // snippet.hide
 
-    print_token_categories(&result);
+    print_token_category_permissions(&result);
     // snippet.show
 
     /* 4. Cleanup. */
@@ -106,9 +106,10 @@ int main(void)
 
 // snippet.accessParseTokenCategories
 
-/* Each category field holds PUBNUB_ACCESS_GET (32) when the token can list
- * all channel or all UUID metadata, and 0 when it cannot. */
-static void print_token_categories(const pubnub_parsed_token_t* result)
+/* Print the category permissions encoded in the token. Each category
+ * permission field holds PUBNUB_ACCESS_GET (32) when the token allows listing
+ * all channel or all UUID metadata, and 0 when it does not. */
+static void print_token_category_permissions(const pubnub_parsed_token_t* result)
 {
     printf("channels_category_permissions=0x%x uuids_category_permissions=0x%x\n",
            result->channels_category_permissions,

@@ -36,7 +36,6 @@ int main(void)
     /* 2. Clear the email and custom fields.
      *    Fields left NULL (such as name) keep their stored value. */
     pubnub_set_uuid_metadata_opts_t opts = PUBNUB_SET_UUID_METADATA_OPTS_INIT;
-    opts.uuid   = NULL; /* NULL = use context user_id */
     opts.email  = PUBNUB_CLEAR_VALUE;
     opts.custom = PUBNUB_CLEAR_VALUE;
 
