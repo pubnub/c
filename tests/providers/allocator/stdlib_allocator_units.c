@@ -89,13 +89,15 @@ static void alloc_should_honour_natural_alignment(void** state)
 static void alloc_should_honour_over_alignment_when_supported(void** state)
 {
     (void)state;
-#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(_WIN32)
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(_WIN32) \
+    && !(defined(__ANDROID__) && __ANDROID_API__ < 17)
     pubnub_allocator_provider_t* alloc = pn_allocator_default();
 
     /* 128-byte alignment is the kind of thing that matters for
-     * SIMD / DMA buffers.  aligned_alloc honours it. We don't
-     * assert the exact alignment on non-C11 / Windows because the
-     * provider falls back to plain malloc there. */
+     * SIMD / DMA buffers. aligned_alloc honours it, and Android
+     * API 17-27 uses posix_memalign for the same guarantee. The
+     * provider falls back to plain malloc on non-C11, Windows, and
+     * Android older than API 17, so those builds skip this check. */
     void* p = alloc->alloc(alloc, 256, 128);
 
     assert_non_null(p);

@@ -51,10 +51,11 @@ static size_t stdlib_default_capacity(pubnub_buf_purpose_t purpose)
  * libc's `malloc` already returns memory aligned to
  * `alignof(max_align_t)`, which is sufficient for every type the
  * SDK currently uses. Over-aligned requests (SIMD / page-aligned)
- * use C11's `aligned_alloc` when available. Windows is excluded
- * because its CRT does not provide `aligned_alloc`; over-aligned
- * requests on Windows fall back to `malloc` and rely on the
- * caller to verify alignment if it matters.
+ * use C11's `aligned_alloc` when the libc declares it. Windows is
+ * excluded because its CRT does not provide `aligned_alloc`.
+ * Bionic declares `aligned_alloc` only from API 28; API 17-27 uses
+ * `posix_memalign`, which is released with `free`. Older Android
+ * and Windows fall back to `malloc`.
  *
  * The threshold for "over-aligned" is 16 bytes, which matches
  * `alignof(max_align_t)` on every mainstream x86_64 / ARM64 ABI.
@@ -69,9 +70,23 @@ static void* stdlib_alloc(pubnub_allocator_provider_t* self, size_t size, size_t
 
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L && !defined(_WIN32)
     if (align > 16) {
-        /* aligned_alloc requires size to be a multiple of align. */
+        /* aligned_alloc requires size to be a multiple of align.
+         * posix_memalign does not, but the same padding keeps both
+         * paths equivalent. */
         size_t padded = (size + align - 1) & ~(align - 1);
+#if defined(__ANDROID__) && __ANDROID_API__ < 28
+#    if __ANDROID_API__ >= 17
+        void* ptr = NULL;
+        if (0 != posix_memalign(&ptr, align, padded)) {
+            return NULL;
+        }
+        return ptr;
+#    else
+        (void)padded;
+#    endif
+#else
         return aligned_alloc(align, padded);
+#endif
     }
 #else
     (void)align;
