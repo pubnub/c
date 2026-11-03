@@ -452,11 +452,11 @@ static void test_recv_ignores_stale_thread_error(void** state)
 /**
  * @brief Regression: session_destroy must not leak an error onto the thread.
  *
- * Destroying a session still in handshake init runs a best-effort
- * SSL_shutdown that queues SSL_R_SHUTDOWN_WHILE_IN_INIT. The thread error
- * queue must be empty afterwards so the next TLS operation on this thread
- * classifies correctly. Fails on the unfixed backend, which leaves the
- * shutdown error queued.
+ * Destroying a session still in handshake init must leave the thread error
+ * queue empty. A writing SSL_shutdown queues SSL_R_SHUTDOWN_WHILE_IN_INIT
+ * and SSL_free does not clear it; session_destroy uses a quiet shutdown and
+ * still clears the queue so the next TLS operation on this thread classifies
+ * correctly.
  */
 static void test_session_destroy_clears_thread_error(void** state)
 {

@@ -994,9 +994,9 @@ static int pn_tls_openssl_recv(void* session, void* buf, size_t len)
 /**
  * @brief Destroy an OpenSSL TLS session.
  *
- * Performs best-effort shutdown. Does NOT close the underlying socket (caller
- * manages socket lifetime). The session cache lives in the context, so nothing
- * cache-related is freed here.
+ * Marks the session shut without writing a close_notify. Does NOT close the
+ * underlying socket (caller manages socket lifetime). The session cache lives
+ * in the context, so nothing cache-related is freed here.
  *
  * @param session pn_openssl_session from session_create, or NULL.
  */
@@ -1004,14 +1004,28 @@ static void pn_tls_openssl_session_destroy(void* session)
 {
     if (NULL != session) {
         struct pn_openssl_session* sess = (struct pn_openssl_session*)session;
-        /* Best-effort shutdown; ignore errors. On an in-init SSL this queues
-         * SSL_R_SHUTDOWN_WHILE_IN_INIT, and SSL_free does not clear it, so
-         * clear the thread queue to keep it from poisoning the next
-         * operation on this thread. */
-        SSL_shutdown(sess->ssl);
-        ERR_clear_error();
-        SSL_free(sess->ssl);
-        sess->ssl = NULL;
+        /*
+         * Do not write a close_notify. The caller closes the non-blocking
+         * socket immediately after this returns, so a half-sent alert is
+         * useless. SSL_shutdown on that socket still tries to send one. If a
+         * record write is pending, OpenSSL 1.1.1 flushes it from a NULL
+         * record buffer and SIGBUSes in BIO_write (fault address is the
+         * leftover buffer offset, e.g. 0x21). Quiet shutdown only sets
+         * SSL_SENT_SHUTDOWN|SSL_RECEIVED_SHUTDOWN, which keeps SSL_free from
+         * dropping the session out of the cache, and it does not touch the
+         * socket.
+         *
+         * A handshake that never finished would otherwise queue
+         * SSL_R_SHUTDOWN_WHILE_IN_INIT. SSL_free does not clear that, so
+         * clear the thread queue anyway.
+         */
+        if (NULL != sess->ssl) {
+            SSL_set_quiet_shutdown(sess->ssl, 1);
+            (void)SSL_shutdown(sess->ssl);
+            ERR_clear_error();
+            SSL_free(sess->ssl);
+            sess->ssl = NULL;
+        }
         free(sess);
     }
 }
