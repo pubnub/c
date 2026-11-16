@@ -6,5 +6,6 @@ set(PN_PROVIDER_CRYPTO_OPENSSL_SOURCES
     "${CMAKE_CURRENT_LIST_DIR}/openssl_factories.c"
     "${CMAKE_CURRENT_LIST_DIR}/openssl_common.c"
     "${CMAKE_CURRENT_LIST_DIR}/openssl_aes_cbc.c"
+    "${CMAKE_CURRENT_LIST_DIR}/openssl_aes_gcm.c"
     "${CMAKE_CURRENT_LIST_DIR}/openssl_legacy.c"
 )

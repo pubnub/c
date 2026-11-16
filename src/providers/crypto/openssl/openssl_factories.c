@@ -86,6 +86,42 @@ pn_openssl_create_legacy(const char*                  cipher_key,
     return &state->base;
 }
 
+/**
+ * @brief Create an OpenSSL ACGM cryptor (shared logic).
+ */
+static pubnub_crypto_provider_t*
+pn_openssl_create_acgm(const char* cipher_key, pubnub_allocator_provider_t* alloc)
+{
+    if (NULL == cipher_key) {
+        return NULL;
+    }
+    if (NULL == alloc) {
+        alloc = pn_allocator_default();
+    }
+    if (NULL == alloc) {
+        return NULL;
+    }
+
+    pn_openssl_cryptor_state_t* state = (pn_openssl_cryptor_state_t*)PN_ALLOC(
+        alloc, sizeof(pn_openssl_cryptor_state_t), 0);
+    if (NULL == state) {
+        return NULL;
+    }
+
+    memset(state, 0, sizeof(*state));
+    state->alloc = alloc;
+
+    /* AES-256-GCM uses the raw SHA-256 key, same as ACRH. */
+    if (PUBNUB_OK != pn_openssl_derive_key_acrh(cipher_key, state->key)) {
+        PN_FREE(alloc, state);
+        return NULL;
+    }
+
+    pn_openssl_acgm_populate_vtable(state);
+
+    return &state->base;
+}
+
 /** @brief Shared destroy logic. */
 static void pn_openssl_destroy(pubnub_crypto_provider_t* cryptor)
 {
@@ -118,6 +154,13 @@ pn_openssl_cryptor_legacy_create(const char*                  cipher_key,
                                  pubnub_allocator_provider_t* alloc)
 {
     return pn_openssl_create_legacy(cipher_key, use_random_iv, alloc);
+}
+
+pubnub_crypto_provider_t*
+pn_openssl_cryptor_aes_gcm_create(const char*                  cipher_key,
+                                  pubnub_allocator_provider_t* alloc)
+{
+    return pn_openssl_create_acgm(cipher_key, alloc);
 }
 
 void pn_openssl_cryptor_destroy(pubnub_crypto_provider_t* cryptor)

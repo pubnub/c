@@ -48,8 +48,8 @@ struct pubnub_crypto_module {
 };
 
 PUBNUB_STATIC_ASSERT(
-    PUBNUB_CFG_CRYPTO_MAX_FALLBACK_CRYPTORS >= 1,
-    "PUBNUB_CFG_CRYPTO_MAX_FALLBACK_CRYPTORS must be at least 1");
+    PUBNUB_CFG_CRYPTO_MAX_FALLBACK_CRYPTORS >= 2,
+    "PUBNUB_CFG_CRYPTO_MAX_FALLBACK_CRYPTORS must be at least 2");
 
 /**
  * @brief Call init() on each cryptor in the module.

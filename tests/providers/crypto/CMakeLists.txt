@@ -44,10 +44,12 @@ if(TARGET OpenSSL::Crypto AND MbedTLS_FOUND)
             "${PN_OPENSSL_CRYPTO_DIR}/openssl_factories.c"
             "${PN_OPENSSL_CRYPTO_DIR}/openssl_common.c"
             "${PN_OPENSSL_CRYPTO_DIR}/openssl_aes_cbc.c"
+            "${PN_OPENSSL_CRYPTO_DIR}/openssl_aes_gcm.c"
             "${PN_OPENSSL_CRYPTO_DIR}/openssl_legacy.c"
             "${PN_MBEDTLS_CRYPTO_DIR}/mbedtls_factories.c"
             "${PN_MBEDTLS_CRYPTO_DIR}/mbedtls_common.c"
             "${PN_MBEDTLS_CRYPTO_DIR}/mbedtls_aes_cbc.c"
+            "${PN_MBEDTLS_CRYPTO_DIR}/mbedtls_aes_gcm.c"
             "${PN_MBEDTLS_CRYPTO_DIR}/mbedtls_legacy.c"
         LIBS pubnub_provider_allocator OpenSSL::Crypto MbedTLS::mbedcrypto
     )

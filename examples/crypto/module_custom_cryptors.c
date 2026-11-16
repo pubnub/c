@@ -107,10 +107,10 @@ static demo_cryptor_t s_demo_cryptor = {
 
 int main(void)
 {
-    /* 1. Build the cryptors yourself. This reproduces the
-     * ACRH-default / legacy-fallback pairing that
-     * pubnub_crypto_module_aes_cbc() creates automatically, and adds a
-     * third cryptor of our own. */
+    /* 1. Build the cryptors yourself. pubnub_crypto_module_aes_cbc()
+     * uses ACRH as the default and registers legacy and ACGM for
+     * decryption. This module only receives the cryptors listed below,
+     * plus one of our own. */
     pubnub_crypto_provider_t* acrh =
         pubnub_cryptor_aes_cbc_create("my-cipher-key", NULL);
     if (NULL == acrh) {

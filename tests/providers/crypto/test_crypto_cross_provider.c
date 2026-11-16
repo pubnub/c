@@ -392,10 +392,73 @@ static void test_cross_ciphertext_opacity(void** state)
     pn_mbedtls_cryptor_destroy(mbed);
 }
 
+/*
+ * Known ACGM payload: key "enigma", plaintext "Hello world".
+ * Both backends must recover the same plaintext.
+ */
+static const uint8_t GCM_HELLO_NONCE[12] = {
+    0x01,
+    0x02,
+    0x03,
+    0x04,
+    0x05,
+    0x06,
+    0x07,
+    0x08,
+    0x09,
+    0x0a,
+    0x0b,
+    0x0c,
+};
+static const uint8_t GCM_HELLO_BODY[] = {
+    0xea, 0x1b, 0x57, 0x80, 0x78, 0x8b, 0x59, 0x32, 0x94,
+    0xf8, 0x98, 0xda, 0xbd, 0x1d, 0x02, 0xd7, 0x21, 0x9c,
+    0x77, 0x21, 0x8a, 0xd2, 0x62, 0xc4, 0xa9, 0xae, 0xcc,
+};
+
+static void test_aes_gcm_both_backends_decrypt_known_vector(void** state)
+{
+    (void)state;
+
+    pubnub_allocator_provider_t* alloc = pn_test_allocator();
+    pubnub_crypto_provider_t*    ossl =
+        pn_openssl_cryptor_aes_gcm_create(TEST_CIPHER_KEY, alloc);
+    pubnub_crypto_provider_t* mbed =
+        pn_mbedtls_cryptor_aes_gcm_create(TEST_CIPHER_KEY, alloc);
+    assert_non_null(ossl);
+    assert_non_null(mbed);
+
+    uint8_t                 body[sizeof(GCM_HELLO_BODY)];
+    uint8_t                 nonce[sizeof(GCM_HELLO_NONCE)];
+    pubnub_encrypted_data_t enc = {
+        .data         = body,
+        .data_len     = sizeof(body),
+        .metadata     = nonce,
+        .metadata_len = sizeof(nonce),
+    };
+    memcpy(body, GCM_HELLO_BODY, sizeof(body));
+    memcpy(nonce, GCM_HELLO_NONCE, sizeof(nonce));
+
+    uint8_t ossl_buf[BUF_SIZE];
+    uint8_t mbed_buf[BUF_SIZE];
+    size_t  ossl_len = sizeof(ossl_buf);
+    size_t  mbed_len = sizeof(mbed_buf);
+
+    assert_int_equal(PUBNUB_OK, ossl->decrypt(ossl, &enc, ossl_buf, &ossl_len));
+    assert_int_equal(PUBNUB_OK, mbed->decrypt(mbed, &enc, mbed_buf, &mbed_len));
+    assert_int_equal(ossl_len, mbed_len);
+    assert_memory_equal(ossl_buf, mbed_buf, ossl_len);
+    assert_memory_equal("Hello world", ossl_buf, ossl_len);
+
+    pn_openssl_cryptor_destroy(ossl);
+    pn_mbedtls_cryptor_destroy(mbed);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
         cmocka_unit_test(test_openssl_acrh_encrypt_mbedtls_decrypt),
+        cmocka_unit_test(test_aes_gcm_both_backends_decrypt_known_vector),
         cmocka_unit_test(test_mbedtls_acrh_encrypt_openssl_decrypt),
         cmocka_unit_test(test_openssl_legacy_random_encrypt_mbedtls_decrypt),
         cmocka_unit_test(test_mbedtls_legacy_random_encrypt_openssl_decrypt),

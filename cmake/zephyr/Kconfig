@@ -137,11 +137,34 @@ config PUBNUB_ENABLE_FILES
 config PUBNUB_ENABLE_CRYPTO
     bool "Enable Crypto provider"
     default n
+    select MBEDTLS_GCM_C if MBEDTLS
+    select MBEDTLS_LEGACY_CRYPTO_C if MBEDTLS_USE_PSA_CRYPTO
+    select PSA_WANT_ALG_GCM if MBEDTLS_USE_PSA_CRYPTO
     help
-      Enable AES-256-CBC payload encryption/decryption.
+      Enable AES-256-CBC payload encryption and decryption, and
+      AES-256-GCM (ACGM) decryption. AES-GCM encryption is not
+      available.
+
       Requires mbedTLS (CONFIG_MBEDTLS=y). On NCS this is typically
       also enabled by CONFIG_PUBNUB_ENABLE_SECURE_TRANSPORT=y.
+
+      This selects CONFIG_MBEDTLS_GCM_C. On NCS with PSA
+      (CONFIG_MBEDTLS_USE_PSA_CRYPTO=y), where that symbol otherwise
+      stays off, it also selects CONFIG_MBEDTLS_LEGACY_CRYPTO_C and
+      CONFIG_PSA_WANT_ALG_GCM. A build that still leaves
+      MBEDTLS_GCM_C undefined compiles; AES-CBC works, and ACGM
+      decryption returns an error.
 
 endif # PUBNUB
 
 endmenu
+
+# nrf_security owns MBEDTLS_LEGACY_CRYPTO_C. Zephyr and nrf_security own
+# PSA_WANT_ALG_GCM. These promptless declarations merge with those owners
+# and add no dependencies, so the selects above parse on a Zephyr tree
+# that does not ship nrf_security.
+config MBEDTLS_LEGACY_CRYPTO_C
+    bool
+
+config PSA_WANT_ALG_GCM
+    bool

@@ -28,6 +28,10 @@ pubnub_cryptor_legacy_create(const char*                  cipher_key,
                              int                          use_random_iv,
                              pubnub_allocator_provider_t* alloc);
 // NOLINTNEXTLINE(misc-use-internal-linkage)
+pubnub_crypto_provider_t*
+pubnub_cryptor_aes_gcm_create(const char*                  cipher_key,
+                              pubnub_allocator_provider_t* alloc);
+// NOLINTNEXTLINE(misc-use-internal-linkage)
 void pubnub_cryptor_destroy(pubnub_crypto_provider_t* cryptor);
 
 #define PN_ACRH_METADATA_LEN 16
@@ -92,9 +96,19 @@ pubnub_crypto_module_t* pubnub_crypto_module_aes_cbc(const char* cipher_key,
         return NULL;
     }
 
+    /* ACGM fallback for decrypting AES-256-GCM payloads. */
+    pubnub_crypto_provider_t* gcm =
+        pubnub_cryptor_aes_gcm_create(cipher_key, alloc);
+    if (NULL == gcm) {
+        pubnub_cryptor_destroy(legacy);
+        pubnub_cryptor_destroy(acrh);
+        return NULL;
+    }
+
     pubnub_crypto_module_t* module =
         (pubnub_crypto_module_t*)PN_ALLOC(alloc, sizeof(pubnub_crypto_module_t), 0);
     if (NULL == module) {
+        pubnub_cryptor_destroy(gcm);
         pubnub_cryptor_destroy(legacy);
         pubnub_cryptor_destroy(acrh);
         return NULL;
@@ -103,7 +117,8 @@ pubnub_crypto_module_t* pubnub_crypto_module_aes_cbc(const char* cipher_key,
     memset(module, 0, sizeof(*module));
     module->default_cryptor = acrh;
     module->others[0]       = legacy;
-    module->others_count    = 1;
+    module->others[1]       = gcm;
+    module->others_count    = 2;
     module->owns_cryptors   = 1;
     module->alloc           = alloc;
     return module;
@@ -138,9 +153,19 @@ pubnub_crypto_module_t* pubnub_crypto_module_legacy(const char* cipher_key,
         return NULL;
     }
 
+    /* ACGM fallback for decrypting AES-256-GCM payloads. */
+    pubnub_crypto_provider_t* gcm =
+        pubnub_cryptor_aes_gcm_create(cipher_key, alloc);
+    if (NULL == gcm) {
+        pubnub_cryptor_destroy(acrh);
+        pubnub_cryptor_destroy(legacy);
+        return NULL;
+    }
+
     pubnub_crypto_module_t* module =
         (pubnub_crypto_module_t*)PN_ALLOC(alloc, sizeof(pubnub_crypto_module_t), 0);
     if (NULL == module) {
+        pubnub_cryptor_destroy(gcm);
         pubnub_cryptor_destroy(acrh);
         pubnub_cryptor_destroy(legacy);
         return NULL;
@@ -149,7 +174,8 @@ pubnub_crypto_module_t* pubnub_crypto_module_legacy(const char* cipher_key,
     memset(module, 0, sizeof(*module));
     module->default_cryptor = legacy;
     module->others[0]       = acrh;
-    module->others_count    = 1;
+    module->others[1]       = gcm;
+    module->others_count    = 2;
     module->owns_cryptors   = 1;
     module->alloc           = alloc;
 
