@@ -12,7 +12,7 @@
 /**
  * @brief Shared state for OpenSSL-backed cryptor instances.
  *
- * Both ACRH and legacy cryptors use this layout. The `base` field is
+ * ACRH, legacy, and ACGM cryptors use this layout. The `base` field is
  * first so the struct can be cast to/from `pubnub_crypto_provider_t*`.
  */
 typedef struct pn_openssl_cryptor_state {
@@ -109,5 +109,15 @@ void pn_openssl_acrh_populate_vtable(pn_openssl_cryptor_state_t* state);
  */
 void pn_openssl_legacy_populate_vtable(pn_openssl_cryptor_state_t* state,
                                        int use_random_iv);
+
+/**
+ * @brief Populate the ACGM cryptor vtable on a pre-allocated state.
+ *
+ * Sets identifier to "ACGM" and wires decrypt and HMAC. Encryption is
+ * not available: encrypt() returns an error and encrypt_size() is 0.
+ *
+ * @param state Pre-allocated and zero-initialized state struct.
+ */
+void pn_openssl_acgm_populate_vtable(pn_openssl_cryptor_state_t* state);
 
 #endif /* PN_CRYPTO_OPENSSL_INTERNAL_H */

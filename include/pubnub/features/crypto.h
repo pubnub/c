@@ -27,9 +27,10 @@ extern "C" {
  *        cryptor.
  *
  * Encrypts using AES-256-CBC with random IV (identifier "ACRH").
- * Decrypts data produced by both ACRH and legacy cryptors.
+ * Decrypts data produced by ACRH, legacy, and AES-256-GCM (ACGM)
+ * cryptors. AES-GCM encryption is not available.
  *
- * The module owns both cryptor instances and destroys them when
+ * The module owns the cryptor instances and destroys them when
  * @c pubnub_crypto_module_destroy is called.
  *
  * @param cipher_key    NUL-terminated cipher key string (borrowed).
@@ -50,9 +51,10 @@ pubnub_crypto_module_aes_cbc(const char*                  cipher_key,
  * @brief Create a crypto module with the legacy cryptor as default.
  *
  * Encrypts using legacy AES-256-CBC (identifier {0,0,0,0}).
- * Decrypts data produced by both legacy and ACRH cryptors.
+ * Decrypts data produced by legacy, ACRH, and AES-256-GCM (ACGM)
+ * cryptors. AES-GCM encryption is not available.
  *
- * The module owns both cryptor instances and destroys them when
+ * The module owns the cryptor instances and destroys them when
  * @c pubnub_crypto_module_destroy is called.
  *
  * @param cipher_key    NUL-terminated cipher key string (borrowed).
@@ -319,6 +321,31 @@ PUBNUB_API pubnub_crypto_provider_t*
 pubnub_cryptor_legacy_create(const char*                  cipher_key,
                              int                          use_random_iv,
                              pubnub_allocator_provider_t* alloc);
+
+/**
+ * @brief Create an AES-256-GCM cryptor for decryption only.
+ *
+ * Identifier: "ACGM" (0x41 0x43 0x47 0x4D).
+ * Key derivation: SHA-256 hash of @p cipher_key (raw 32 bytes).
+ * Metadata: 12-byte nonce. The 16-byte authentication tag is appended
+ * to the ciphertext. Additional authenticated data is empty.
+ * Algorithm: AES-256-GCM, no PKCS#7 padding.
+ *
+ * Encryption is not available. @c encrypt returns
+ * @c PUBNUB_ERR_CRYPTO and @c encrypt_size returns 0. The module
+ * factory functions register this cryptor as a decryption fallback.
+ * A module built with @c pubnub_crypto_module_create decrypts ACGM
+ * only when this cryptor is passed in the fallback list.
+ *
+ * @param cipher_key NUL-terminated cipher key string.
+ * @param alloc      Allocator for cryptor state. Pass @c NULL to use
+ *                   the compiled-in default; returns @c NULL if both
+ *                   are unavailable.
+ * @return Cryptor instance, or @c NULL on failure.
+ */
+PUBNUB_API pubnub_crypto_provider_t*
+pubnub_cryptor_aes_gcm_create(const char*                  cipher_key,
+                              pubnub_allocator_provider_t* alloc);
 
 /**
  * @brief Destroy a cryptor instance.

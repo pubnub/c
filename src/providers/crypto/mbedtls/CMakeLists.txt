@@ -9,6 +9,7 @@ _pn_sdk_library(
     mbedtls_factories.c
     mbedtls_common.c
     mbedtls_aes_cbc.c
+    mbedtls_aes_gcm.c
     mbedtls_legacy.c
 )
 
