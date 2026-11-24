@@ -8,7 +8,8 @@
  * - test_crypto_provider_openssl (links OpenSSL objects)
  * - test_crypto_provider_mbedtls (links mbedTLS objects)
  *
- * The test links the active backend's pubnub_cryptor_* symbols.
+ * The test links the active backend's cryptor symbols, including the
+ * internal AES-GCM factory.
  */
 
 #include "pubnub/providers/allocator.h"
@@ -33,8 +34,8 @@ pubnub_cryptor_legacy_create(const char*                  cipher_key,
                              int                          use_random_iv,
                              pubnub_allocator_provider_t* alloc);
 pubnub_crypto_provider_t*
-     pubnub_cryptor_aes_gcm_create(const char*                  cipher_key,
-                                   pubnub_allocator_provider_t* alloc);
+pn_cryptor_aes_gcm_create(const char*                  cipher_key,
+                          pubnub_allocator_provider_t* alloc);
 void pubnub_cryptor_destroy(pubnub_crypto_provider_t* cryptor);
 
 #define TEST_CIPHER_KEY "enigma"
@@ -358,7 +359,7 @@ static void test_null_input_handling(void** state)
     pubnub_crypto_provider_t* c2 = pubnub_cryptor_legacy_create(NULL, 1, alloc);
     assert_null(c2);
 
-    pubnub_crypto_provider_t* c3 = pubnub_cryptor_aes_gcm_create(NULL, alloc);
+    pubnub_crypto_provider_t* c3 = pn_cryptor_aes_gcm_create(NULL, alloc);
     assert_null(c3);
 
     /* Valid provider, NULL input to encrypt/decrypt. */
@@ -416,7 +417,7 @@ static void test_aes_gcm_decrypt_known_vector(void** state)
     (void)state;
 
     pubnub_allocator_provider_t* alloc = pn_test_allocator();
-    pubnub_crypto_provider_t* c = pubnub_cryptor_aes_gcm_create("enigma", alloc);
+    pubnub_crypto_provider_t*    c = pn_cryptor_aes_gcm_create("enigma", alloc);
     assert_non_null(c);
     assert_int_equal('A', c->identifier[0]);
     assert_int_equal('C', c->identifier[1]);
@@ -443,9 +444,9 @@ static void test_aes_gcm_decrypt_known_vector(void** state)
 
     /* Encryption is not available. */
     assert_int_equal(
-        PUBNUB_ERR_CRYPTO,
+        PUBNUB_ERR_NOT_SUPPORTED,
         c->encrypt(c, GCM_HELLO_PLAIN, sizeof(GCM_HELLO_PLAIN) - 1, &enc));
-    assert_int_equal(PUBNUB_ERR_CRYPTO, c->encrypt(c, NULL, 0, &enc));
+    assert_int_equal(PUBNUB_ERR_NOT_SUPPORTED, c->encrypt(c, NULL, 0, &enc));
 
     pubnub_cryptor_destroy(c);
 }
@@ -455,9 +456,8 @@ static void test_aes_gcm_rejects_invalid_payloads(void** state)
     (void)state;
 
     pubnub_allocator_provider_t* alloc = pn_test_allocator();
-    pubnub_crypto_provider_t* c = pubnub_cryptor_aes_gcm_create("enigma", alloc);
-    pubnub_crypto_provider_t* other =
-        pubnub_cryptor_aes_gcm_create("other-key", alloc);
+    pubnub_crypto_provider_t*    c = pn_cryptor_aes_gcm_create("enigma", alloc);
+    pubnub_crypto_provider_t* other = pn_cryptor_aes_gcm_create("other-key", alloc);
     assert_non_null(c);
     assert_non_null(other);
 

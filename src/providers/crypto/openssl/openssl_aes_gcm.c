@@ -37,7 +37,7 @@ static pubnub_res_t pn_acgm_encrypt(pubnub_crypto_provider_t* self,
     (void)output;
 
     /* AES-256-GCM encryption is not available. */
-    return PUBNUB_ERR_CRYPTO;
+    return PUBNUB_ERR_NOT_SUPPORTED;
 }
 
 static pubnub_res_t pn_acgm_decrypt(pubnub_crypto_provider_t*      self,

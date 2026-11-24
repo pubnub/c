@@ -23,7 +23,7 @@ endif()
 
 # Cross-provider test: compiles both backends' factory and primitive files from
 # source. Excludes crypto_openssl.c / crypto_mbedtls.c to avoid ODR collision on
-# pubnub_cryptor_* and pn_crypto_default().
+# pubnub_cryptor_*, pn_cryptor_aes_gcm_create, and pn_crypto_default().
 if(APPLE AND EXISTS "/opt/homebrew/opt/mbedtls@3")
     list(APPEND CMAKE_PREFIX_PATH "/opt/homebrew/opt/mbedtls@3")
 endif()

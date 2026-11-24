@@ -136,7 +136,8 @@ void pn_mbedtls_legacy_populate_vtable(pn_mbedtls_cryptor_state_t* state,
  * @brief Populate the ACGM cryptor vtable on a pre-allocated state.
  *
  * Sets identifier to "ACGM" and wires decrypt and HMAC. Encryption is
- * not available: encrypt() returns an error and encrypt_size() is 0.
+ * not available: encrypt() returns PUBNUB_ERR_NOT_SUPPORTED and
+ * encrypt_size() returns 0.
  *
  * @param state Pre-allocated and zero-initialized state struct.
  */

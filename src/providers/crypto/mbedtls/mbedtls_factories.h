@@ -42,7 +42,8 @@ pn_mbedtls_cryptor_legacy_create(const char*                  cipher_key,
  * @brief Create an mbedTLS-backed ACGM (AES-256-GCM) cryptor.
  *
  * Decrypts AES-256-GCM. The key is the raw SHA-256 of @p cipher_key.
- * Encryption is not available.
+ * Encryption is not available: encrypt() returns
+ * PUBNUB_ERR_NOT_SUPPORTED and encrypt_size() returns 0.
  *
  * @param cipher_key NUL-terminated cipher key string.
  * @param alloc      Allocator for state allocation; NULL falls back to

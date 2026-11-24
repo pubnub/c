@@ -19,10 +19,13 @@ pubnub_crypto_provider_t* pubnub_cryptor_legacy_create( // NOLINT(misc-use-inter
     const char*                  cipher_key,
     int                          use_random_iv,
     pubnub_allocator_provider_t* alloc);
-pubnub_crypto_provider_t* pubnub_cryptor_aes_gcm_create( // NOLINT(misc-use-internal-linkage)
+void pubnub_cryptor_destroy(pubnub_crypto_provider_t* cryptor); // NOLINT(misc-use-internal-linkage)
+
+/* Internal decrypt-only AES-256-GCM cryptor. Not part of the public
+ * API. The crypto module factories register it as a decryption fallback. */
+pubnub_crypto_provider_t* pn_cryptor_aes_gcm_create( // NOLINT(misc-use-internal-linkage)
     const char*                  cipher_key,
     pubnub_allocator_provider_t* alloc);
-void pubnub_cryptor_destroy(pubnub_crypto_provider_t* cryptor); // NOLINT(misc-use-internal-linkage)
 
 /**
  * @brief Static singleton provider for pn_crypto_default().
@@ -59,8 +62,8 @@ pubnub_crypto_provider_t* pubnub_cryptor_legacy_create(const char* cipher_key,
     return pn_mbedtls_cryptor_legacy_create(cipher_key, use_random_iv, alloc);
 }
 
-pubnub_crypto_provider_t* pubnub_cryptor_aes_gcm_create(const char* cipher_key,
-                                                        pubnub_allocator_provider_t* alloc)
+pubnub_crypto_provider_t* pn_cryptor_aes_gcm_create(const char* cipher_key,
+                                                    pubnub_allocator_provider_t* alloc)
 {
     return pn_mbedtls_cryptor_aes_gcm_create(cipher_key, alloc);
 }

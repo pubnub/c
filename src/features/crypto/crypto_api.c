@@ -28,10 +28,6 @@ pubnub_cryptor_legacy_create(const char*                  cipher_key,
                              int                          use_random_iv,
                              pubnub_allocator_provider_t* alloc);
 // NOLINTNEXTLINE(misc-use-internal-linkage)
-pubnub_crypto_provider_t*
-pubnub_cryptor_aes_gcm_create(const char*                  cipher_key,
-                              pubnub_allocator_provider_t* alloc);
-// NOLINTNEXTLINE(misc-use-internal-linkage)
 void pubnub_cryptor_destroy(pubnub_crypto_provider_t* cryptor);
 
 #define PN_ACRH_METADATA_LEN 16
@@ -97,8 +93,7 @@ pubnub_crypto_module_t* pubnub_crypto_module_aes_cbc(const char* cipher_key,
     }
 
     /* ACGM fallback for decrypting AES-256-GCM payloads. */
-    pubnub_crypto_provider_t* gcm =
-        pubnub_cryptor_aes_gcm_create(cipher_key, alloc);
+    pubnub_crypto_provider_t* gcm = pn_cryptor_aes_gcm_create(cipher_key, alloc);
     if (NULL == gcm) {
         pubnub_cryptor_destroy(legacy);
         pubnub_cryptor_destroy(acrh);
@@ -154,8 +149,7 @@ pubnub_crypto_module_t* pubnub_crypto_module_legacy(const char* cipher_key,
     }
 
     /* ACGM fallback for decrypting AES-256-GCM payloads. */
-    pubnub_crypto_provider_t* gcm =
-        pubnub_cryptor_aes_gcm_create(cipher_key, alloc);
+    pubnub_crypto_provider_t* gcm = pn_cryptor_aes_gcm_create(cipher_key, alloc);
     if (NULL == gcm) {
         pubnub_cryptor_destroy(acrh);
         pubnub_cryptor_destroy(legacy);
