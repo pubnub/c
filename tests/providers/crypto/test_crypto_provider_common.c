@@ -29,13 +29,15 @@
 pubnub_crypto_provider_t*
 pubnub_cryptor_aes_cbc_create(const char*                  cipher_key,
                               pubnub_allocator_provider_t* alloc);
+
 pubnub_crypto_provider_t*
 pubnub_cryptor_legacy_create(const char*                  cipher_key,
                              int                          use_random_iv,
                              pubnub_allocator_provider_t* alloc);
-pubnub_crypto_provider_t*
-pn_cryptor_aes_gcm_create(const char*                  cipher_key,
-                          pubnub_allocator_provider_t* alloc);
+
+pubnub_crypto_provider_t* pn_cryptor_aes_gcm_create(const char* cipher_key,
+                                                    pubnub_allocator_provider_t* alloc);
+
 void pubnub_cryptor_destroy(pubnub_crypto_provider_t* cryptor);
 
 #define TEST_CIPHER_KEY "enigma"
