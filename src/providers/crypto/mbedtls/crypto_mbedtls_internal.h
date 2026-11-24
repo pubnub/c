@@ -29,6 +29,12 @@ typedef struct pn_mbedtls_cryptor_state {
     mbedtls_ctr_drbg_context drbg;
     /** Entropy source backing the DRBG. */
     mbedtls_entropy_context entropy;
+    /**
+     * 1 after a successful CTR-DRBG seed. Stays 0 for ACGM and for a
+     * legacy cryptor that uses the static IV. Destroy must not free an
+     * unseeded DRBG.
+     */
+    int drbg_inited;
     /** Allocator stored at creation for use by destroy. */
     pubnub_allocator_provider_t* alloc;
 } pn_mbedtls_cryptor_state_t;
@@ -106,6 +112,8 @@ int pn_mbedtls_drbg_init(pn_mbedtls_cryptor_state_t* state);
 
 /**
  * @brief Free entropy and CTR-DRBG contexts in the state struct.
+ *
+ * No-op when @p state is NULL or the DRBG was never seeded.
  *
  * @param state State whose drbg/entropy are to be freed.
  */
