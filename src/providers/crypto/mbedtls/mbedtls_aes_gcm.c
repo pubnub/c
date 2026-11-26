@@ -60,7 +60,7 @@ static pubnub_res_t pn_acgm_decrypt(pubnub_crypto_provider_t*      self,
      * MBEDTLS_GCM_C builds; ACGM decryption returns an error.
      * AES-CBC is unaffected.
      */
-    return PUBNUB_ERR_CRYPTO;
+    return PUBNUB_ERR_NOT_SUPPORTED ;
 #else
     if (NULL == self || NULL == input || NULL == output || NULL == output_len) {
         return PUBNUB_ERR_CRYPTO;
