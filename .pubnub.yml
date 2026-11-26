@@ -1,8 +1,13 @@
 name: c
 schema: 1
-version: "1.1.0"
+version: "1.2.0"
 scm: github.com/pubnub/c
 changelog:
+  - date: 2026-11-26
+    version: 1.2.0
+    changes:
+      - type: feature
+        text: "`pubnub_crypto_module_aes_cbc` and `pubnub_crypto_module_legacy` now decrypt AES-256-GCM payloads. Both still encrypt with their default cryptors."
   - date: 2026-10-21
     version: 1.1.0
     changes:
@@ -207,7 +212,7 @@ sdks:
           - distribution-type: source code
             distribution-repository: GitHub release
             package-name: c
-            location: https://github.com/pubnub/c/releases/tag/1.1.0
+            location: https://github.com/pubnub/c/releases/tag/1.2.0
             requires:
               - name: "cJSON"
                 min-version: "1.7.15"
@@ -260,7 +265,7 @@ sdks:
           - distribution-type: source code
             distribution-repository: GitHub release
             package-name: c
-            location: https://github.com/pubnub/c/releases/tag/1.1.0
+            location: https://github.com/pubnub/c/releases/tag/1.2.0
             requires:
               - name: "cJSON"
                 min-version: "1.7.15"
@@ -303,7 +308,7 @@ sdks:
           - distribution-type: source code
             distribution-repository: GitHub release
             package-name: c
-            location: https://github.com/pubnub/c/releases/tag/1.1.0
+            location: https://github.com/pubnub/c/releases/tag/1.2.0
             requires:
               - name: "jsmn"
                 min-version: "1.1.0"
@@ -342,7 +347,7 @@ sdks:
           - distribution-type: source code
             distribution-repository: GitHub release
             package-name: c
-            location: https://github.com/pubnub/c/releases/tag/1.1.0
+            location: https://github.com/pubnub/c/releases/tag/1.2.0
             requires:
               - name: "jsmn"
                 min-version: "1.1.0"

@@ -1,3 +1,9 @@
+## 1.2.0
+November 26 2026
+
+#### Added
+- `pubnub_crypto_module_aes_cbc` and `pubnub_crypto_module_legacy` now decrypt AES-256-GCM payloads. Both still encrypt with their default cryptors.
+
 ## 1.1.0
 October 21 2026
 
