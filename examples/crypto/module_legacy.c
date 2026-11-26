@@ -7,8 +7,8 @@
  *
  * The legacy module encrypts with the pre-ACRH cryptor (identifier
  * {0,0,0,0}) so that older SDKs and 128-bit-key deployments can still
- * read the ciphertext. It keeps an ACRH fallback for decryption, so it
- * reads data produced by both generations.
+ * read the ciphertext. Decryption also accepts ACRH and AES-256-GCM
+ * (ACGM). AES-GCM encryption is not available.
  *
  * Use this only for backwards compatibility. New deployments should use
  * pubnub_crypto_module_aes_cbc(). See migrate_legacy.c for the
@@ -53,9 +53,9 @@ int main(void)
     }
     printf("Encrypted %zu bytes into %zu bytes\n", strlen(plaintext), cipher_len);
 
-    /* 3. Decrypt. The module tries its default legacy cryptor first,
-     * then the ACRH fallback, so it also reads data written by
-     * pubnub_crypto_module_aes_cbc(). */
+    /* 3. Decrypt. The module tries the legacy cryptor, then the ACRH
+     * and ACGM fallbacks, so it also reads AES-CBC and AES-GCM
+     * payloads written under the same cipher key. */
     uint8_t* plain     = NULL;
     size_t   plain_len = 0;
     rc = pubnub_crypto_module_decrypt(legacy, cipher, cipher_len, &plain, &plain_len);

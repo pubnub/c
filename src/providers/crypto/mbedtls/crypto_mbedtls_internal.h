@@ -15,7 +15,7 @@
 /**
  * @brief Shared state for mbedTLS-backed cryptor instances.
  *
- * Both ACRH and legacy cryptors use this layout. The `base` field is
+ * ACRH, legacy, and ACGM cryptors use this layout. The `base` field is
  * first so the struct can be cast to/from `pubnub_crypto_provider_t*`.
  */
 typedef struct pn_mbedtls_cryptor_state {
@@ -29,6 +29,12 @@ typedef struct pn_mbedtls_cryptor_state {
     mbedtls_ctr_drbg_context drbg;
     /** Entropy source backing the DRBG. */
     mbedtls_entropy_context entropy;
+    /**
+     * 1 after a successful CTR-DRBG seed. Stays 0 for ACGM and for a
+     * legacy cryptor that uses the static IV. Destroy must not free an
+     * unseeded DRBG.
+     */
+    int drbg_inited;
     /** Allocator stored at creation for use by destroy. */
     pubnub_allocator_provider_t* alloc;
 } pn_mbedtls_cryptor_state_t;
@@ -107,6 +113,8 @@ int pn_mbedtls_drbg_init(pn_mbedtls_cryptor_state_t* state);
 /**
  * @brief Free entropy and CTR-DRBG contexts in the state struct.
  *
+ * No-op when @p state is NULL or the DRBG was never seeded.
+ *
  * @param state State whose drbg/entropy are to be freed.
  */
 void pn_mbedtls_drbg_free(pn_mbedtls_cryptor_state_t* state);
@@ -131,5 +139,16 @@ void pn_mbedtls_acrh_populate_vtable(pn_mbedtls_cryptor_state_t* state);
  */
 void pn_mbedtls_legacy_populate_vtable(pn_mbedtls_cryptor_state_t* state,
                                        int use_random_iv);
+
+/**
+ * @brief Populate the ACGM cryptor vtable on a pre-allocated state.
+ *
+ * Sets identifier to "ACGM" and wires decrypt and HMAC. Encryption is
+ * not available: encrypt() returns PUBNUB_ERR_NOT_SUPPORTED and
+ * encrypt_size() returns 0.
+ *
+ * @param state Pre-allocated and zero-initialized state struct.
+ */
+void pn_mbedtls_acgm_populate_vtable(pn_mbedtls_cryptor_state_t* state);
 
 #endif /* PN_CRYPTO_MBEDTLS_INTERNAL_H */

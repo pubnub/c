@@ -103,6 +103,27 @@ pubnub_res_t pn_crypto_module_decrypt_from_base64(pubnub_crypto_module_t* module
                                                   size_t*     output_len,
                                                   pubnub_allocator_provider_t* alloc);
 
+/**
+ * @brief Create an AES-256-GCM cryptor for decryption only.
+ *
+ * Not part of the public API. @c pubnub_crypto_module_aes_cbc and
+ * @c pubnub_crypto_module_legacy register this cryptor as a decryption
+ * fallback. A module built with @c pubnub_crypto_module_create does
+ * not receive it.
+ *
+ * Identifier: "ACGM". Encryption is not available: @c encrypt returns
+ * @c PUBNUB_ERR_NOT_SUPPORTED and @c encrypt_size returns 0.
+ *
+ * Implemented by the linked crypto provider backend.
+ *
+ * @param cipher_key NUL-terminated cipher key string.
+ * @param alloc      Allocator for cryptor state. @c NULL uses the
+ *                   compiled-in default.
+ * @return Cryptor instance, or @c NULL on failure.
+ */
+pubnub_crypto_provider_t* pn_cryptor_aes_gcm_create(const char* cipher_key,
+                                                    pubnub_allocator_provider_t* alloc);
+
 #ifdef __cplusplus
 // clang-format off
 }

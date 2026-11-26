@@ -6,5 +6,6 @@ set(PN_PROVIDER_CRYPTO_MBEDTLS_SOURCES
     "${CMAKE_CURRENT_LIST_DIR}/mbedtls_factories.c"
     "${CMAKE_CURRENT_LIST_DIR}/mbedtls_common.c"
     "${CMAKE_CURRENT_LIST_DIR}/mbedtls_aes_cbc.c"
+    "${CMAKE_CURRENT_LIST_DIR}/mbedtls_aes_gcm.c"
     "${CMAKE_CURRENT_LIST_DIR}/mbedtls_legacy.c"
 )

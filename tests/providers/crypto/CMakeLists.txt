@@ -23,7 +23,7 @@ endif()
 
 # Cross-provider test: compiles both backends' factory and primitive files from
 # source. Excludes crypto_openssl.c / crypto_mbedtls.c to avoid ODR collision on
-# pubnub_cryptor_* and pn_crypto_default().
+# pubnub_cryptor_*, pn_cryptor_aes_gcm_create, and pn_crypto_default().
 if(APPLE AND EXISTS "/opt/homebrew/opt/mbedtls@3")
     list(APPEND CMAKE_PREFIX_PATH "/opt/homebrew/opt/mbedtls@3")
 endif()
@@ -44,10 +44,12 @@ if(TARGET OpenSSL::Crypto AND MbedTLS_FOUND)
             "${PN_OPENSSL_CRYPTO_DIR}/openssl_factories.c"
             "${PN_OPENSSL_CRYPTO_DIR}/openssl_common.c"
             "${PN_OPENSSL_CRYPTO_DIR}/openssl_aes_cbc.c"
+            "${PN_OPENSSL_CRYPTO_DIR}/openssl_aes_gcm.c"
             "${PN_OPENSSL_CRYPTO_DIR}/openssl_legacy.c"
             "${PN_MBEDTLS_CRYPTO_DIR}/mbedtls_factories.c"
             "${PN_MBEDTLS_CRYPTO_DIR}/mbedtls_common.c"
             "${PN_MBEDTLS_CRYPTO_DIR}/mbedtls_aes_cbc.c"
+            "${PN_MBEDTLS_CRYPTO_DIR}/mbedtls_aes_gcm.c"
             "${PN_MBEDTLS_CRYPTO_DIR}/mbedtls_legacy.c"
         LIBS pubnub_provider_allocator OpenSSL::Crypto MbedTLS::mbedcrypto
     )

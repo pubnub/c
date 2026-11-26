@@ -146,15 +146,17 @@ int pn_mbedtls_drbg_init(pn_mbedtls_cryptor_state_t* state)
         return rc;
     }
 
+    state->drbg_inited = 1;
     return 0;
 }
 
 void pn_mbedtls_drbg_free(pn_mbedtls_cryptor_state_t* state)
 {
-    if (NULL == state) {
+    if (NULL == state || 0 == state->drbg_inited) {
         return;
     }
 
     mbedtls_ctr_drbg_free(&state->drbg);
     mbedtls_entropy_free(&state->entropy);
+    state->drbg_inited = 0;
 }

@@ -8,9 +8,11 @@
  *
  * Encryption always uses the module's default cryptor. Decryption may
  * use the default cryptor or any of its fallbacks, matched on the 4-byte
- * identifier. Both named factories pair the two generations
- * automatically, so an ACRH-default module still reads every message a
- * legacy-default deployment wrote under the same cipher key.
+ * identifier. Both named factories register legacy, AES-CBC, and
+ * AES-256-GCM (ACGM) for decryption, so an ACRH-default module still
+ * reads every message a legacy-default deployment wrote under the same
+ * cipher key, and both modules read AES-GCM payloads. AES-GCM
+ * encryption is not available.
  *
  * Build: cmake --build build/full --target example_crypto_migrate_legacy
  * Run:   ./build/full/examples/crypto/example_crypto_migrate_legacy

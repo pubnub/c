@@ -8,7 +8,8 @@
  * - test_crypto_provider_openssl (links OpenSSL objects)
  * - test_crypto_provider_mbedtls (links mbedTLS objects)
  *
- * The test links the active backend's pubnub_cryptor_* symbols.
+ * The test links the active backend's cryptor symbols, including the
+ * internal AES-GCM factory.
  */
 
 #include "pubnub/providers/allocator.h"
@@ -28,10 +29,15 @@
 pubnub_crypto_provider_t*
 pubnub_cryptor_aes_cbc_create(const char*                  cipher_key,
                               pubnub_allocator_provider_t* alloc);
+
 pubnub_crypto_provider_t*
-     pubnub_cryptor_legacy_create(const char*                  cipher_key,
-                                  int                          use_random_iv,
-                                  pubnub_allocator_provider_t* alloc);
+pubnub_cryptor_legacy_create(const char*                  cipher_key,
+                             int                          use_random_iv,
+                             pubnub_allocator_provider_t* alloc);
+
+pubnub_crypto_provider_t* pn_cryptor_aes_gcm_create(const char* cipher_key,
+                                                    pubnub_allocator_provider_t* alloc);
+
 void pubnub_cryptor_destroy(pubnub_crypto_provider_t* cryptor);
 
 #define TEST_CIPHER_KEY "enigma"
@@ -355,6 +361,9 @@ static void test_null_input_handling(void** state)
     pubnub_crypto_provider_t* c2 = pubnub_cryptor_legacy_create(NULL, 1, alloc);
     assert_null(c2);
 
+    pubnub_crypto_provider_t* c3 = pn_cryptor_aes_gcm_create(NULL, alloc);
+    assert_null(c3);
+
     /* Valid provider, NULL input to encrypt/decrypt. */
     pubnub_crypto_provider_t* c =
         pubnub_cryptor_aes_cbc_create(TEST_CIPHER_KEY, alloc);
@@ -380,6 +389,118 @@ static void test_null_input_handling(void** state)
     pubnub_cryptor_destroy(c);
 }
 
+/*
+ * Known ACGM payload: key "enigma", plaintext "Hello world".
+ * Metadata is the 12-byte nonce. The body is ciphertext plus the tag.
+ */
+static const uint8_t GCM_HELLO_NONCE[12] = {
+    0x01,
+    0x02,
+    0x03,
+    0x04,
+    0x05,
+    0x06,
+    0x07,
+    0x08,
+    0x09,
+    0x0a,
+    0x0b,
+    0x0c,
+};
+static const uint8_t GCM_HELLO_BODY[] = {
+    0xea, 0x1b, 0x57, 0x80, 0x78, 0x8b, 0x59, 0x32, 0x94,
+    0xf8, 0x98, 0xda, 0xbd, 0x1d, 0x02, 0xd7, 0x21, 0x9c,
+    0x77, 0x21, 0x8a, 0xd2, 0x62, 0xc4, 0xa9, 0xae, 0xcc,
+};
+static const uint8_t GCM_HELLO_PLAIN[] = "Hello world";
+
+static void test_aes_gcm_decrypt_known_vector(void** state)
+{
+    (void)state;
+
+    pubnub_allocator_provider_t* alloc = pn_test_allocator();
+    pubnub_crypto_provider_t*    c = pn_cryptor_aes_gcm_create("enigma", alloc);
+    assert_non_null(c);
+    assert_int_equal('A', c->identifier[0]);
+    assert_int_equal('C', c->identifier[1]);
+    assert_int_equal('G', c->identifier[2]);
+    assert_int_equal('M', c->identifier[3]);
+    assert_int_equal(0, c->encrypt_size(c, sizeof(GCM_HELLO_PLAIN) - 1));
+
+    uint8_t                 body[sizeof(GCM_HELLO_BODY)];
+    uint8_t                 nonce[sizeof(GCM_HELLO_NONCE)];
+    pubnub_encrypted_data_t enc = {
+        .data         = body,
+        .data_len     = sizeof(GCM_HELLO_BODY),
+        .metadata     = nonce,
+        .metadata_len = sizeof(GCM_HELLO_NONCE),
+    };
+    memcpy(body, GCM_HELLO_BODY, sizeof(body));
+    memcpy(nonce, GCM_HELLO_NONCE, sizeof(nonce));
+
+    uint8_t dec_buf[BUF_SIZE];
+    size_t  dec_len = sizeof(dec_buf);
+    assert_int_equal(PUBNUB_OK, c->decrypt(c, &enc, dec_buf, &dec_len));
+    assert_int_equal(sizeof(GCM_HELLO_PLAIN) - 1, dec_len);
+    assert_memory_equal(GCM_HELLO_PLAIN, dec_buf, dec_len);
+
+    /* Encryption is not available. */
+    assert_int_equal(
+        PUBNUB_ERR_NOT_SUPPORTED,
+        c->encrypt(c, GCM_HELLO_PLAIN, sizeof(GCM_HELLO_PLAIN) - 1, &enc));
+    assert_int_equal(PUBNUB_ERR_NOT_SUPPORTED, c->encrypt(c, NULL, 0, &enc));
+
+    pubnub_cryptor_destroy(c);
+}
+
+static void test_aes_gcm_rejects_invalid_payloads(void** state)
+{
+    (void)state;
+
+    pubnub_allocator_provider_t* alloc = pn_test_allocator();
+    pubnub_crypto_provider_t*    c = pn_cryptor_aes_gcm_create("enigma", alloc);
+    pubnub_crypto_provider_t* other = pn_cryptor_aes_gcm_create("other-key", alloc);
+    assert_non_null(c);
+    assert_non_null(other);
+
+    uint8_t body[sizeof(GCM_HELLO_BODY)];
+    uint8_t nonce[sizeof(GCM_HELLO_NONCE)];
+    memcpy(body, GCM_HELLO_BODY, sizeof(body));
+    memcpy(nonce, GCM_HELLO_NONCE, sizeof(nonce));
+
+    pubnub_encrypted_data_t enc = {
+        .data         = body,
+        .data_len     = sizeof(body),
+        .metadata     = nonce,
+        .metadata_len = sizeof(nonce),
+    };
+
+    uint8_t dec_buf[BUF_SIZE];
+    size_t  dec_len = sizeof(dec_buf);
+
+    body[sizeof(body) - 1] ^= 0xff;
+    assert_int_equal(PUBNUB_ERR_CRYPTO, c->decrypt(c, &enc, dec_buf, &dec_len));
+    body[sizeof(body) - 1] ^= 0xff;
+
+    dec_len = sizeof(dec_buf);
+    assert_int_equal(PUBNUB_ERR_CRYPTO,
+                     other->decrypt(other, &enc, dec_buf, &dec_len));
+
+    enc.metadata_len = sizeof(nonce) - 1;
+    dec_len          = sizeof(dec_buf);
+    assert_int_equal(PUBNUB_ERR_CRYPTO, c->decrypt(c, &enc, dec_buf, &dec_len));
+    enc.metadata_len = sizeof(nonce);
+
+    enc.data_len = 15;
+    dec_len      = sizeof(dec_buf);
+    assert_int_equal(PUBNUB_ERR_CRYPTO, c->decrypt(c, &enc, dec_buf, &dec_len));
+
+    assert_int_equal(PUBNUB_ERR_CRYPTO, c->decrypt(c, NULL, dec_buf, &dec_len));
+
+    pubnub_cryptor_destroy(other);
+    pubnub_cryptor_destroy(c);
+}
+
 int main(void)
 {
     const struct CMUnitTest tests[] = {
@@ -392,6 +513,8 @@ int main(void)
         cmocka_unit_test(test_hmac_sha256_rfc4231_vector2),
         cmocka_unit_test(test_key_derivation_known_vector),
         cmocka_unit_test(test_null_input_handling),
+        cmocka_unit_test(test_aes_gcm_decrypt_known_vector),
+        cmocka_unit_test(test_aes_gcm_rejects_invalid_payloads),
     };
 
     return cmocka_run_group_tests(tests, NULL, NULL);

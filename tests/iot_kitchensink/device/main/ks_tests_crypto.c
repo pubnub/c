@@ -447,7 +447,7 @@ static ks_result_t test_crypto_legacy_compat(ks_runner_t* runner)
         KS_RETURN_FAIL("failed to create modules");
     }
 
-    /* Encrypt with ACRH, decrypt with legacy module (has ACRH fallback). */
+    /* Encrypt with ACRH, decrypt with the legacy module (ACRH and ACGM fallbacks). */
     rc = pubnub_crypto_module_encrypt_buf(
         acrh_mod, (const uint8_t*)plaintext, pt_len, enc_buf, sizeof(enc_buf), &enc_len);
     if (PUBNUB_OK != rc) {
@@ -469,7 +469,7 @@ static ks_result_t test_crypto_legacy_compat(ks_runner_t* runner)
         KS_RETURN_FAIL("ACRH->legacy roundtrip mismatch");
     }
 
-    /* Encrypt with legacy, decrypt with ACRH module (has legacy fallback). */
+    /* Encrypt with legacy, decrypt with the AES-CBC module (legacy and ACGM fallbacks). */
     enc_len = 0;
     dec_len = 0;
     rc      = pubnub_crypto_module_encrypt_buf(

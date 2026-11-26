@@ -101,6 +101,45 @@ pn_mbedtls_create_legacy(const char*                  cipher_key,
 }
 
 /**
+ * @brief Create an mbedTLS ACGM cryptor (shared logic).
+ */
+static pubnub_crypto_provider_t*
+pn_mbedtls_create_acgm(const char* cipher_key, pubnub_allocator_provider_t* alloc)
+{
+    if (NULL == cipher_key) {
+        return NULL;
+    }
+    if (NULL == alloc) {
+        alloc = pn_allocator_default();
+    }
+    if (NULL == alloc) {
+        return NULL;
+    }
+
+    pn_mbedtls_cryptor_state_t* state = (pn_mbedtls_cryptor_state_t*)PN_ALLOC(
+        alloc, sizeof(pn_mbedtls_cryptor_state_t), 0);
+    if (NULL == state) {
+        return NULL;
+    }
+
+    memset(state, 0, sizeof(*state));
+    state->alloc = alloc;
+
+    /*
+     * Same raw SHA-256 key as ACRH. The DRBG is not seeded: decryption
+     * uses the nonce from the payload.
+     */
+    if (PUBNUB_OK != pn_mbedtls_derive_key_acrh(cipher_key, state->key)) {
+        PN_FREE(alloc, state);
+        return NULL;
+    }
+
+    pn_mbedtls_acgm_populate_vtable(state);
+
+    return &state->base;
+}
+
+/**
  * @brief Shared destroy logic.
  */
 static void pn_mbedtls_destroy(pubnub_crypto_provider_t* cryptor)
@@ -137,6 +176,13 @@ pn_mbedtls_cryptor_legacy_create(const char*                  cipher_key,
                                  pubnub_allocator_provider_t* alloc)
 {
     return pn_mbedtls_create_legacy(cipher_key, use_random_iv, alloc);
+}
+
+pubnub_crypto_provider_t*
+pn_mbedtls_cryptor_aes_gcm_create(const char*                  cipher_key,
+                                  pubnub_allocator_provider_t* alloc)
+{
+    return pn_mbedtls_create_acgm(cipher_key, alloc);
 }
 
 void pn_mbedtls_cryptor_destroy(pubnub_crypto_provider_t* cryptor)

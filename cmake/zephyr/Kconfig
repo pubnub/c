@@ -137,11 +137,44 @@ config PUBNUB_ENABLE_FILES
 config PUBNUB_ENABLE_CRYPTO
     bool "Enable Crypto provider"
     default n
+    select MBEDTLS_GCM_C if MBEDTLS
+    select MBEDTLS_LEGACY_CRYPTO_C if MBEDTLS_USE_PSA_CRYPTO
+    select PSA_WANT_ALG_GCM if MBEDTLS_USE_PSA_CRYPTO
     help
-      Enable AES-256-CBC payload encryption/decryption.
+      Enable AES-256-CBC payload encryption and decryption, and
+      AES-256-GCM (ACGM) decryption. AES-GCM encryption is not
+      available.
+
       Requires mbedTLS (CONFIG_MBEDTLS=y). On NCS this is typically
       also enabled by CONFIG_PUBNUB_ENABLE_SECURE_TRANSPORT=y.
+
+      This selects CONFIG_MBEDTLS_GCM_C when mbedTLS is enabled. On
+      NCS with PSA (CONFIG_MBEDTLS_USE_PSA_CRYPTO=y) it also selects
+      CONFIG_MBEDTLS_LEGACY_CRYPTO_C and CONFIG_PSA_WANT_ALG_GCM.
+      Those symbols are declared below, so a Zephyr tree that does not
+      define them can still load this module. If the mbedTLS build
+      leaves MBEDTLS_GCM_C undefined, AES-CBC works and ACGM decryption
+      returns an error.
 
 endif # PUBNUB
 
 endmenu
+
+# Promptless declarations merge with the real owners and add no
+# dependencies. nrf_security owns MBEDTLS_GCM_C and
+# MBEDTLS_LEGACY_CRYPTO_C. Zephyr 4.3 owns MBEDTLS_USE_PSA_CRYPTO;
+# current Zephyr main does not. Zephyr and nrf_security own
+# PSA_WANT_ALG_GCM. Upstream Zephyr has no MBEDTLS_GCM_C
+# (v4.3.1 uses MBEDTLS_CIPHER_GCM_ENABLED). Without these
+# declarations, select and "if" on the missing symbols fail Kconfig.
+config MBEDTLS_GCM_C
+    bool
+
+config MBEDTLS_USE_PSA_CRYPTO
+    bool
+
+config MBEDTLS_LEGACY_CRYPTO_C
+    bool
+
+config PSA_WANT_ALG_GCM
+    bool

@@ -39,6 +39,22 @@ pn_mbedtls_cryptor_legacy_create(const char*                  cipher_key,
                                  pubnub_allocator_provider_t* alloc);
 
 /**
+ * @brief Create an mbedTLS-backed ACGM (AES-256-GCM) cryptor.
+ *
+ * Decrypts AES-256-GCM. The key is the raw SHA-256 of @p cipher_key.
+ * Encryption is not available: encrypt() returns
+ * PUBNUB_ERR_NOT_SUPPORTED and encrypt_size() returns 0.
+ *
+ * @param cipher_key NUL-terminated cipher key string.
+ * @param alloc      Allocator for state allocation; NULL falls back to
+ *                   compiled-in default.
+ * @return Cryptor instance, or NULL on failure.
+ */
+pubnub_crypto_provider_t*
+pn_mbedtls_cryptor_aes_gcm_create(const char*                  cipher_key,
+                                  pubnub_allocator_provider_t* alloc);
+
+/**
  * @brief Destroy an mbedTLS-backed cryptor instance.
  *
  * Frees DRBG/entropy state and securely zeros key material. NULL-safe.

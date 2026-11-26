@@ -27,9 +27,11 @@ extern "C" {
  *        cryptor.
  *
  * Encrypts using AES-256-CBC with random IV (identifier "ACRH").
- * Decrypts data produced by both ACRH and legacy cryptors.
+ * Decrypts data produced by ACRH, legacy, and AES-256-GCM (ACGM)
+ * cryptors. The ACGM cryptor is created internally as a decryption
+ * fallback. AES-GCM encryption is not available.
  *
- * The module owns both cryptor instances and destroys them when
+ * The module owns the cryptor instances and destroys them when
  * @c pubnub_crypto_module_destroy is called.
  *
  * @param cipher_key    NUL-terminated cipher key string (borrowed).
@@ -50,9 +52,11 @@ pubnub_crypto_module_aes_cbc(const char*                  cipher_key,
  * @brief Create a crypto module with the legacy cryptor as default.
  *
  * Encrypts using legacy AES-256-CBC (identifier {0,0,0,0}).
- * Decrypts data produced by both legacy and ACRH cryptors.
+ * Decrypts data produced by legacy, ACRH, and AES-256-GCM (ACGM)
+ * cryptors. The ACGM cryptor is created internally as a decryption
+ * fallback. AES-GCM encryption is not available.
  *
- * The module owns both cryptor instances and destroys them when
+ * The module owns the cryptor instances and destroys them when
  * @c pubnub_crypto_module_destroy is called.
  *
  * @param cipher_key    NUL-terminated cipher key string (borrowed).
